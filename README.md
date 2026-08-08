@@ -27,8 +27,7 @@ market/
 │   │   ├── marketplace_mcp/ # MCP 桥接：让任意 Agent 原生调用市场能力
 │   │   ├── auth.py          # JWT 认证
 │   │   ├── permissions.py   # 角色权限矩阵
-│   │   ├── storage.py       # 能力包存储（本地 / MinIO）
-│   │   └── cache.py         # 缓存（内存 / Redis）
+│   │   └── storage.py       # 能力包存储（本地 / MinIO）
 │   ├── tests/               # pytest 测试（11 个核心流程用例）
 │   └── requirements.txt
 ├── frontend/                # Vue 3 前端（独立项目，Vite）
@@ -48,7 +47,7 @@ pip install -r requirements.txt
 python run.py
 ```
 
-默认使用 SQLite + 本地文件存储 + 内存缓存，开箱即用，无需安装任何中间件。可通过 `.env`（参考 `.env.example`）切换 PostgreSQL / MinIO / Redis。
+默认使用 SQLite + 本地文件存储，开箱即用，无需安装任何中间件。可通过 `.env`（参考 `.env.example`）切换 PostgreSQL / MinIO。
 
 ### 前端
 
@@ -200,7 +199,6 @@ python -m pytest tests -q
 ## 其他工程化优化
 
 - **SQL 下推 + 分页**：浏览/搜索/分类全部在数据库层过滤、排序、分页，并加了 `(type, status, visibility)` 复合索引，能力量级大也不会退化。
-- **内存 TTL 缓存**：浏览、分类、统计走内存缓存（默认 300s），发布/审核/调用等数据变更时自动整体失效；单进程部署零外部依赖（如需分布式缓存可自行接入）。
 - **工具参数展示**：上传工具包时自动解析 `schema.json` 并保存，详情页直接展示参数名/类型/必填/说明，降低调用出错率。
 - **登录限流**：同一用户名 + IP 15 分钟内失败 5 次即锁定，防暴力破解。
 - **流式校验和**：上传时边写边算 SHA-256，大包不再二次全量读取。
@@ -208,6 +206,6 @@ python -m pytest tests -q
 
 ## 技术说明
 
-- 存储层按 README 设计为 PostgreSQL(元数据) + MinIO(能力包) + 缓存，代码通过 `DATABASE_URL` / `ARTIFACT_STORAGE` 配置切换；默认 SQLite/本地文件/内存 TTL 缓存，零外部依赖开箱即用。
+- 存储层按 README 设计为 PostgreSQL(元数据) + MinIO(能力包)，代码通过 `DATABASE_URL` / `ARTIFACT_STORAGE` 配置切换；默认 SQLite/本地文件，零外部依赖开箱即用。
 - 能力包上传时按 README 3.x 各市场的发布包结构校验必需文件（如 tool 包必须含 `tool.json + schema.json + implementation/tool.py`）。
 - 前端所有列表/详情/操作均对接真实 API；中文能力名在运行时调用中自动做 URL 编码。

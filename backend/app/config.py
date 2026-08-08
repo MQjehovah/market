@@ -25,10 +25,6 @@ class Settings(BaseSettings):
     minio_bucket: str = "marketplace"
     minio_secure: bool = False
 
-    # 缓存（内存 TTL，单进程部署开箱即用；多实例部署建议接入分布式缓存）
-    cache_enabled: bool = True
-    cache_ttl: int = 300
-
     # 安全
     jwt_secret: str = "dev-secret-change-me-please-32-bytes-minimum"
     jwt_algorithm: str = "HS256"

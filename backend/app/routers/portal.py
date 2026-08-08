@@ -4,8 +4,6 @@ from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import String, and_, case, cast, func, or_, select
 from sqlalchemy.orm import joinedload, selectinload
 
-from app.cache import get_cache
-from app.config import get_settings
 from app.auth import CurrentUser, DbSession, OptionalUser
 from app.models import Capability, Notification, Rating, Subscription, User
 from app.schemas import (
@@ -57,14 +55,6 @@ async def browse_capabilities(
     page: int = Query(1, ge=1),
     page_size: int = Query(24, ge=1, le=100),
 ):
-    cache_key = (
-        f"browse:{user.id if user else 'anon'}:{q}:{type}:{category}:"
-        f"{status}:{visibility}:{sort}:{page}:{page_size}"
-    )
-    cached = get_cache().get(cache_key)
-    if cached is not None:
-        return CapabilityPage.model_validate(cached)
-
     conditions: list = []
     visibility_where = _visibility_where(user)
     if visibility_where is not None:
@@ -113,22 +103,16 @@ async def browse_capabilities(
         stmt = stmt.where(where_clause)
     caps = (await db.scalars(stmt)).all()
 
-    result = CapabilityPage(
+    return CapabilityPage(
         items=[_to_out(c) for c in caps],
         total=total,
         page=page,
         page_size=page_size,
     )
-    get_cache().set(cache_key, result.model_dump(mode="json"), get_settings().cache_ttl)
-    return result
 
 
 @router.get("/meta/categories", response_model=dict[str, list[str]])
 async def categories(db: DbSession, user: OptionalUser):
-    cache_key = f"categories:{user.id if user else 'anon'}"
-    cached = get_cache().get(cache_key)
-    if cached is not None:
-        return cached
     visibility_where = _visibility_where(user)
     stmt = (
         select(Capability.type, Capability.category)
@@ -141,7 +125,6 @@ async def categories(db: DbSession, user: OptionalUser):
     result: dict[str, list[str]] = {}
     for cap_type, cat in rows:
         result.setdefault(cap_type, []).append(cat)
-    get_cache().set(cache_key, result, get_settings().cache_ttl)
     return result
 
 

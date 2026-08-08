@@ -5,8 +5,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import joinedload, selectinload
 
 from app.auth import CurrentUser, DbSession
-from app.cache import get_cache
-from app.config import get_settings
 from app.models import Capability, User
 from app.schemas import CapabilityOut, MessageOut, ReviewRequest, StatsOut, UserOut
 from app.services.capabilities import change_status, review_capability
@@ -95,23 +93,11 @@ async def update_user(user_id: str, payload: dict, db: DbSession, user: CurrentU
 @router.get("/stats", response_model=StatsOut)
 async def global_stats(db: DbSession, user: CurrentUser):
     _require_admin(user)
-    cache_key = f"stats:all:{user.id}"
-    cached = get_cache().get(cache_key)
-    if cached is not None:
-        return StatsOut.model_validate(cached)
-    stats = await build_stats(db, user, scope="all")
-    get_cache().set(cache_key, stats.model_dump(mode="json"), get_settings().cache_ttl)
-    return stats
+    return await build_stats(db, user, scope="all")
 
 
 @router.get("/stats/own", response_model=StatsOut)
 async def own_stats(db: DbSession, user: CurrentUser):
     if user.role == "user":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "普通用户无权查看统计")
-    cache_key = f"stats:own:{user.id}"
-    cached = get_cache().get(cache_key)
-    if cached is not None:
-        return StatsOut.model_validate(cached)
-    stats = await build_stats(db, user, scope="own")
-    get_cache().set(cache_key, stats.model_dump(mode="json"), get_settings().cache_ttl)
-    return stats
+    return await build_stats(db, user, scope="own")

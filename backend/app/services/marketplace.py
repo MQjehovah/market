@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
 from app.models import Capability, UsageEvent, User
-from app.cache import invalidate_marketplace_cache
 from app.services.capabilities import get_visible_capabilities, parse_semver
 
 
@@ -56,7 +55,6 @@ async def record_usage(
             result_status=result_status,
         )
     )
-    invalidate_marketplace_cache()
 
 
 async def instantiate_agent(db: AsyncSession, user: User, cap: Capability, task: str) -> dict[str, Any]:
