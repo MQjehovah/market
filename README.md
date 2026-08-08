@@ -24,6 +24,7 @@ market/
 │   │   ├── services/        # 能力生命周期、包校验、执行引擎、统计
 │   │   ├── a2a/             # A2A 协议（Agent Card + JSON-RPC 任务）
 │   │   ├── sandbox/         # 工具真实执行沙箱（审计 + 子进程隔离）
+│   │   ├── marketplace_mcp/ # MCP 桥接：让任意 Agent 原生调用市场能力
 │   │   ├── auth.py          # JWT 认证
 │   │   ├── permissions.py   # 角色权限矩阵
 │   │   ├── storage.py       # 能力包存储（本地 / MinIO）
@@ -60,6 +61,67 @@ npm run dev
 浏览器访问 http://localhost:5173，API 文档见 http://localhost:8000/docs。
 
 也可以直接运行 `start-dev.bat`（Windows）或 `start-dev.ps1` 一键启动前后端。
+
+## 快速用市场能力（三种方式）
+
+### 方式一：MCP 桥接（推荐，最顺滑）
+
+`backend/marketplace_mcp/server.py` 把市场能力暴露为 5 个标准 MCP 工具，任何支持 MCP 的 Agent（Claude Code、Codex、Cursor、自研 Agent）都能原生调用：
+
+| 工具 | 作用 |
+| --- | --- |
+| `marketplace_search` | 搜索/浏览能力 |
+| `marketplace_use_tool` | 真实调用工具（沙箱执行） |
+| `marketplace_run_agent` | 实例化 Agent 并委派任务 |
+| `marketplace_activate_skill` | 激活技能（返回执行指引） |
+| `marketplace_discover_mcp` | 动态发现 MCP 能力 |
+
+配置：
+
+```bash
+# 1. 登录拿 token
+curl -X POST http://127.0.0.1:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"publisher","password":"publisher123"}'
+
+# 2. 给 Claude Code 添加市场
+claude mcp add marketplace \
+  --env MARKETPLACE_URL=http://127.0.0.1:8000 \
+  --env MARKETPLACE_TOKEN=<上一步返回的 access_token> \
+  -- python E:/ai/market/backend/marketplace_mcp/server.py
+
+# Codex / Cursor 等：在 MCP 配置文件中添加同一条命令即可
+```
+
+之后直接对你的 Agent 说："搜索市场里的工具，帮我调用文件哈希计算" 或 "把生成上月销售报表的任务委派给数字中台分析师"。
+
+### 方式二：纯 HTTP 直调（自研 Agent / 脚本）
+
+```python
+from urllib.parse import quote
+import httpx
+
+API = "http://127.0.0.1:8000"
+HEADERS = {"Authorization": "Bearer <你的 token>"}
+
+# 调用工具（沙箱真实执行）
+r = httpx.post(f"{API}/api/runtime/tools/{quote('文件哈希计算')}/invoke",
+               json={"params": {"path": "/tmp/a.txt"}}, headers=HEADERS, timeout=60)
+
+# 委派 Agent
+r = httpx.post(f"{API}/api/runtime/agents/{quote('数字中台分析师')}/instances",
+               params={"task": "生成上月销售报表"}, headers=HEADERS, timeout=60)
+
+# 激活技能
+r = httpx.post(f"{API}/api/runtime/skills/{quote('TDD 开发工作流')}/activate",
+               json={"context": "写测试"}, headers=HEADERS, timeout=30)
+```
+
+完整示例见 `backend/examples/quick_use.py`（`python examples/quick_use.py`）。
+
+### 方式三：A2A 委派（Agent 之间互调）
+
+你的 Agent 若支持 A2A 协议，直接向市场 Agent 发 JSON-RPC 任务（详见上文 A2A 章节）。三种方式都会记录用量并计入统计。
 
 ## 演示账号（首次启动自动种子）
 

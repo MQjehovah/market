@@ -173,6 +173,14 @@ def _handle_tool(name: str, arguments: dict) -> dict:
 
 
 def main() -> int:
+    # 协议传输统一使用 UTF-8，避免 Windows 控制台编码导致 JSON 损坏
+    if hasattr(sys.stdin, "reconfigure"):
+        sys.stdin.reconfigure(encoding="utf-8")
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8")
+
     if TOKEN:
         try:
             _api("GET", "/api/auth/me")
