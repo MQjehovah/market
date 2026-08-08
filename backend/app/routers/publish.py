@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import joinedload, selectinload
 
 from app.auth import CurrentUser, DbSession
+from app.cache import invalidate_marketplace_cache
 from app.models import Capability
 from app.schemas import (
     CapabilityCreate,
@@ -124,7 +125,9 @@ async def upload_artifact(cap_id: str, db: DbSession, user: CurrentUser, file: U
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
     _require_owner(cap, user)
     content = await file.read()
-    validate_package(cap.type, content)
+    details = validate_package(cap.type, content)
+    if cap.type == "tool" and details.get("schema"):
+        cap.input_schema = details["schema"]
     info = get_storage().save(cap.id, file.filename or "package.zip", io.BytesIO(content))
     from app.models import CapabilityArtifact
 
@@ -132,6 +135,7 @@ async def upload_artifact(cap_id: str, db: DbSession, user: CurrentUser, file: U
     db.add(artifact)
     await db.commit()
     await db.refresh(cap)
+    invalidate_marketplace_cache()
     return to_capability_out(cap, author_name=user.username)
 
 
@@ -160,4 +164,5 @@ async def delete_capability(cap_id: str, db: DbSession, user: CurrentUser):
         raise HTTPException(status.HTTP_409_CONFLICT, "仅草稿、驳回或打回状态的能力可以删除")
     await db.delete(cap)
     await db.commit()
+    invalidate_marketplace_cache()
     return MessageOut(message="已删除")

@@ -136,6 +136,7 @@ class CapabilityOut(CapabilityBase):
     author_id: str
     author_name: str = ""
     organization: str
+    input_schema: dict[str, Any] = Field(default_factory=dict)
     usage_count: int
     rating_sum: float
     rating_count: int
@@ -144,6 +145,13 @@ class CapabilityOut(CapabilityBase):
     updated_at: datetime
     artifacts: list[ArtifactOut] = Field(default_factory=list, exclude=True)
     latest: bool = False
+
+
+class CapabilityPage(BaseModel):
+    items: list[CapabilityOut]
+    total: int
+    page: int
+    page_size: int
 
 
 class ReviewRequest(BaseModel):

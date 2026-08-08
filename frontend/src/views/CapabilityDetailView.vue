@@ -249,6 +249,26 @@ onMounted(load)
         </div>
       </div>
 
+      <div v-if="cap.type === 'tool' && Object.keys(cap.input_schema || {}).length" class="panel mt-24">
+        <h3>参数定义（schema.json）</h3>
+        <table class="table">
+          <thead>
+            <tr><th>参数</th><th>类型</th><th>必填</th><th>说明</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="(prop, name) in (cap.input_schema.properties || {})" :key="name">
+              <td><code>{{ name }}</code></td>
+              <td>{{ prop.type || 'any' }}</td>
+              <td>
+                <span v-if="(cap.input_schema.required || []).includes(name)" class="badge badge-danger">必填</span>
+                <span v-else class="muted">可选</span>
+              </td>
+              <td class="muted">{{ prop.description || prop.title || '-' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
       <div v-if="isAgent && cap.status === 'published'" class="a2a-panel panel mt-24">
         <div class="flex-between flex-wrap">
           <h3>A2A 互调（Agent-to-Agent 协议）</h3>

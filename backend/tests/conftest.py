@@ -6,6 +6,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 os.environ.setdefault("ARTIFACT_STORAGE", "local")
 os.environ.setdefault("ARTIFACT_DIR", "./data/test-artifacts")
 os.environ.setdefault("JWT_SECRET", "test-secret-key-with-at-least-32-bytes!!")
+os.environ.setdefault("CACHE_ENABLED", "false")
 
 import asyncio
 

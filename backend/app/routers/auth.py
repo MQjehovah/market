@@ -1,4 +1,7 @@
-from fastapi import APIRouter, HTTPException, status
+import time
+from collections import defaultdict, deque
+
+from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import or_, select
 
 from app.auth import CurrentUser, DbSession, create_access_token, hash_password, verify_password
@@ -6,6 +9,10 @@ from app.models import User
 from app.schemas import TokenOut, UserLogin, UserOut, UserRegister
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+_login_failures: dict[str, deque] = defaultdict(deque)
+_LOCK_AFTER = 5
+_LOCK_WINDOW = 15 * 60
 
 
 @router.post("/register", response_model=TokenOut, status_code=status.HTTP_201_CREATED)
@@ -31,12 +38,25 @@ async def register(data: UserRegister, db: DbSession):
 
 
 @router.post("/login", response_model=TokenOut)
-async def login(data: UserLogin, db: DbSession):
+async def login(data: UserLogin, request: Request, db: DbSession):
+    client = request.client.host if request.client else "unknown"
+    key = f"{data.username}:{client}"
+    now = time.time()
+    failures = _login_failures[key]
+    while failures and failures[0] < now - _LOCK_WINDOW:
+        failures.popleft()
+    if len(failures) >= _LOCK_AFTER:
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "登录失败次数过多，请 15 分钟后再试",
+        )
     user = await db.scalar(select(User).where(User.username == data.username))
     if user is None or not verify_password(data.password, user.password_hash):
+        failures.append(now)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "用户名或密码错误")
     if not user.is_active:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "账号已被禁用")
+    _login_failures.pop(key, None)
     return TokenOut(access_token=create_access_token(user), user=UserOut.model_validate(user))
 
 

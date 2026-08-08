@@ -7,7 +7,7 @@ import pytest
 async def test_public_browse_returns_published(client):
     r = await client.get("/api/capabilities")
     assert r.status_code == 200
-    items = r.json()
+    items = r.json()["items"]
     assert len(items) >= 4
     assert all(item["status"] == "published" for item in items)
     types = {item["type"] for item in items}
@@ -94,11 +94,11 @@ async def test_normal_user_cannot_review(client, user_headers):
 async def test_search_and_filter(client):
     r = await client.get("/api/capabilities", params={"q": "数字中台"})
     assert r.status_code == 200
-    assert any(item["name"] == "数字中台分析师" for item in r.json())
+    assert any(item["name"] == "数字中台分析师" for item in r.json()["items"])
 
     r = await client.get("/api/capabilities", params={"type": "mcp"})
     assert r.status_code == 200
-    assert all(item["type"] == "mcp" for item in r.json())
+    assert all(item["type"] == "mcp" for item in r.json()["items"])
 
 
 @pytest.mark.asyncio
@@ -127,7 +127,7 @@ async def test_mcp_discover(client, user_headers):
 @pytest.mark.asyncio
 async def test_rating_and_subscription(client, user_headers):
     r = await client.get("/api/capabilities", params={"q": "文件哈希"})
-    cap_id = r.json()[0]["id"]
+    cap_id = r.json()["items"][0]["id"]
     r = await client.post(
         f"/api/capabilities/{cap_id}/ratings",
         headers=user_headers,

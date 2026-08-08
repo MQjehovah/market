@@ -136,7 +136,7 @@ r = httpx.post(f"{API}/api/runtime/skills/{quote('TDD 开发工作流')}/activat
 | 模块 | 说明 |
 | --- | --- |
 | `POST /api/auth/login` `POST /api/auth/register` | 登录 / 注册 |
-| `GET /api/capabilities` | 浏览与搜索（类型/分类/状态/排序） |
+| `GET /api/capabilities` | 浏览与搜索（类型/分类/状态/排序，分页返回 `{items,total,page,page_size}`） |
 | `GET /api/capabilities/{id}` | 能力详情与版本列表 |
 | `POST /api/publish/capabilities` | 发布者创建草稿 |
 | `POST /api/publish/capabilities/{id}/submit` | 提交审核 |
@@ -191,12 +191,23 @@ python -m pytest tests -q
 - **契约**：`tool.py` 提供 `run(params: dict) -> dict`（或 `main`），参数经 stdin 传入、结果经 stdout 返回。
 - **安全审计**：执行前对源码做 AST 检查——严格白名单导入（禁网络/进程/系统模块），禁止 `eval/exec`、`os.system` 等危险调用。
 - **隔离执行**：在临时目录中以 `python -I` 独立子进程运行，带超时（默认 15s）与输出大小限制。
+- **zip 炸弹防护**：解压前检查解压总量与单文件大小上限，防压缩炸弹。
+- **进程树清理**：超时后整树终止子进程（Windows 下 `taskkill /T`），避免残留。
 - **失败处理**：审计不过、超时、抛异常都会返回 `execution: "real", ok: false, error: ...`，并记录失败用量。
 
 未上传实现包时降级为模拟执行（`execution: "simulated"`）。生产环境如需更强隔离，可在此基础上换成容器/WASM 沙箱。
 
+## 其他工程化优化
+
+- **SQL 下推 + 分页**：浏览/搜索/分类全部在数据库层过滤、排序、分页，并加了 `(type, status, visibility)` 复合索引，能力量级大也不会退化。
+- **内存 TTL 缓存**：浏览、分类、统计走内存缓存（默认 300s），发布/审核/调用等数据变更时自动整体失效；单进程部署零外部依赖（如需分布式缓存可自行接入）。
+- **工具参数展示**：上传工具包时自动解析 `schema.json` 并保存，详情页直接展示参数名/类型/必填/说明，降低调用出错率。
+- **登录限流**：同一用户名 + IP 15 分钟内失败 5 次即锁定，防暴力破解。
+- **流式校验和**：上传时边写边算 SHA-256，大包不再二次全量读取。
+- **原子用量计数**：`usage_count` 改为数据库原子自增，避免并发读改写。
+
 ## 技术说明
 
-- 存储层按 README 设计为 PostgreSQL(元数据) + MinIO(能力包) + Redis(缓存)，代码通过 `DATABASE_URL` / `ARTIFACT_STORAGE` / `CACHE_BACKEND` 配置切换；默认 SQLite/本地文件/内存缓存便于本机开发。
+- 存储层按 README 设计为 PostgreSQL(元数据) + MinIO(能力包) + 缓存，代码通过 `DATABASE_URL` / `ARTIFACT_STORAGE` 配置切换；默认 SQLite/本地文件/内存 TTL 缓存，零外部依赖开箱即用。
 - 能力包上传时按 README 3.x 各市场的发布包结构校验必需文件（如 tool 包必须含 `tool.json + schema.json + implementation/tool.py`）。
 - 前端所有列表/详情/操作均对接真实 API；中文能力名在运行时调用中自动做 URL 编码。

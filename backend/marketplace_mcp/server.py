@@ -115,10 +115,11 @@ def _handle_tool(name: str, arguments: dict) -> dict:
         limit = int(arguments.get("limit", 10))
         params = {k: v for k, v in arguments.items() if k in ("q", "type", "category") and v}
         params["page_size"] = limit
-        items = _api("GET", "/api/capabilities", params=params)
+        body = _api("GET", "/api/capabilities", params=params)
+        items = body.get("items") or []
         if not items:
             return _text("没有找到匹配的能力。")
-        lines = ["市场能力搜索结果："]
+        lines = [f"市场能力搜索结果（共 {body.get('total', 0)} 条，显示 {len(items)} 条）："]
         for c in items:
             lines.append(
                 f"- [{c['type']}] {c['name']} v{c['version']} ({c['status']})"

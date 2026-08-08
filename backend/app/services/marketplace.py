@@ -3,11 +3,12 @@
 from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
 from app.models import Capability, UsageEvent, User
+from app.cache import invalidate_marketplace_cache
 from app.services.capabilities import get_visible_capabilities, parse_semver
 
 
@@ -40,7 +41,12 @@ async def record_usage(
 ) -> None:
     if cap.status not in ("published", "deprecated", "reviewing"):
         raise HTTPException(status.HTTP_409_CONFLICT, f"能力 {cap.name} 当前状态不可使用")
-    cap.usage_count += 1
+    # 原子递增，避免并发读改写
+    await db.execute(
+        update(Capability)
+        .where(Capability.id == cap.id)
+        .values(usage_count=Capability.usage_count + 1)
+    )
     db.add(
         UsageEvent(
             user_id=user.id,
@@ -50,6 +56,7 @@ async def record_usage(
             result_status=result_status,
         )
     )
+    invalidate_marketplace_cache()
 
 
 async def instantiate_agent(db: AsyncSession, user: User, cap: Capability, task: str) -> dict[str, Any]:

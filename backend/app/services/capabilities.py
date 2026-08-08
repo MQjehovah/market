@@ -16,6 +16,7 @@ from app.models import (
     Subscription,
     User,
 )
+from app.cache import invalidate_marketplace_cache
 from app.schemas import ArtifactOut, CapabilityCreate, CapabilityOut, CapabilityUpdate
 
 SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
@@ -72,6 +73,7 @@ def to_capability_out(
         "visibility": cap.visibility,
         "author_id": cap.author_id,
         "organization": cap.organization or "",
+        "input_schema": cap.input_schema or {},
         "usage_count": cap.usage_count,
         "rating_sum": cap.rating_sum,
         "rating_count": cap.rating_count,
@@ -144,6 +146,7 @@ async def create_capability(
     db.add(cap)
     await db.commit()
     await db.refresh(cap)
+    invalidate_marketplace_cache()
     return cap
 
 
@@ -160,6 +163,7 @@ async def update_capability(
         cap.visibility = data.visibility
     await db.commit()
     await db.refresh(cap)
+    invalidate_marketplace_cache()
     return cap
 
 
@@ -168,6 +172,7 @@ async def submit_for_review(db: AsyncSession, cap: Capability) -> Capability:
     db.add(Review(capability_id=cap.id, reviewer_id=cap.author_id, action="submitted", comment="提交审核"))
     await db.commit()
     await db.refresh(cap)
+    invalidate_marketplace_cache()
     return cap
 
 
@@ -206,6 +211,7 @@ async def review_capability(
         await _notify_subscribers(db, cap)
     await db.commit()
     await db.refresh(cap)
+    invalidate_marketplace_cache()
     return cap
 
 
@@ -235,6 +241,7 @@ async def change_status(db: AsyncSession, cap: Capability, target: str) -> Capab
         )
     await db.commit()
     await db.refresh(cap)
+    invalidate_marketplace_cache()
     return cap
 
 
@@ -272,6 +279,7 @@ async def create_new_version(
     db.add(new_cap)
     await db.commit()
     await db.refresh(new_cap)
+    invalidate_marketplace_cache()
     return new_cap
 
 
@@ -292,4 +300,5 @@ async def record_rating(db: AsyncSession, user: User, cap: Capability, score: in
         cap.rating_sum += score
     await db.commit()
     await db.refresh(rating)
+    invalidate_marketplace_cache()
     return rating

@@ -32,3 +32,21 @@ async def init_db() -> None:
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await _auto_migrate(conn)
+
+
+async def _auto_migrate(conn) -> None:
+    """轻量增量迁移：为已存在的表补齐新增列（完整演进请用 Alembic）。"""
+    from sqlalchemy import inspect
+
+    def _do(sync_conn) -> None:
+        inspector = inspect(sync_conn)
+        if "capabilities" not in inspector.get_table_names():
+            return
+        cols = {c["name"] for c in inspector.get_columns("capabilities")}
+        if "input_schema" not in cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE capabilities ADD COLUMN input_schema JSON DEFAULT '{}'"
+            )
+
+    await conn.run_sync(_do)

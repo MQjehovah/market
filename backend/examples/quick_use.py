@@ -20,7 +20,7 @@ def search(q: str = "", type_: str = "") -> list[dict]:
     params = {k: v for k, v in {"q": q, "type": type_}.items() if v}
     r = httpx.get(f"{BASE}/api/capabilities", params=params, headers=HEADERS, timeout=15)
     r.raise_for_status()
-    return r.json()
+    return r.json()["items"]
 
 
 def use_tool(name: str, params: dict) -> dict:

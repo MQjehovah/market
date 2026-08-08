@@ -1,4 +1,4 @@
-"""缓存抽象：内存 TTL 缓存（默认）或 Redis。"""
+"""内存 TTL 缓存（单进程部署默认方案，不依赖外部服务）。"""
 
 import time
 from typing import Any
@@ -26,41 +26,33 @@ class MemoryCache:
     def delete(self, key: str) -> None:
         self._store.pop(key, None)
 
-
-class RedisCache:
-    def __init__(self) -> None:
-        import redis.asyncio as aioredis
-
-        self._client = aioredis.from_url(get_settings().redis_url, decode_responses=True)
-
-    async def get(self, key: str) -> Any | None:
-        try:
-            return await self._client.get(key)
-        except Exception:
-            return None
-
-    async def set(self, key: str, value: Any, ttl: int = 300) -> None:
-        try:
-            await self._client.set(key, value, ex=ttl)
-        except Exception:
-            pass
-
-    async def delete(self, key: str) -> None:
-        try:
-            await self._client.delete(key)
-        except Exception:
-            pass
+    def clear(self) -> None:
+        self._store.clear()
 
 
 _memory_cache = MemoryCache()
-_redis_cache: RedisCache | None = None
 
 
-def get_cache() -> MemoryCache | RedisCache:
+def get_cache() -> MemoryCache:
     settings = get_settings()
-    global _redis_cache
-    if settings.cache_backend == "redis":
-        if _redis_cache is None:
-            _redis_cache = RedisCache()
-        return _redis_cache
+    if not settings.cache_enabled:
+        return _NullCache()
     return _memory_cache
+
+
+class _NullCache(MemoryCache):
+    """缓存关闭时的空实现：get 恒为 None，set/delete/clear 为空操作。"""
+
+    def get(self, key: str) -> Any | None:
+        return None
+
+    def set(self, key: str, value: Any, ttl: int = 300) -> None:
+        return None
+
+    def clear(self) -> None:
+        return None
+
+
+def invalidate_marketplace_cache() -> None:
+    """数据变更后整体失效市场缓存（浏览/分类/统计）。"""
+    get_cache().clear()

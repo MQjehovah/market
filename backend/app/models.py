@@ -10,6 +10,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    Index,
     String,
     Text,
     UniqueConstraint,
@@ -45,7 +46,10 @@ class Capability(Base):
     """能力元数据。同一逻辑能力的不同版本各自成行，由 (name, version) 唯一约束。"""
 
     __tablename__ = "capabilities"
-    __table_args__ = (UniqueConstraint("name", "version", name="uq_capability_name_version"),)
+    __table_args__ = (
+        UniqueConstraint("name", "version", name="uq_capability_name_version"),
+        Index("ix_capabilities_type_status_visibility", "type", "status", "visibility"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
@@ -56,6 +60,7 @@ class Capability(Base):
     # draft | reviewing | published | deprecated | archived | rejected | returned
     category: Mapped[str] = mapped_column(String(100), default="", index=True)
     tags: Mapped[list] = mapped_column(JSON, default=list)
+    input_schema: Mapped[dict] = mapped_column(JSON, default=dict)  # 工具参数定义（来自 schema.json）
     author_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
     organization: Mapped[str] = mapped_column(String(100), default="")
     visibility: Mapped[str] = mapped_column(String(16), default="internal")

@@ -1,20 +1,23 @@
 """门户：浏览 / 搜索 / 详情 / 评分 / 订阅 / 通知 / 版本列表。"""
 
 from fastapi import APIRouter, HTTPException, Query, status
-from sqlalchemy import and_, func, select
+from sqlalchemy import String, and_, case, cast, func, or_, select
 from sqlalchemy.orm import joinedload, selectinload
 
+from app.cache import get_cache
+from app.config import get_settings
 from app.auth import CurrentUser, DbSession, OptionalUser
 from app.models import Capability, Notification, Rating, Subscription, User
 from app.schemas import (
     CapabilityOut,
+    CapabilityPage,
     MessageOut,
     NotificationOut,
     RatingCreate,
     RatingOut,
     SubscribeRequest,
 )
-from app.services.capabilities import get_visible_capabilities, is_latest, parse_semver, record_rating
+from app.services.capabilities import get_visible_capabilities, parse_semver, record_rating
 from app.services.capabilities import to_capability_out
 
 router = APIRouter(prefix="/api", tags=["portal"])
@@ -24,7 +27,24 @@ def _to_out(cap: Capability, versions: list[Capability] | None = None) -> Capabi
     return to_capability_out(cap, versions)
 
 
-@router.get("/capabilities", response_model=list[CapabilityOut])
+def _visibility_where(user: User | None):
+    """可见性过滤（SQL 层）：internal/public 全员；private 仅作者；team 仅同团队；admin 全量。"""
+    if user is not None and user.role == "admin":
+        return None
+    clauses = [Capability.visibility.in_(["internal", "public"])]
+    if user is not None:
+        clauses.append(Capability.author_id == user.id)
+        if user.team:
+            clauses.append(
+                and_(
+                    Capability.visibility == "team",
+                    Capability.author.has(User.team == user.team),
+                )
+            )
+    return or_(*clauses)
+
+
+@router.get("/capabilities", response_model=CapabilityPage)
 async def browse_capabilities(
     db: DbSession,
     user: OptionalUser,
@@ -37,39 +57,91 @@ async def browse_capabilities(
     page: int = Query(1, ge=1),
     page_size: int = Query(24, ge=1, le=100),
 ):
-    caps = await get_visible_capabilities(db, user)
-    if q:
-        ql = q.lower()
-        caps = [c for c in caps if ql in c.name.lower() or ql in (c.description or "").lower() or any(ql in t.lower() for t in (c.tags or []))]
+    cache_key = (
+        f"browse:{user.id if user else 'anon'}:{q}:{type}:{category}:"
+        f"{status}:{visibility}:{sort}:{page}:{page_size}"
+    )
+    cached = get_cache().get(cache_key)
+    if cached is not None:
+        return CapabilityPage.model_validate(cached)
+
+    conditions: list = []
+    visibility_where = _visibility_where(user)
+    if visibility_where is not None:
+        conditions.append(visibility_where)
     if type:
-        caps = [c for c in caps if c.type == type]
+        conditions.append(Capability.type == type)
     if category:
-        caps = [c for c in caps if c.category == category]
+        conditions.append(Capability.category == category)
     if status:
-        caps = [c for c in caps if c.status == status]
+        conditions.append(Capability.status == status)
     if visibility:
-        caps = [c for c in caps if c.visibility == visibility]
+        conditions.append(Capability.visibility == visibility)
+    if q:
+        ql = f"%{q}%"
+        conditions.append(
+            or_(
+                Capability.name.ilike(ql),
+                Capability.description.ilike(ql),
+                cast(Capability.tags, String).ilike(ql),
+            )
+        )
+    where_clause = and_(*conditions) if conditions else None
 
-    caps.sort(key=lambda c: (c.updated_at or c.created_at), reverse=True)
-    if sort == "usage":
-        caps.sort(key=lambda c: c.usage_count, reverse=True)
-    elif sort == "rating":
-        caps.sort(key=lambda c: c.avg_rating, reverse=True)
+    total_stmt = select(func.count()).select_from(Capability)
+    if where_clause is not None:
+        total_stmt = total_stmt.where(where_clause)
+    total = (await db.scalar(total_stmt)) or 0
 
-    versions = list(caps)
-    start = (page - 1) * page_size
-    return [_to_out(c, versions) for c in caps[start : start + page_size]]
+    order_by = {
+        "latest": Capability.updated_at.desc(),
+        "usage": Capability.usage_count.desc(),
+        "rating": case(
+            (Capability.rating_count > 0, Capability.rating_sum / Capability.rating_count),
+            else_=0,
+        ).desc(),
+    }.get(sort, Capability.updated_at.desc())
+
+    stmt = (
+        select(Capability)
+        .options(joinedload(Capability.author))
+        .order_by(order_by)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    if where_clause is not None:
+        stmt = stmt.where(where_clause)
+    caps = (await db.scalars(stmt)).all()
+
+    result = CapabilityPage(
+        items=[_to_out(c) for c in caps],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+    get_cache().set(cache_key, result.model_dump(mode="json"), get_settings().cache_ttl)
+    return result
 
 
 @router.get("/meta/categories", response_model=dict[str, list[str]])
 async def categories(db: DbSession, user: OptionalUser):
-    caps = await get_visible_capabilities(db, user)
+    cache_key = f"categories:{user.id if user else 'anon'}"
+    cached = get_cache().get(cache_key)
+    if cached is not None:
+        return cached
+    visibility_where = _visibility_where(user)
+    stmt = (
+        select(Capability.type, Capability.category)
+        .where(Capability.category != "")
+        .distinct()
+    )
+    if visibility_where is not None:
+        stmt = stmt.where(visibility_where)
+    rows = (await db.execute(stmt)).all()
     result: dict[str, list[str]] = {}
-    for c in caps:
-        if c.category:
-            result.setdefault(c.type, [])
-            if c.category not in result[c.type]:
-                result[c.type].append(c.category)
+    for cap_type, cat in rows:
+        result.setdefault(cap_type, []).append(cat)
+    get_cache().set(cache_key, result, get_settings().cache_ttl)
     return result
 
 

@@ -25,7 +25,7 @@ async def test_agent_discovery(client):
 @pytest.mark.asyncio
 async def test_tasks_send_and_get(client, user_headers):
     r = await client.get("/api/capabilities", params={"q": "数字中台"})
-    agent_id = r.json()[0]["id"]
+    agent_id = r.json()["items"][0]["id"]
 
     payload = {
         "jsonrpc": "2.0",
@@ -64,7 +64,7 @@ async def test_tasks_send_and_get(client, user_headers):
 @pytest.mark.asyncio
 async def test_tasks_cancel_terminal_task(client, user_headers):
     r = await client.get("/api/capabilities", params={"q": "数字中台"})
-    agent_id = r.json()[0]["id"]
+    agent_id = r.json()["items"][0]["id"]
     r = await client.post(
         f"/api/a2a/agents/{agent_id}/a2a",
         headers=user_headers,
@@ -91,7 +91,7 @@ async def test_tasks_cancel_terminal_task(client, user_headers):
 @pytest.mark.asyncio
 async def test_unknown_method(client, user_headers):
     r = await client.get("/api/capabilities", params={"q": "数字中台"})
-    agent_id = r.json()[0]["id"]
+    agent_id = r.json()["items"][0]["id"]
     r = await client.post(
         f"/api/a2a/agents/{agent_id}/a2a",
         headers=user_headers,
@@ -104,7 +104,7 @@ async def test_unknown_method(client, user_headers):
 @pytest.mark.asyncio
 async def test_non_agent_returns_error_code(client, user_headers):
     r = await client.get("/api/capabilities", params={"q": "文件哈希"})
-    tool_id = r.json()[0]["id"]
+    tool_id = r.json()["items"][0]["id"]
     r = await client.post(
         f"/api/a2a/agents/{tool_id}/a2a",
         headers=user_headers,
@@ -125,7 +125,7 @@ async def test_non_agent_returns_error_code(client, user_headers):
 @pytest.mark.asyncio
 async def test_a2a_requires_auth(client):
     r = await client.get("/api/capabilities", params={"q": "数字中台"})
-    agent_id = r.json()[0]["id"]
+    agent_id = r.json()["items"][0]["id"]
     r = await client.post(
         f"/api/a2a/agents/{agent_id}/a2a",
         json={"jsonrpc": "2.0", "id": "x", "method": "tasks/send", "params": {}},
@@ -137,7 +137,7 @@ async def test_a2a_requires_auth(client):
 async def test_a2a_records_usage(client, user_headers, admin_headers):
     before = (await client.get("/api/admin/stats", headers=admin_headers)).json()["total_usage"]
     r = await client.get("/api/capabilities", params={"q": "数字中台"})
-    agent_id = r.json()[0]["id"]
+    agent_id = r.json()["items"][0]["id"]
     await client.post(
         f"/api/a2a/agents/{agent_id}/a2a",
         headers=user_headers,

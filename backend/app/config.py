@@ -25,9 +25,8 @@ class Settings(BaseSettings):
     minio_bucket: str = "marketplace"
     minio_secure: bool = False
 
-    # 缓存
-    cache_backend: str = "memory"  # memory | redis
-    redis_url: str = "redis://localhost:6379/0"
+    # 缓存（内存 TTL，单进程部署开箱即用；多实例部署建议接入分布式缓存）
+    cache_enabled: bool = True
     cache_ttl: int = 300
 
     # 安全
@@ -46,6 +45,7 @@ class Settings(BaseSettings):
     # 工具沙箱
     tool_timeout_seconds: int = 15
     tool_max_output_bytes: int = 2 * 1024 * 1024
+    tool_max_extract_bytes: int = 256 * 1024 * 1024
 
     @property
     def base_dir(self) -> Path:

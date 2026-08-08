@@ -5,6 +5,7 @@ import asyncio
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import zipfile
@@ -74,16 +75,43 @@ def audit_source(source: str) -> list[str]:
 
 
 def _safe_extract(content: bytes, target: Path) -> None:
-    """安全解压 zip，防止路径穿越。"""
+    """安全解压 zip：防止路径穿越，并限制解压总量（防 zip 炸弹）。"""
+    settings = get_settings()
     try:
         zf = zipfile.ZipFile(io.BytesIO(content))
     except zipfile.BadZipFile:
         raise SandboxError("能力包不是有效的 zip 文件")
+    total_size = 0
     for member in zf.infolist():
+        if member.is_dir():
+            continue
+        total_size += member.file_size
+        if total_size > settings.tool_max_extract_bytes:
+            raise SandboxError(f"解压后总量超过限制（{settings.tool_max_extract_bytes // 1024 // 1024}MB），疑似 zip 炸弹")
+        if member.file_size > settings.tool_max_extract_bytes:
+            raise SandboxError(f"单文件超过解压限制：{member.filename}")
         resolved = (target / member.filename).resolve()
         if not str(resolved).startswith(str(target.resolve())):
             raise SandboxError(f"能力包包含非法路径：{member.filename}")
     zf.extractall(target)
+
+
+def _kill_tree(proc) -> None:
+    """结束子进程及其整个进程树（Windows 用 taskkill /T）。"""
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                capture_output=True,
+                timeout=10,
+            )
+        else:
+            proc.kill()
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
 
 
 async def _run_subprocess(module_dir: Path, params: dict[str, Any], timeout: int) -> dict[str, Any]:
@@ -109,7 +137,7 @@ async def _run_subprocess(module_dir: Path, params: dict[str, Any], timeout: int
     try:
         out, err = await asyncio.wait_for(proc.communicate(payload), timeout=timeout)
     except asyncio.TimeoutError:
-        proc.kill()
+        _kill_tree(proc)
         await proc.wait()
         raise SandboxError(f"工具执行超时（>{timeout}s）")
 

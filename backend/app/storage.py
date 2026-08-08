@@ -1,7 +1,6 @@
 """能力包存储抽象：本地文件系统（默认）或 MinIO。"""
 
 import hashlib
-import shutil
 from pathlib import Path
 from typing import BinaryIO
 
@@ -34,15 +33,22 @@ class LocalStorage(ArtifactStorage):
         target_dir.mkdir(parents=True, exist_ok=True)
         safe_name = Path(filename).name
         target = target_dir / safe_name
+        hasher = hashlib.sha256()
+        size = 0
         with target.open("wb") as out:
-            shutil.copyfileobj(content, out)
-        checksum = hashlib.sha256(target.read_bytes()).hexdigest()
+            while True:
+                chunk = content.read(1024 * 1024)
+                if not chunk:
+                    break
+                hasher.update(chunk)
+                size += len(chunk)
+                out.write(chunk)
         uri = f"{capability_id}/{safe_name}"
         return {
             "uri": uri,
             "storage_type": "local",
-            "checksum": checksum,
-            "size_bytes": target.stat().st_size,
+            "checksum": hasher.hexdigest(),
+            "size_bytes": size,
         }
 
     def open(self, uri: str) -> BinaryIO:
