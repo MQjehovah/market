@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+data/
+frontend/logs/
+*.log
+.env
+*.db
+node_modules/
+dist/
+.DS_Store
+Thumbs.db
+
+logs/
