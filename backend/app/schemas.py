@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-CAPABILITY_TYPES = ("agent", "tool", "skill", "mcp")
+CAPABILITY_TYPES = ("agent", "tool", "skill", "mcp", "workflow")
 VISIBILITY_LEVELS = ("private", "team", "internal", "public")
 STATUS_LEVELS = ("draft", "reviewing", "published", "deprecated", "archived", "rejected", "returned")
 ROLES = ("admin", "publisher", "user")
@@ -47,7 +47,7 @@ class TokenOut(BaseModel):
 class CapabilityBase(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str = Field(default="", max_length=20000)
-    type: Literal["agent", "tool", "skill", "mcp"]
+    type: Literal["agent", "tool", "skill", "mcp", "workflow"]
     version: str = Field(default="0.1.0", max_length=50)
     category: str = Field(default="", max_length=100)
     tags: list[str] = Field(default_factory=list)
@@ -143,7 +143,7 @@ class CapabilityOut(CapabilityBase):
     avg_rating: float = 0.0
     created_at: datetime
     updated_at: datetime
-    artifacts: list[ArtifactOut] = Field(default_factory=list, exclude=True)
+    artifacts: list[ArtifactOut] = Field(default_factory=list)
     latest: bool = False
 
 
@@ -214,6 +214,121 @@ class RuntimeActivateRequest(BaseModel):
 
 class RuntimeInstallRequest(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
+
+
+class AssembleDependency(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    type: Literal["tool", "skill", "mcp"]
+    version: str = Field(default="", max_length=50, description="留空取最新发布版")
+
+
+class AssembleRequest(BaseModel):
+    persona: str = Field(min_length=1, max_length=255, description="作为人设的 agent 能力名")
+    persona_version: str = Field(default="", max_length=50)
+    name: str = Field(min_length=1, max_length=255, description="组装后 agent 的名称")
+    version: str = Field(default="0.1.0", max_length=50)
+    description: str = Field(default="", max_length=20000)
+    category: str = Field(default="组装", max_length=100)
+    tags: list[str] = Field(default_factory=list)
+    dependencies: list[AssembleDependency] = Field(default_factory=list)
+
+
+class AgentBindingCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    description: str = Field(default="", max_length=20000)
+    version: str = Field(default="0.1.0", max_length=50)
+    dependencies: list[AssembleDependency] = Field(default_factory=list)
+    enabled: bool = True
+
+
+class AgentBindingUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    description: str | None = None
+    version: str | None = None
+    dependencies: list[AssembleDependency] | None = None
+    enabled: bool | None = None
+
+
+class AgentBindingOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    agent_id: str
+    agent_name: str = ""
+    name: str
+    description: str = ""
+    version: str
+    dependencies: list[dict[str, str]]
+    enabled: bool
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class WorkflowCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    description: str = Field(default="", max_length=20000)
+    version: str = Field(default="0.1.0", max_length=50)
+    category: str = Field(default="工作流", max_length=100)
+    tags: list[str] = Field(default_factory=list)
+    visibility: Literal["private", "team", "internal", "public"] = "internal"
+    workflow: dict[str, Any] = Field(description="workflow.json 内容：nodes + edges")
+
+
+class WorkflowExecuteRequest(BaseModel):
+    input: dict[str, Any] = Field(default_factory=dict)
+
+
+class RuntimeInstantiateRequest(BaseModel):
+    task: str = "执行任务"
+    binding: str = Field(default="", description="绑定名称或 ID，留空用默认绑定")
+    bindings: list[AssembleDependency] = Field(default_factory=list, description="临时绑定，不落库")
+
+
+class RuntimeTaskRequest(BaseModel):
+    task: str = Field(min_length=1, max_length=20000)
+
+
+class RuntimeTaskOut(BaseModel):
+    task_id: str
+    agent: str
+    version: str
+    mode: str
+    output: str
+    tool_calls: int = 0
+    runtime: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentEditOut(BaseModel):
+    capability: CapabilityOut
+    prompt: str = ""
+    dependencies: list[dict[str, str]] = Field(default_factory=list)
+    base_version: str = ""
+
+
+class AgentEditSave(BaseModel):
+    prompt: str = Field(default="", max_length=200000)
+    description: str = Field(default="", max_length=20000)
+    category: str = Field(default="", max_length=100)
+    tags: list[str] = Field(default_factory=list)
+    new_version: str = Field(default="", max_length=50, description="留空则基于最新版本 patch+1")
+    dependencies: list[AssembleDependency] = Field(default_factory=list)
+
+
+class WorkflowExecutionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    workflow_id: str
+    workflow_name: str = ""
+    state: str
+    input_data: dict[str, Any]
+    outputs: dict[str, Any]
+    node_states: dict[str, Any]
+    error: str = ""
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
 
 
 class MessageOut(BaseModel):

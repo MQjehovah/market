@@ -17,6 +17,7 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.ext.mutable import MutableDict, MutableList
 
 from app.database import Base
 
@@ -201,6 +202,52 @@ class A2ATask(Base):
     history: Mapped[list] = mapped_column(JSON, default=list)
     task_metadata: Mapped[dict] = mapped_column(JSON, default=dict)
     client_task_id: Mapped[str] = mapped_column(String(128), default="")
+    created_by: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class WorkflowExecution(Base):
+    """工作流执行实例：记录一次 workflow 能力调用的状态、节点结果与输出。"""
+
+    __tablename__ = "workflow_executions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    workflow_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("capabilities.id"), index=True
+    )
+    state: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    # pending | running | succeeded | failed | canceled
+    input_data: Mapped[dict] = mapped_column(MutableDict.as_mutable(JSON), default=MutableDict)
+    outputs: Mapped[dict] = mapped_column(MutableDict.as_mutable(JSON), default=MutableDict)
+    node_states: Mapped[dict] = mapped_column(MutableDict.as_mutable(JSON), default=MutableDict)
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class AgentBinding(Base):
+    """Agent 动态绑定：给 agent 人设挂载工具/技能/MCP（运行时组装，不生成能力包）。"""
+
+    __tablename__ = "agent_bindings"
+    __table_args__ = (UniqueConstraint("agent_id", "name", name="uq_binding_agent_name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    agent_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("capabilities.id"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="")
+    version: Mapped[str] = mapped_column(String(50), default="0.1.0")
+    dependencies: Mapped[list] = mapped_column(
+        MutableList.as_mutable(JSON), default=MutableList
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_by: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

@@ -107,6 +107,22 @@ TOOLS = [
         "description": "动态发现市场上已发布的 MCP 能力（数据库连接、DevOps 工具等）。",
         "inputSchema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "marketplace_run_workflow",
+        "description": "执行市场上已发布的工作流（多步编排：工具/Agent/MCP/技能），输入参数按工作流定义。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "工作流名称"},
+                "input": {
+                    "type": "object",
+                    "description": "工作流入参，如 {\"pattern\": \"**/*.py\"}",
+                    "default": {},
+                },
+            },
+            "required": ["name"],
+        },
+    },
 ]
 
 
@@ -146,10 +162,12 @@ def _handle_tool(name: str, arguments: dict) -> dict:
         task = arguments.get("task", "")
         result = _api(
             "POST",
-            f"/api/runtime/agents/{quote(agent_name)}/instances",
-            params={"task": task},
+            f"/api/runtime/agents/{quote(agent_name)}/tasks",
+            json={"task": task},
         )
-        return _text(json.dumps(result.get("result") or result, ensure_ascii=False, indent=2))
+        return _text(
+            f"[mode: {result.get('mode')}] {result.get('output') or ''}"
+        )
 
     if name == "marketplace_activate_skill":
         skill_name = arguments.get("name")
@@ -169,6 +187,27 @@ def _handle_tool(name: str, arguments: dict) -> dict:
         for t in tools:
             lines.append(f"- {t['name']} v{t['version']}（{t.get('category')}）使用量 {t.get('usage_count')}\n  {t.get('description') or ''}")
         return _text("\n".join(lines))
+
+    if name == "marketplace_run_workflow":
+        wf_name = arguments.get("name")
+        input_data = arguments.get("input") or {}
+        result = _api(
+            "POST",
+            f"/api/runtime/workflows/{quote(wf_name)}/executions",
+            json={"input": input_data},
+        )
+        return _text(
+            json.dumps(
+                {
+                    "state": result.get("state"),
+                    "outputs": result.get("outputs"),
+                    "node_states": result.get("node_states"),
+                    "error": result.get("error"),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
 
     raise RuntimeError(f"未知工具：{name}")
 

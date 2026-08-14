@@ -45,6 +45,7 @@ onMounted(loadNotifications)
 
       <nav class="nav">
         <router-link to="/">能力浏览</router-link>
+        <router-link to="/workflows">工作流</router-link>
         <router-link v-if="canPublish" to="/publish">能力发布</router-link>
         <router-link v-if="isLoggedIn" to="/my">我的能力</router-link>
         <router-link v-if="isLoggedIn" to="/profile">个人中心</router-link>

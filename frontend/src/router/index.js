@@ -4,6 +4,9 @@ import LoginView from '../views/LoginView.vue'
 import RegisterView from '../views/RegisterView.vue'
 import BrowseView from '../views/BrowseView.vue'
 import CapabilityDetailView from '../views/CapabilityDetailView.vue'
+import AgentEditView from '../views/AgentEditView.vue'
+import WorkflowsView from '../views/WorkflowsView.vue'
+import WorkflowEditorView from '../views/WorkflowEditorView.vue'
 import PublishView from '../views/PublishView.vue'
 import MyCapabilitiesView from '../views/MyCapabilitiesView.vue'
 import ProfileView from '../views/ProfileView.vue'
@@ -14,6 +17,9 @@ const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/', component: BrowseView, meta: { title: '能力浏览' } },
+    { path: '/agents/:name/edit', component: AgentEditView, meta: { title: '编辑 Agent', publisher: true } },
+    { path: '/workflows', component: WorkflowsView, meta: { title: '工作流' } },
+    { path: '/workflows/new', component: WorkflowEditorView, meta: { title: '工作流设计器', publisher: true } },
     { path: '/login', component: LoginView, meta: { title: '登录' } },
     { path: '/register', component: RegisterView, meta: { title: '注册' } },
     { path: '/capabilities/:id', component: CapabilityDetailView, props: true, meta: { title: '能力详情' } },

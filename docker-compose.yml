@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  market:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: market
+    ports:
+      - "8093:8093"
+    volumes:
+      - ./data:/app/backend/data
+    environment:
+      - PORT=8093
+      - JWT_SECRET=${JWT_SECRET}
+      - SEED_ADMIN_PASSWORD=${SEED_ADMIN_PASSWORD:-admin123}
+      - DATABASE_URL=${DATABASE_URL:-sqlite+aiosqlite:///./data/marketplace.db}
+      - ARTIFACT_STORAGE=${ARTIFACT_STORAGE:-local}
+      - ARTIFACT_DIR=${ARTIFACT_DIR:-./data/artifacts}
+      - LLM_BASE_URL=${LLM_BASE_URL:-}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-}
+      - AGENT_MAX_ITERATIONS=${AGENT_MAX_ITERATIONS:-10}
+    restart: unless-stopped

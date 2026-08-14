@@ -107,7 +107,7 @@ async def send_task(
     message: dict[str, Any],
     metadata: dict[str, Any] | None = None,
 ) -> A2ATaskModel:
-    """创建任务并同步执行（当前为模拟执行，结果结构与 A2A 一致）。"""
+    """创建任务并同步执行：LLM 已配置时真实执行（mode=llm），否则模拟（mode=simulated）。"""
     task_id = str(uuid.uuid4())
     task = A2ATaskModel(
         id=task_id,
@@ -133,17 +133,22 @@ async def send_task(
             "a2a_task",
             {"task_id": task_id, "input": input_text[:500], "client_task_id": client_task_id},
         )
+        from app.services.agent_runner import run_agent
+
+        result = await run_agent(db, user, agent, input_text or "（无文本内容）")
+        output_text = result.get("output") or ""
+        mode = result.get("mode", "simulated")
         output_text = (
-            f"任务已由 Agent「{agent.name}」v{agent.version} 处理完成。\n"
-            f"收到的任务内容：{input_text or '（无文本内容）'}\n"
-            f"[角色定义] {agent.description or agent.name}\n"
-            "[执行说明] 当前为模拟执行；接入真实执行引擎后，此处将返回实际结果。"
+            f"{output_text}\n\n[执行模式] {mode}"
+            if mode != "simulated"
+            else output_text
         )
         output_message = {
             "role": "agent",
             "parts": [{"type": "text", "text": output_text}],
         }
         task.state = "completed"
+        task.task_metadata = {**(task.task_metadata or {}), "mode": mode}
         task.output_message = output_message
         task.artifacts = [
             {

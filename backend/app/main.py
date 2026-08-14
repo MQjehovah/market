@@ -10,7 +10,17 @@ from app.config import get_settings
 from app.database import SessionLocal, init_db
 from app.a2a.router import router as a2a_router
 from app.a2a.router import well_known_router
-from app.routers import admin, auth, portal, publish, runtime
+from app.routers import (
+    admin,
+    agent_edit,
+    assemble,
+    auth,
+    bindings,
+    portal,
+    publish,
+    runtime,
+    workflows,
+)
 from app.seed import seed_if_empty
 
 
@@ -43,6 +53,10 @@ app.include_router(portal.router)
 app.include_router(publish.router)
 app.include_router(admin.router)
 app.include_router(runtime.router)
+app.include_router(assemble.router)
+app.include_router(workflows.router)
+app.include_router(bindings.router)
+app.include_router(agent_edit.router)
 app.include_router(a2a_router)
 app.include_router(well_known_router)
 

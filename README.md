@@ -209,3 +209,59 @@ python -m pytest tests -q
 - 存储层按 README 设计为 PostgreSQL(元数据) + MinIO(能力包)，代码通过 `DATABASE_URL` / `ARTIFACT_STORAGE` 配置切换；默认 SQLite/本地文件，零外部依赖开箱即用。
 - 能力包上传时按 README 3.x 各市场的发布包结构校验必需文件（如 tool 包必须含 `tool.json + schema.json + implementation/tool.py`）。
 - 前端所有列表/详情/操作均对接真实 API；中文能力名在运行时调用中自动做 URL 编码。
+
+## 能力层（Capability Layer）
+
+market 作为公司 AI 能力的统一能力层：agent 中的 agent / tool / skill / mcp 四类资产已打包提取到这里（agent 本地并行保留，便于平滑迁移）。消费者可通过以下接口同步目录或下载能力包，落地到本地运行，或走 `/api/runtime/*` 远程调用：
+
+- `GET /api/capabilities/sync` — 返回各能力的最新发布版本（含 `download_url` / `has_artifact`），供 Agent 等消费者拉取目录。
+- `GET /api/capabilities/{name}/download?version=` — 按名称（可选版本）下载能力包 zip，响应头带 `X-Capability-*`（名称/类型/版本/SHA-256），中文名称按 RFC 5987 百分号编码。
+
+提取脚本（在 `backend/` 目录执行）：
+
+```bash
+python scripts/seed_agent_capabilities.py --agent-root ../../agent --dry-run   # 预览打包计划
+python scripts/seed_agent_capabilities.py --agent-root ../../agent             # 发布到能力层
+python scripts/seed_agent_capabilities.py --agent-root ../../agent --types tool skill
+```
+
+脚本会把 agent 现有资产按市场包规范打包（tool 含 `schema.json`、agent 含 `PROMPT.md`/`TEAM.md`/`skills/`/`agents/`、mcp 含 `connection.json` 等），以 `published` 状态入库；MCP 包内的密钥自动脱敏为 `${VAR}` 占位符，避免凭据进入能力层。
+
+### Agent 编辑与版本
+
+Agent 在同一个编辑页完成提示词与绑定能力编辑，保存即生成新版本草稿：
+
+- `GET/PUT /api/agents/{name}/edit`：读取/保存编辑态（`PROMPT.md` + 工具/技能/MCP 依赖）；无草稿时保存自动创建 patch+1 新版本，有草稿则原地更新，提示词与依赖写回能力包（`dependencies.json`）。
+- 提交审核 / 发布走既有 publish 流程；发布后 `POST /api/runtime/agents/{name}/instances` 按该版本包内依赖动态组装运行时（工具含 schema、技能、MCP 最新或锁定版本）。
+- 前端：Agent 详情页「编辑 Agent」进入编辑页；编辑页可「保存为新版本草稿」「提交审核」「导出快照包」。
+- 旧绑定 API（`/api/agents/{name}/bindings`）保留用于运行时绑定覆盖（请求体 `binding` / `bindings`），UI 已并入 Agent 编辑页，不再有独立 tab。
+
+### Agent 真实执行
+
+- 配置 `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`（OpenAI 兼容网关，如 `https://ai.rosiwit.com/v1`）后，Agent 任务为**真实执行**：加载人设 PROMPT + 该版本绑定能力 → LLM 工具调用循环，工具走市场沙箱真实执行；未配置时降级为模拟（响应 `mode=simulated`）。
+- 入口：`POST /api/runtime/agents/{name}/tasks`（直接发任务）、A2A `tasks/send`、工作流 agent 节点、MCP 桥 `marketplace_run_agent`。
+- 执行响应包含 `mode`（llm / simulated）、`tool_calls` 统计与运行时组装清单；A2A 任务在 `metadata.mode` 标注执行模式。
+
+### 工作流编排
+
+- 第 5 类能力 `workflow`：包内 `workflow.json` 定义 `nodes`（引用 tool/agent/skill/mcp + 入参模板）与 `edges`（依赖边），支持 DAG 拓扑与环检测。
+- 执行：`POST /api/runtime/workflows/{name}/executions`（入参 `input`），节点间用 `${input.x}` / `${nodeId.key}` 传值；`GET /api/runtime/workflows/executions/{id}` 查询、`POST .../cancel` 取消。
+- 前端「工作流」页可创建（JSON 编辑器）与执行；MCP 桥新增 `marketplace_run_workflow` 工具，供任意 Agent 原生调用。
+
+## Docker 部署
+
+镜像为多阶段构建（前端 `vite build` + 后端 FastAPI 单镜像），基础镜像使用公司内网仓库 `public-docker-virtual.xzrobot.com`（Docker Hub 在办公网络不可达时仍可构建）：
+
+```bash
+# 服务器上（项目目录 ~/market）
+cp .env.example .env          # 至少配置 JWT_SECRET
+docker compose build market
+docker compose up -d
+```
+
+运行约定（与 rag / ai-gateway 一致）：
+
+- 端口 `8093`（`8000` 被 rag 占用），数据卷挂载 `./data:/app/backend/data`，`marketplace.db` 与能力包工件持久化在宿主机。
+- 环境变量：`JWT_SECRET`（必填）、`SEED_ADMIN_PASSWORD`、`DATABASE_URL`、`ARTIFACT_STORAGE` / `ARTIFACT_DIR`，默认 SQLite + 本地工件存储开箱即用。
+- 容器 `restart: unless-stopped`，升级时 `docker compose build market && docker compose up -d` 即可。
+- 注意 `passlib` 与 `bcrypt>=4.1` 不兼容，`requirements.txt` 已锁定 `bcrypt==4.0.1`。

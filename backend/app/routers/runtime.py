@@ -1,12 +1,16 @@
-"""执行引擎：Agent 实例化 / 工具调用 / 技能激活 / MCP 安装与发现。"""
+"""执行引擎：Agent 实例化 / 任务执行 / 工具调用 / 技能激活 / MCP 安装与发现。"""
 
+import uuid
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, status
 
 from app.auth import CurrentUser, DbSession
 from app.schemas import (
     CapabilityOut,
+    RuntimeInstantiateRequest,
+    RuntimeTaskOut,
+    RuntimeTaskRequest,
     RuntimeActivateRequest,
     RuntimeInstallRequest,
     RuntimeInvokeRequest,
@@ -35,9 +39,28 @@ def _result(cap, action: str, message: str, result: dict[str, Any]) -> RuntimeRe
 
 
 @router.post("/agents/{name}/instances", response_model=RuntimeResult)
-async def instantiate(name: str, db: DbSession, user: CurrentUser, task: str = "执行任务"):
+async def instantiate(
+    name: str,
+    db: DbSession,
+    user: CurrentUser,
+    task: str = "执行任务",
+    data: RuntimeInstantiateRequest | None = None,
+):
     cap = await resolve_capability(db, user, name)
-    result = await instantiate_agent(db, user, cap, task)
+    if data is None:
+        result = await instantiate_agent(db, user, cap, task)
+    else:
+        from app.services.bindings import resolve_binding
+
+        binding = await resolve_binding(db, cap, data.binding) if data.binding else None
+        result = await instantiate_agent(
+            db,
+            user,
+            cap,
+            data.task or task,
+            binding=binding,
+            adhoc=[d.model_dump() for d in data.bindings] or None,
+        )
     await db.commit()
     await db.refresh(cap)
     return _result(cap, "instantiate", f"Agent「{cap.name}」实例化成功", result)
@@ -84,3 +107,23 @@ async def discover(db: DbSession, user: CurrentUser):
 @router.get("/health")
 async def health():
     return {"status": "ok", "service": "marketplace-core"}
+
+
+@router.post("/agents/{name}/tasks", response_model=RuntimeTaskOut)
+async def run_agent_task(name: str, data: RuntimeTaskRequest, db: DbSession, user: CurrentUser):
+    """直接向 Agent 发送任务：LLM 已配置时真实执行（工具沙箱 + 工具调用循环），否则模拟。"""
+    from app.services.agent_runner import run_agent
+
+    cap = await resolve_capability(db, user, name)
+    if cap.type != "agent":
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{name} 不是 Agent 能力")
+    result = await run_agent(db, user, cap, data.task)
+    return RuntimeTaskOut(
+        task_id=str(uuid.uuid4()),
+        agent=cap.name,
+        version=cap.version,
+        mode=result.get("mode", "simulated"),
+        output=result.get("output", ""),
+        tool_calls=int(result.get("tool_calls", 0)),
+        runtime=result.get("runtime", {}),
+    )

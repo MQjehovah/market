@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     tool_max_output_bytes: int = 2 * 1024 * 1024
     tool_max_extract_bytes: int = 256 * 1024 * 1024
 
+    # Agent 真实执行（OpenAI 兼容网关）
+    llm_base_url: str = ""
+    llm_api_key: str = ""
+    llm_model: str = ""
+    agent_max_iterations: int = 10
+
     @property
     def base_dir(self) -> Path:
         """后端项目根目录（backend/）。"""

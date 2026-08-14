@@ -140,7 +140,11 @@ async def upload_artifact(cap_id: str, db: DbSession, user: CurrentUser, file: U
 @router.get("/capabilities/{cap_id}/artifact/download")
 async def download_artifact(cap_id: str, db: DbSession, user: CurrentUser):
     _require_publisher(user)
-    cap = await db.get(Capability, cap_id)
+    cap = await db.scalar(
+        select(Capability)
+        .options(selectinload(Capability.artifacts))
+        .where(Capability.id == cap_id)
+    )
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
     _require_owner(cap, user)

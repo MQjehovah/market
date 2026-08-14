@@ -12,6 +12,7 @@ REQUIRED_FILES: dict[str, list[str]] = {
     "tool": ["tool.json", "schema.json", "implementation/tool.py"],
     "skill": ["skill.json", "SKILL.md"],
     "mcp": ["mcp.json", "connection.json", "tools.json", "security.json"],
+    "workflow": ["workflow.json"],
 }
 
 OPTIONAL_FILES: dict[str, list[str]] = {
@@ -19,6 +20,7 @@ OPTIONAL_FILES: dict[str, list[str]] = {
     "tool": ["security.json", "tests/", "examples/", "docs/", "implementation/__init__.py"],
     "skill": ["templates/", "assets/", "dependencies.json", "examples/"],
     "mcp": ["docker-compose.yml", "docs/"],
+    "workflow": ["README.md", "examples/"],
 }
 
 
@@ -55,12 +57,25 @@ def validate_package(capability_type: str, content: bytes) -> dict[str, Any]:
         "tool": "tool.json",
         "skill": "skill.json",
         "mcp": "mcp.json",
+        "workflow": "workflow.json",
     }[capability_type]
     meta = _read_json(zf, meta_file)
     if "name" not in meta:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{meta_file} 缺少 name 字段")
 
     details: dict[str, Any] = {"meta": meta}
+    if capability_type == "workflow":
+        if not isinstance(meta.get("nodes"), list) or not meta["nodes"]:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "workflow.json 必须包含非空 nodes 列表",
+            )
+        for node in meta["nodes"]:
+            if not isinstance(node, dict) or not node.get("id") or not node.get("type"):
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    "workflow.json 每个节点必须包含 id 与 type",
+                )
     if capability_type == "mcp":
         conn = _read_json(zf, "connection.json")
         details["connection"] = conn

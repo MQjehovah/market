@@ -7,6 +7,8 @@ pydantic>=2.7
 pydantic-settings>=2.3
 PyJWT>=2.8
 passlib[bcrypt]>=1.7
+# passlib 1.7.4 与 bcrypt>=4.1 不兼容（bcrypt.__about__ 被移除），锁定版本
+bcrypt==4.0.1
 python-multipart>=0.0.9
 minio>=7.2
 httpx>=0.27

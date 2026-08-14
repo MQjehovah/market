@@ -18,6 +18,7 @@ const runtimeParams = ref('{"city": "北京"}')
 const task = ref('生成上月销售报表')
 const context = ref('')
 const mcpConfig = ref('{"transport": "stdio"}')
+const workflowInput = ref('{"pattern": "**/*.py", "path": ""}')
 const newVersion = ref('')
 const uploading = ref(false)
 const a2aInput = ref('生成上月销售报表')
@@ -94,13 +95,17 @@ async function runtimeAction() {
     let path = ''
     let payload = {}
     if (cap.value.type === 'agent') {
-      path = `/runtime/agents/${name}/instances?task=${encodeURIComponent(task.value)}`
+      path = `/runtime/agents/${name}/tasks`
+      payload = { task: task.value }
     } else if (cap.value.type === 'tool') {
       path = `/runtime/tools/${name}/invoke`
       payload = { params: JSON.parse(runtimeParams.value || '{}') }
     } else if (cap.value.type === 'skill') {
       path = `/runtime/skills/${name}/activate`
       payload = { context: context.value }
+    } else if (cap.value.type === 'workflow') {
+      path = `/runtime/workflows/${name}/executions`
+      payload = { input: JSON.parse(workflowInput.value || '{}') }
     } else {
       path = `/runtime/mcp/${name}/install`
       payload = { config: JSON.parse(mcpConfig.value || '{}') }
@@ -175,11 +180,11 @@ async function subscribe() {
 }
 
 const actionLabel = computed(() => ({
-  agent: '实例化 Agent',
+  agent: '执行任务',
   tool: '调用工具',
   skill: '激活技能',
   mcp: '安装 MCP'
-}[cap.value?.type]))
+}[cap.value?.type] || (cap.value?.type === 'workflow' ? '执行工作流' : '执行')))
 
 onMounted(load)
 </script>
@@ -218,6 +223,7 @@ onMounted(load)
 
       <div class="detail-actions mt-24">
         <button v-if="authState.token && cap.status === 'published'" class="btn btn-primary" @click="runtimeAction">{{ actionLabel }}</button>
+        <router-link v-if="cap.type === 'agent' && (isAdmin || isPublisher)" :to="`/agents/${encodeURIComponent(cap.name)}/edit`" class="btn">编辑 Agent</router-link>
         <button v-if="authState.token && cap.status === 'published'" class="btn" @click="subscribe">订阅更新</button>
         <button v-if="canSubmit" class="btn btn-success" @click="doAction(`/publish/capabilities/${props.id}/submit`)">提交审核</button>
         <button v-if="isAdmin && cap.status === 'published'" class="btn btn-danger" @click="doAction(`/admin/capabilities/${props.id}/deprecate`)">弃用</button>
@@ -235,8 +241,11 @@ onMounted(load)
         <template v-else-if="cap.type === 'skill'">
           <div class="field"><label>任务上下文</label><input v-model="context" class="input" placeholder="如：写测试" /></div>
         </template>
-        <template v-else>
+        <template v-else-if="cap.type === 'mcp'">
           <div class="field"><label>连接配置 JSON</label><textarea v-model="mcpConfig" class="textarea" rows="4"></textarea></div>
+        </template>
+        <template v-else-if="cap.type === 'workflow'">
+          <div class="field"><label>工作流入参 JSON</label><textarea v-model="workflowInput" class="textarea" rows="4"></textarea></div>
         </template>
         <button class="btn btn-primary" @click="runtimeAction">{{ actionLabel }}</button>
         <div v-if="cap.type === 'tool' && lastInvokeResult" class="invoke-result mt-16">
@@ -308,6 +317,19 @@ onMounted(load)
       </div>
     </div>
 
+        <div v-if="cap.type === 'agent' && lastInvokeResult" class="invoke-result mt-16">
+          <h4>执行结果（mode: {{ lastInvokeResult.mode }}）</h4>
+          <div class="alert" :class="lastInvokeResult.mode === 'llm' ? 'alert-success' : 'alert-warning'">{{ lastInvokeResult.output }}</div>
+          <pre class="json-pre">{{ JSON.stringify({ tool_calls: lastInvokeResult.tool_calls, runtime: lastInvokeResult.runtime }, null, 2) }}</pre>
+        </div>
+        <div v-if="cap.type === 'workflow' && lastInvokeResult" class="invoke-result mt-16">
+          <h4>执行结果</h4>
+          <div class="alert" :class="lastInvokeResult.state === 'succeeded' ? 'alert-success' : 'alert-error'">
+            state: {{ lastInvokeResult.state }}{{ lastInvokeResult.error ? ' · ' + lastInvokeResult.error : '' }}
+          </div>
+          <pre class="json-pre">{{ JSON.stringify({ node_states: lastInvokeResult.node_states, outputs: lastInvokeResult.outputs }, null, 2) }}</pre>
+        </div>
+
     <div class="grid mt-24" style="grid-template-columns: 1.4fr 1fr">
       <div class="panel">
         <h3>版本历史</h3>
@@ -346,8 +368,8 @@ onMounted(load)
       <div>
         <div class="panel">
           <h3>能力包</h3>
-          <div v-if="cap.artifacts.length === 0" class="muted">尚未上传能力包</div>
-          <div v-for="a in cap.artifacts" :key="a.id" class="artifact-item">
+          <div v-if="(cap.artifacts || []).length === 0" class="muted">尚未上传能力包</div>
+          <div v-for="a in (cap.artifacts || [])" :key="a.id" class="artifact-item">
             <div>📦 {{ a.filename }}</div>
             <div class="muted" style="font-size: 12px">{{ formatSize(a.size_bytes) }} · {{ a.checksum.slice(0, 12) }}…</div>
           </div>

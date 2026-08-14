@@ -1,6 +1,9 @@
 """门户：浏览 / 搜索 / 详情 / 评分 / 订阅 / 通知 / 版本列表。"""
 
+from urllib.parse import quote
+
 from fastapi import APIRouter, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import String, and_, case, cast, func, or_, select
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -17,6 +20,7 @@ from app.schemas import (
 )
 from app.services.capabilities import get_visible_capabilities, parse_semver, record_rating
 from app.services.capabilities import to_capability_out
+from app.storage import get_storage
 
 router = APIRouter(prefix="/api", tags=["portal"])
 
@@ -109,6 +113,72 @@ async def browse_capabilities(
         page=page,
         page_size=page_size,
     )
+
+
+@router.get("/capabilities/sync", response_model=list[dict])
+async def sync_capabilities(db: DbSession, user: OptionalUser):
+    """同步接口：返回各能力的最新发布版本/商业包，供 Agent 等消费者拉取目录。"""
+    visible = await get_visible_capabilities(db, user)
+    published = [c for c in visible if c.status in ("published", "deprecated")]
+    latest: dict[tuple[str, str], Capability] = {}
+    for cap in published:
+        key = (cap.name, cap.type)
+        cur = latest.get(key)
+        if cur is None or parse_semver(cap.version) > parse_semver(cur.version):
+            latest[key] = cap
+
+    items = []
+    for cap in sorted(latest.values(), key=lambda c: (c.type, c.name)):
+        items.append(
+            {
+                "name": cap.name,
+                "type": cap.type,
+                "version": cap.version,
+                "status": cap.status,
+                "category": cap.category or "",
+                "description": cap.description or "",
+                "tags": cap.tags or [],
+                "usage_count": cap.usage_count,
+                "has_artifact": bool(cap.artifacts),
+                "download_url": (
+                    f"/api/capabilities/{quote(cap.name, safe='')}/download"
+                    f"?version={cap.version}"
+                ),
+            }
+        )
+    return items
+
+
+@router.get("/capabilities/{name}/download")
+async def download_capability(name: str, db: DbSession, user: OptionalUser, version: str = ""):
+    """下载已发布能力包（去重 zip）。消费者按名称（可选版本）获取。"""
+    visible = await get_visible_capabilities(db, user)
+    matches = [c for c in visible if c.name == name and c.status in ("published", "deprecated")]
+    if not matches:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"能力 {name} 不存在或未发布")
+    cap = None
+    if version:
+        cap = next((c for c in matches if c.version == version), None)
+        if cap is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"能力 {name} 不存在版本 {version}")
+    else:
+        cap = max(matches, key=lambda c: parse_semver(c.version))
+    if not cap.artifacts:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"能力 {name} v{cap.version} 未上传能力包")
+    artifact = cap.artifacts[-1]
+    content = get_storage().open(artifact.uri)
+    headers = {
+        # 中文文件名/能力名在 HTTP 头中需 percent-encode（RFC 5987）
+        "Content-Disposition": (
+            f'attachment; filename="package.zip"; '
+            f"filename*=UTF-8''{quote(artifact.filename, safe='')}"
+        ),
+        "X-Capability-Name": quote(cap.name, safe=""),
+        "X-Capability-Type": cap.type,
+        "X-Capability-Version": cap.version,
+        "X-Capability-Checksum": artifact.checksum,
+    }
+    return StreamingResponse(content, media_type="application/zip", headers=headers)
 
 
 @router.get("/meta/categories", response_model=dict[str, list[str]])
