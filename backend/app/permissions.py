@@ -3,7 +3,7 @@
 操作             Admin   Publisher   User
 浏览能力          ✓        ✓          ✓
 搜索能力          ✓        ✓          ✓
-使用能力          ✓        ✓          ✓
+使用能力（调用/执行） ✓      ✗          ✗    （外部调用需管理员授权，见 runtime_access_roles）
 发布能力          ✓        ✓          ✗
 审核能力          ✓        ✗          ✗
 下架能力          ✓        ✗          ✗
@@ -15,9 +15,12 @@ from functools import wraps
 from typing import Callable
 
 from fastapi import HTTPException, status
+from sqlalchemy import and_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import CurrentUser
-from app.models import Capability, User
+from app.config import get_settings
+from app.models import Capability, User, UserCapability
 
 
 def require_role(*roles: str) -> Callable:
@@ -60,3 +63,47 @@ def can_use(capability: Capability, user: User | None) -> bool:
     if capability.status not in ("published", "deprecated", "reviewing"):
         return False
     return can_view(capability, user)
+
+
+async def require_runtime_access(user: User, cap: Capability, db: AsyncSession) -> None:
+    """执行类接口的授权门禁。
+
+    满足任一条件即可调用：
+    1. 角色在 runtime_access_roles 配置中（默认 admin）；
+    2. 能力作者本人（自己创建的能力）；
+    3. 已把该能力加入「我的能力」的调用方。
+    """
+    roles = {
+        r.strip()
+        for r in get_settings().runtime_access_roles.split(",")
+        if r.strip()
+    }
+    if user.role in roles or cap.author_id == user.id:
+        return
+    policy = cap.access_policy or "open"
+    if policy == "admin_only":
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "该能力仅限管理员调用（access_policy=admin_only）",
+        )
+    joined = await db.scalar(
+        select(UserCapability.id).where(
+            and_(
+                UserCapability.user_id == user.id,
+                UserCapability.capability_id == cap.id,
+            )
+        )
+    )
+    if joined is not None:
+        if policy == "restricted":
+            allowed = [u.strip() for u in (cap.allowed_users or []) if u.strip()]
+            if user.username not in allowed:
+                raise HTTPException(
+                    status.HTTP_403_FORBIDDEN,
+                    f"该能力仅限白名单用户调用：{', '.join(allowed) or '（未配置）'}",
+                )
+        return
+    raise HTTPException(
+        status.HTTP_403_FORBIDDEN,
+        "没有调用该能力的权限：仅管理员、能力作者或已加入「我的能力」的调用方可用",
+    )

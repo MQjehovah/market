@@ -5,9 +5,8 @@ import RegisterView from '../views/RegisterView.vue'
 import BrowseView from '../views/BrowseView.vue'
 import CapabilityDetailView from '../views/CapabilityDetailView.vue'
 import AgentEditView from '../views/AgentEditView.vue'
-import WorkflowsView from '../views/WorkflowsView.vue'
+import SkillEditView from '../views/SkillEditView.vue'
 import WorkflowEditorView from '../views/WorkflowEditorView.vue'
-import PublishView from '../views/PublishView.vue'
 import MyCapabilitiesView from '../views/MyCapabilitiesView.vue'
 import ProfileView from '../views/ProfileView.vue'
 import AdminView from '../views/AdminView.vue'
@@ -16,14 +15,14 @@ import { authState } from '../stores/auth'
 const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: '/', component: BrowseView, meta: { title: '能力浏览' } },
+    { path: '/', component: BrowseView, meta: { title: '能力市场' } },
     { path: '/agents/:name/edit', component: AgentEditView, meta: { title: '编辑 Agent', publisher: true } },
-    { path: '/workflows', component: WorkflowsView, meta: { title: '工作流' } },
-    { path: '/workflows/new', component: WorkflowEditorView, meta: { title: '工作流设计器', publisher: true } },
+    { path: '/skills/:name/edit', component: SkillEditView, meta: { title: '编辑技能', auth: true } },
+    { path: '/workflows/new', component: WorkflowEditorView, meta: { title: '新建工作流', auth: true, full: true } },
+    { path: '/workflows/:id/edit', component: WorkflowEditorView, props: true, meta: { title: '工作流编辑器', auth: true, full: true } },
     { path: '/login', component: LoginView, meta: { title: '登录' } },
     { path: '/register', component: RegisterView, meta: { title: '注册' } },
     { path: '/capabilities/:id', component: CapabilityDetailView, props: true, meta: { title: '能力详情' } },
-    { path: '/publish', component: PublishView, meta: { title: '能力发布', auth: true, publisher: true } },
     { path: '/my', component: MyCapabilitiesView, meta: { title: '我的能力', auth: true } },
     { path: '/profile', component: ProfileView, meta: { title: '个人中心', auth: true } },
     { path: '/admin', component: AdminView, meta: { title: '管理后台', auth: true, admin: true } }
@@ -40,7 +39,7 @@ router.beforeEach((to) => {
   if (to.meta.admin && authState.user && authState.user.role !== 'admin') {
     return '/'
   }
-  document.title = `${to.meta.title || '能力市场'} · AI 能力公共市场`
+  document.title = `${to.meta.title || '能力层'} · AI 能力公共市场`
 })
 
 export default router

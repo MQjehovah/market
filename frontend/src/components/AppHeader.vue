@@ -10,7 +10,6 @@ const showNotify = ref(false)
 
 const isLoggedIn = computed(() => Boolean(authState.token))
 const isAdmin = computed(() => authState.user?.role === 'admin')
-const canPublish = computed(() => ['admin', 'publisher'].includes(authState.user?.role))
 const unreadCount = computed(() => notifications.value.filter((n) => !n.read).length)
 
 async function loadNotifications() {
@@ -44,12 +43,10 @@ onMounted(loadNotifications)
       </router-link>
 
       <nav class="nav">
-        <router-link to="/">能力浏览</router-link>
-        <router-link to="/workflows">工作流</router-link>
-        <router-link v-if="canPublish" to="/publish">能力发布</router-link>
+        <router-link to="/">能力市场</router-link>
         <router-link v-if="isLoggedIn" to="/my">我的能力</router-link>
-        <router-link v-if="isLoggedIn" to="/profile">个人中心</router-link>
         <router-link v-if="isAdmin" to="/admin">管理后台</router-link>
+        <router-link v-if="isLoggedIn" to="/profile">个人中心</router-link>
       </nav>
 
       <div class="header-right">
@@ -73,7 +70,7 @@ onMounted(loadNotifications)
         <template v-if="isLoggedIn">
           <router-link to="/profile" class="user-chip">
             {{ authState.user.display_name || authState.user.username }}
-            <span class="role-tag">{{ authState.user.role }}</span>
+            <span class="role-tag">{{ authState.user.role === 'admin' ? 'admin' : 'user' }}</span>
           </router-link>
           <button class="btn btn-sm" @click="logout">退出</button>
         </template>

@@ -2,11 +2,17 @@
 
 基于 [README](README)（设计文档）实现的公司内部 AI 能力公共市场：
 
-- **四大市场**：Agent 市场、工具市场、技能市场、MCP 市场
+- **四类能力**：Agent、工具、技能、MCP（另支持第 5 类 workflow 编排）
+- **页面结构**：能力市场（浏览+加入）、我的能力（创建/加入/调用调试）、管理后台（审核/下架/统计/用户）、个人中心；工作流作为能力类型，不单开页面
 - **统一门户**：能力浏览 / 搜索 / 详情 / 评分评论 / 订阅通知
-- **发布-审核-上架流程**：草稿 → 提交审核 → 通过/驳回/打回 → 正式版 → 弃用 → 归档
+- **发布-审核-上架流程**：草稿 → 提交审核 → 通过/驳回/打回 → 正式版 → 弃用 → 归档；
+  同一逻辑能力仅保留一个正式版，新版本发布时旧正式版自动转为「已弃用」并通知作者
 - **版本管理**：语义化版本 `MAJOR.MINOR.PATCH`，同一能力多版本并存
-- **权限模型**：Admin / Publisher / User 三角色，遵循 README 4.4 权限矩阵
+- **权限模型**：Admin / Publisher / User 三角色，遵循 README 4.4 权限矩阵；
+  能力调用/执行（runtime、A2A 委派、工作流执行）授权给：配置角色（默认 admin）、能力作者、
+  已加入「我的能力」的调用方；可通过 `RUNTIME_ACCESS_ROLES` 扩展角色；任何登录用户都可发布/编辑/订阅能力
+- **调用权限（access_policy）**：每个能力可设置 `open`（所有登录用户可加入并调用）、
+  `admin_only`（仅管理员/作者）、`restricted`（仅白名单用户名），作者或管理员在详情页设置，运行时按此拦截
 - **执行引擎**：Agent 实例化、工具调用、技能激活、MCP 安装与动态发现，并记录用量
 - **A2A 互调协议**：符合 A2A v1.0（JSON-RPC 2.0）——Agent Card 发现、tasks/send、tasks/get、tasks/cancel
 - **工具真实执行沙箱**：上传的实现包在隔离子进程中真实执行（AST 安全审计 + 超时/输出限制）
@@ -31,7 +37,7 @@ market/
 │   ├── tests/               # pytest 测试（11 个核心流程用例）
 │   └── requirements.txt
 ├── frontend/                # Vue 3 前端（独立项目，Vite）
-│   ├── src/views/           # 浏览/详情/发布/我的/个人中心/管理后台
+│   ├── src/views/           # 能力市场/详情/我的/个人中心/管理后台
 │   ├── src/components/
 │   └── vite.config.js       # 开发代理 /api → localhost:8000
 └── start-dev.bat / .ps1     # 一键启动
@@ -75,13 +81,13 @@ npm run dev
 | `marketplace_activate_skill` | 激活技能（返回执行指引） |
 | `marketplace_discover_mcp` | 动态发现 MCP 能力 |
 
-配置：
+配置（调用类接口需要管理员授权令牌，示例使用 `admin`）：
 
 ```bash
-# 1. 登录拿 token
+# 1. 登录拿 token（runtime 调用仅管理员可用）
 curl -X POST http://127.0.0.1:8000/api/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"username":"publisher","password":"publisher123"}'
+  -d '{"username":"admin","password":"admin123"}'
 
 # 2. 给 Claude Code 添加市场
 claude mcp add marketplace \
@@ -137,7 +143,7 @@ r = httpx.post(f"{API}/api/runtime/skills/{quote('TDD 开发工作流')}/activat
 | `POST /api/auth/login` `POST /api/auth/register` | 登录 / 注册 |
 | `GET /api/capabilities` | 浏览与搜索（类型/分类/状态/排序，分页返回 `{items,total,page,page_size}`） |
 | `GET /api/capabilities/{id}` | 能力详情与版本列表 |
-| `POST /api/publish/capabilities` | 发布者创建草稿 |
+| `POST /api/publish/capabilities` | 登录用户创建草稿（审核由管理员把关） |
 | `POST /api/publish/capabilities/{id}/submit` | 提交审核 |
 | `POST /api/admin/capabilities/{id}/review` | 管理员审核（通过/驳回/打回） |
 | `POST /api/runtime/agents/{name}/instances` | 实例化 Agent |
@@ -158,7 +164,7 @@ cd backend
 python -m pytest tests -q
 ```
 
-覆盖：认证、发布-审核-上架全流程、权限矩阵（普通用户禁止发布/审核）、搜索过滤、执行引擎用量记录、评分订阅、版本冲突、私有可见性。
+覆盖：认证、发布-审核-上架全流程、权限矩阵（登录用户可创建草稿、审核仅管理员）、搜索过滤、执行引擎用量记录、评分订阅、版本冲突、私有可见性。
 
 ## A2A（Agent-to-Agent）互调
 
@@ -196,6 +202,14 @@ python -m pytest tests -q
 
 未上传实现包时降级为模拟执行（`execution: "simulated"`）。生产环境如需更强隔离，可在此基础上换成容器/WASM 沙箱。
 
+## 调用授权
+
+- 能力详情页仅展示介绍信息（参数 Schema / 版本 / 评分 / 订阅），不提供直接调用；
+- 「能力市场」可把能力加入「我的能力」；「我的能力」页支持对自己创建或已加入的能力直接调用 / 调试，无需管理员；
+- 管理员在「管理后台 → 调试 / 试用」可调试平台内全部能力；
+- 外部调用（`/api/runtime/*`、A2A `tasks/send`、工作流执行）必须携带授权令牌，调用方需为：
+  配置角色（`RUNTIME_ACCESS_ROLES`，默认 `admin`）、能力作者，或已加入「我的能力」的用户。
+
 ## 其他工程化优化
 
 - **SQL 下推 + 分页**：浏览/搜索/分类全部在数据库层过滤、排序、分页，并加了 `(type, status, visibility)` 复合索引，能力量级大也不会退化。
@@ -212,12 +226,43 @@ python -m pytest tests -q
 
 ## 能力层（Capability Layer）
 
-market 作为公司 AI 能力的统一能力层：agent 中的 agent / tool / skill / mcp 四类资产已打包提取到这里（agent 本地并行保留，便于平滑迁移）。消费者可通过以下接口同步目录或下载能力包，落地到本地运行，或走 `/api/runtime/*` 远程调用：
+market 是公司 AI 能力的**独立能力层**：本身维护大量的 tool / mcp / skill / workflow 基础能力，
+也可定义各种 agent（人设 + 依赖绑定），并通过「Agent + 工具 + 技能」封装成完整功能对外提供服务。
+能力层不依赖 agent 仓库代码，可独立部署；agent 仓库只是能力层的消费者之一。
+
+### 四种消费模式
+
+1. **下载到本地组装成本地 Agent**：消费者把 Agent 及其工具/技能/MCP 依赖下载到本地，
+   组装进本地 agent 配置目录（`config/agents/<name>/`），用本地引擎直接运行。
+2. **直接在云端运行**：`POST /api/runtime/*` 在能力层云端执行（工具走沙箱真实执行、记录用量）。
+3. **A2A 协议互调**：本地 Agent 与云端 Agent 通过 A2A JSON-RPC 双向委派任务。
+4. **服务封装**：Agent + 工具 + 技能 封装为完整服务，可下载为自包含 Agent 包，
+   也可经云端 runtime / A2A 端点以服务方式被调用。
+
+### 消费者 CLI（`market/consumer/`）
+
+`cap` 是独立于市场后端的能力层消费者（仅依赖 httpx）：
+
+```bash
+cd market/consumer && pip install -r requirements.txt
+
+python -m cap sync                                  # 同步能力目录
+python -m cap pull 文件哈希计算 -o tool.zip          # 下载单个能力包
+python -m cap install 数字中台                        # 组装成本地 Agent
+python -m cap run 数字中台 --task "生成销售报表" --mode local   # 本地引擎
+python -m cap run 数字中台 --task "生成销售报表" --mode cloud   # 云端 runtime
+python -m cap run 数字中台 --task "生成销售报表" --mode a2a     # A2A 委派云端 Agent
+python -m cap serve --port 8765                      # 本地 A2A 服务（云端可反向调用）
+```
+
+详见 [consumer/README.md](consumer/README.md)。
+
+### 能力层接口
 
 - `GET /api/capabilities/sync` — 返回各能力的最新发布版本（含 `download_url` / `has_artifact`），供 Agent 等消费者拉取目录。
 - `GET /api/capabilities/{name}/download?version=` — 按名称（可选版本）下载能力包 zip，响应头带 `X-Capability-*`（名称/类型/版本/SHA-256），中文名称按 RFC 5987 百分号编码。
 
-提取脚本（在 `backend/` 目录执行）：
+把 agent 现有资产提取到能力层的脚本（在 `backend/` 目录执行）：
 
 ```bash
 python scripts/seed_agent_capabilities.py --agent-root ../../agent --dry-run   # 预览打包计划
@@ -226,6 +271,13 @@ python scripts/seed_agent_capabilities.py --agent-root ../../agent --types tool 
 ```
 
 脚本会把 agent 现有资产按市场包规范打包（tool 含 `schema.json`、agent 含 `PROMPT.md`/`TEAM.md`/`skills/`/`agents/`、mcp 含 `connection.json` 等），以 `published` 状态入库；MCP 包内的密钥自动脱敏为 `${VAR}` 占位符，避免凭据进入能力层。
+
+### A2A 双向互调
+
+- 云端 Agent Card：`/.well-known/agent-card.json`（市场元卡片）与 `/api/a2a/agents`（全部 Agent Card）。
+  Card 的 `url` 即 JSON-RPC 任务端点：`POST /api/a2a/agents/{id}/a2a`（`tasks/send` / `tasks/get` / `tasks/cancel`）。
+- 本地 Agent 通过 `cap serve` 暴露同样的标准端点；两边可互相发现、互相委派。
+- 每次互调计入能力用量（`action=a2a_task`），执行模式（`llm` / `simulated` / `local`）写入任务 `metadata.mode`。
 
 ### Agent 编辑与版本
 
@@ -239,6 +291,9 @@ Agent 在同一个编辑页完成提示词与绑定能力编辑，保存即生�
 ### Agent 真实执行
 
 - 配置 `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`（OpenAI 兼容网关，如 `https://ai.rosiwit.com/v1`）后，Agent 任务为**真实执行**：加载人设 PROMPT + 该版本绑定能力 → LLM 工具调用循环，工具走市场沙箱真实执行；未配置时降级为模拟（响应 `mode=simulated`）。
+- 绑定的**技能**会注册为 `skill` 工具：LLM 先激活技能拿到 SKILL.md 执行指引，再按指引执行；
+  绑定的 **MCP** 会在云端容器内启动其服务端（从能力包提取实现 + 解析 `${VAR}` 环境变量），
+  工具以 `mcp_<服务>_<工具>` 函数形式注册，可被 LLM 直接调用；执行响应含 `runtime.mcp_tools`。
 - 入口：`POST /api/runtime/agents/{name}/tasks`（直接发任务）、A2A `tasks/send`、工作流 agent 节点、MCP 桥 `marketplace_run_agent`。
 - 执行响应包含 `mode`（llm / simulated）、`tool_calls` 统计与运行时组装清单；A2A 任务在 `metadata.mode` 标注执行模式。
 
@@ -246,7 +301,26 @@ Agent 在同一个编辑页完成提示词与绑定能力编辑，保存即生�
 
 - 第 5 类能力 `workflow`：包内 `workflow.json` 定义 `nodes`（引用 tool/agent/skill/mcp + 入参模板）与 `edges`（依赖边），支持 DAG 拓扑与环检测。
 - 执行：`POST /api/runtime/workflows/{name}/executions`（入参 `input`），节点间用 `${input.x}` / `${nodeId.key}` 传值；`GET /api/runtime/workflows/executions/{id}` 查询、`POST .../cancel` 取消。
-- 前端「工作流」页可创建（JSON 编辑器）与执行；MCP 桥新增 `marketplace_run_workflow` 工具，供任意 Agent 原生调用。
+- 工作流作为能力类型展示与调用（能力市场 / 我的能力 / 管理后台调试）；新建能力弹窗中选择
+  workflow 类型并填写 `workflow.json`；MCP 桥新增 `marketplace_run_workflow` 工具，供任意 Agent 原生调用。
+
+### MCP HTTP 中转网关
+
+参考 Dify 的接入方式，平台提供统一的 MCP HTTP 中转网关（`/api/mcp-gateway`）：
+
+- **入站（外部客户端 → 平台）**：管理后台「MCP 网关」注册服务（stdio / HTTP / SSE），平台自动暴露两个端点：
+  - Streamable HTTP：`GET|POST /api/mcp-gateway/{name}/stream`
+  - SSE：`GET /api/mcp-gateway/{name}/sse` + `POST /api/mcp-gateway/{name}/messages`
+  - 外部客户端（Dify、Claude Desktop、其他 Agent）带令牌（`X-Gateway-Token` 或 `Authorization: Bearer`）即可像连接普通 MCP server 一样发现并调用工具；stdio 服务自动转成 HTTP（mcp-proxy 模式），不再限制语言/运行时。
+- **出站（平台 → 上游）**：MCP 能力包的 `connection.json` 支持 `transport: http|sse|gateway`：
+  ```json
+  { "transport": "http", "url": "https://mcp.example.com/mcp",
+    "headers": { "Authorization": "Bearer ${MCP_TOKEN}" } }
+  { "transport": "gateway", "server": "demo-mcp" }
+  ```
+  Agent 运行时与工作流 MCP 节点通过网关连接任意语言的远程 MCP server（占位符 `${ENV}` / `${ENV:default}` 从环境变量解析）。
+- 管理接口：`/api/admin/mcp-gateway/servers`（仅管理员，CRUD + 连接测试）；管理后台 →「MCP 网关」可视化操作。
+- 演示服务：`backend/scripts/demo_mcp_server.py`（FastMCP stdio），可在管理后台注册 `python /app/backend/scripts/demo_mcp_server.py` 立即联调。
 
 ## Docker 部署
 

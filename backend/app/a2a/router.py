@@ -25,6 +25,7 @@ from app.a2a.service import (
 )
 from app.auth import CurrentUser, DbSession, OptionalUser
 from app.models import Capability
+from app.permissions import require_runtime_access
 
 router = APIRouter(prefix="/api/a2a", tags=["a2a"])
 well_known_router = APIRouter(tags=["a2a"])
@@ -57,6 +58,12 @@ async def agent_card_short(request: Request, cap_id: str, db: DbSession, user: O
     return await agent_card(request, cap_id, db, user)
 
 
+@router.get("/agents/{cap_id}/a2a", response_model=AgentCard)
+async def agent_card_at_endpoint(request: Request, cap_id: str, db: DbSession, user: OptionalUser):
+    """GET card.url 路径也返回 Agent Card，便于发现（A2A 规范）。"""
+    return await agent_card(request, cap_id, db, user)
+
+
 @router.post("/agents/{cap_id}/a2a", response_model=JsonRpcResponse)
 async def jsonrpc_endpoint(cap_id: str, request: JsonRpcRequest, db: DbSession, user: CurrentUser):
     """A2A JSON-RPC 2.0 接口：tasks/send | tasks/get | tasks/cancel。"""
@@ -67,6 +74,7 @@ async def jsonrpc_endpoint(cap_id: str, request: JsonRpcRequest, db: DbSession, 
     method = request.method
 
     if method == "tasks/send":
+        await require_runtime_access(user, agent, db)
         try:
             params = A2ATaskSendParams.model_validate(request.params)
         except Exception as exc:

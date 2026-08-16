@@ -175,13 +175,66 @@ async def activate_skill(db: AsyncSession, user: User, cap: Capability, context:
 
 
 async def install_mcp(db: AsyncSession, user: User, cap: Capability, config: dict[str, Any]) -> dict[str, Any]:
+    """安装 MCP：真实连接（stdio / HTTP / SSE / 网关），发现并返回工具列表。"""
     await record_usage(db, user, cap, "install", config)
+    from app.services.mcp_gateway import (
+        load_gateway_config_by_name,
+        probe_tools,
+        read_package_files,
+    )
+
+    files = read_package_files(cap)
+    raw = files.get("connection.json")
+    try:
+        conn = json.loads(raw.decode("utf-8")) if raw else {}
+    except (ValueError, UnicodeDecodeError):
+        conn = {}
+    transport = conn.get("transport", "stdio")
+    if transport == "gateway":
+        cfg = await load_gateway_config_by_name(db, conn.get("server") or "")
+        if cfg is None:
+            return {
+                "mcp": cap.name,
+                "version": cap.version,
+                "installed": False,
+                "error": f"网关服务 {conn.get('server') or ''} 不存在",
+                "tools": [],
+            }
+    elif transport in ("http", "streamable_http", "sse", "stdio"):
+        cfg = {
+            "name": cap.name,
+            "transport": "streamable_http" if transport == "http" else transport,
+            "url": conn.get("url", ""),
+            "headers": conn.get("headers") or {},
+            "command": conn.get("command", "python"),
+            "args": list(conn.get("args") or []),
+            "env": conn.get("env") or {},
+            "cwd": conn.get("cwd", ""),
+        }
+    else:
+        return {
+            "mcp": cap.name,
+            "version": cap.version,
+            "installed": False,
+            "error": f"暂不支持 transport={transport}",
+            "tools": [],
+        }
+    try:
+        tools = await probe_tools(cfg, files)
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "mcp": cap.name,
+            "version": cap.version,
+            "installed": False,
+            "error": str(exc)[:300],
+            "tools": [],
+        }
     return {
         "mcp": cap.name,
         "version": cap.version,
         "installed": True,
-        "tools": ["自动发现该 MCP 提供的工具列表"],
-        "connection": config or {"transport": "stdio"},
+        "transport": cfg["transport"],
+        "tools": [t["name"] for t in tools],
     }
 
 

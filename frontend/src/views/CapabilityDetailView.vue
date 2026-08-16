@@ -14,17 +14,13 @@ const error = ref('')
 const notice = ref('')
 const reviewComment = ref('')
 const rating = ref({ score: 5, comment: '' })
-const runtimeParams = ref('{"city": "北京"}')
-const task = ref('生成上月销售报表')
-const context = ref('')
-const mcpConfig = ref('{"transport": "stdio"}')
-const workflowInput = ref('{"pattern": "**/*.py", "path": ""}')
 const newVersion = ref('')
 const uploading = ref(false)
-const a2aInput = ref('生成上月销售报表')
-const a2aResult = ref(null)
-const a2aBusy = ref(false)
-const lastInvokeResult = ref(null)
+const myIds = ref(new Set())
+const myNotice = ref('')
+const accessPolicy = ref('open')
+const allowedUsers = ref('')
+const accessSaved = ref('')
 
 const isOwner = computed(() => cap.value && authState.user && cap.value.author_id === authState.user.id)
 const isAdmin = computed(() => authState.user?.role === 'admin')
@@ -38,8 +34,53 @@ const isAgent = computed(() => cap.value?.type === 'agent')
 async function load() {
   try {
     cap.value = await api.get(`/capabilities/${props.id}`)
+    accessPolicy.value = cap.value.access_policy || 'open'
+    allowedUsers.value = (cap.value.allowed_users || []).join(', ')
     versions.value = await api.get(`/capabilities/${props.id}/versions`)
     ratings.value = await api.get(`/capabilities/${props.id}/ratings`)
+  } catch (e) {
+    error.value = e.message
+  }
+}
+
+async function loadMy() {
+  if (!authState.token) return
+  try {
+    const items = await api.get('/my/capabilities')
+    myIds.value = new Set(items.map((c) => c.id))
+  } catch {
+    myIds.value = new Set()
+  }
+}
+
+async function toggleMy() {
+  myNotice.value = ''
+  try {
+    if (myIds.value.has(props.id)) {
+      const r = await api.delete(`/my/capabilities/${props.id}`)
+      const next = new Set(myIds.value)
+      next.delete(props.id)
+      myIds.value = next
+      myNotice.value = r.message
+    } else {
+      const r = await api.post('/my/capabilities', { capability_id: props.id })
+      myIds.value = new Set([...myIds.value, props.id])
+      myNotice.value = r.message
+    }
+  } catch (e) {
+    myNotice.value = e.message
+  }
+}
+
+async function saveAccess() {
+  accessSaved.value = ''
+  try {
+    await api.post(`/capabilities/${props.id}/access`, {
+      access_policy: accessPolicy.value,
+      allowed_users: allowedUsers.value.split(/[,，]/).map((s) => s.trim()).filter(Boolean)
+    })
+    accessSaved.value = '调用权限已更新'
+    await load()
   } catch (e) {
     error.value = e.message
   }
@@ -87,65 +128,6 @@ async function createVersion() {
   }
 }
 
-async function runtimeAction() {
-  notice.value = ''
-  error.value = ''
-  const name = encodeURIComponent(cap.value.name)
-  try {
-    let path = ''
-    let payload = {}
-    if (cap.value.type === 'agent') {
-      path = `/runtime/agents/${name}/tasks`
-      payload = { task: task.value }
-    } else if (cap.value.type === 'tool') {
-      path = `/runtime/tools/${name}/invoke`
-      payload = { params: JSON.parse(runtimeParams.value || '{}') }
-    } else if (cap.value.type === 'skill') {
-      path = `/runtime/skills/${name}/activate`
-      payload = { context: context.value }
-    } else if (cap.value.type === 'workflow') {
-      path = `/runtime/workflows/${name}/executions`
-      payload = { input: JSON.parse(workflowInput.value || '{}') }
-    } else {
-      path = `/runtime/mcp/${name}/install`
-      payload = { config: JSON.parse(mcpConfig.value || '{}') }
-    }
-    const result = await api.post(path, payload)
-    lastInvokeResult.value = result
-    notice.value = `${result.message}（已记录用量）`
-    await load()
-  } catch (e) {
-    error.value = e.message
-  }
-}
-
-async function sendA2ATask() {
-  a2aResult.value = null
-  a2aBusy.value = true
-  try {
-    const payload = {
-      jsonrpc: '2.0',
-      id: `web-${Date.now()}`,
-      method: 'tasks/send',
-      params: {
-        id: `web-task-${Date.now()}`,
-        message: { role: 'user', parts: [{ type: 'text', text: a2aInput.value }] },
-        metadata: { source: 'portal' }
-      }
-    }
-    const body = await api.post(`/a2a/agents/${props.id}/a2a`, payload)
-    a2aResult.value = body
-  } catch (e) {
-    a2aResult.value = { error: { message: e.message } }
-  } finally {
-    a2aBusy.value = false
-  }
-}
-
-function textOf(parts) {
-  return (parts || []).filter((p) => p.type === 'text' && p.text).map((p) => p.text).join('\n')
-}
-
 function copyText(url) {
   navigator.clipboard?.writeText(url).then(() => (notice.value = '已复制到剪贴板'))
 }
@@ -179,14 +161,10 @@ async function subscribe() {
   }
 }
 
-const actionLabel = computed(() => ({
-  agent: '执行任务',
-  tool: '调用工具',
-  skill: '激活技能',
-  mcp: '安装 MCP'
-}[cap.value?.type] || (cap.value?.type === 'workflow' ? '执行工作流' : '执行')))
-
-onMounted(load)
+onMounted(() => {
+  load()
+  loadMy()
+})
 </script>
 
 <template>
@@ -222,40 +200,32 @@ onMounted(load)
       </div>
 
       <div class="detail-actions mt-24">
-        <button v-if="authState.token && cap.status === 'published'" class="btn btn-primary" @click="runtimeAction">{{ actionLabel }}</button>
+        <div v-if="cap.status === 'published'" class="muted" style="font-size: 13px">
+          调用 / 执行需授权：管理员、能力作者或已加入「我的能力」的调用方可以调用。
+          <router-link v-if="authState.token" to="/my">加入我的能力后可在「我的能力」页调试</router-link>
+        </div>
         <router-link v-if="cap.type === 'agent' && (isAdmin || isPublisher)" :to="`/agents/${encodeURIComponent(cap.name)}/edit`" class="btn">编辑 Agent</router-link>
+        <router-link v-if="cap.type === 'skill' && (isOwner || isAdmin || isPublisher)" :to="`/skills/${encodeURIComponent(cap.name)}/edit`" class="btn">编辑技能</router-link>
+        <router-link
+          v-if="cap.type === 'workflow' && (canEdit || isAdmin || (authState.token && ['published', 'deprecated'].includes(cap.status)))"
+          :to="`/workflows/${props.id}/edit`"
+          class="btn"
+        >
+          🎨 {{ canEdit ? '可视化编辑' : '查看流程图' }}
+        </router-link>
+        <button
+          v-if="authState.token && ['published', 'deprecated'].includes(cap.status)"
+          class="btn"
+          :class="myIds.has(cap.id) ? '' : 'btn-primary'"
+          @click="toggleMy"
+        >
+          {{ myIds.has(cap.id) ? '移出我的能力' : '加入我的能力' }}
+        </button>
         <button v-if="authState.token && cap.status === 'published'" class="btn" @click="subscribe">订阅更新</button>
+        <span v-if="myNotice" class="muted" style="font-size: 12px; align-self: center">{{ myNotice }}</span>
         <button v-if="canSubmit" class="btn btn-success" @click="doAction(`/publish/capabilities/${props.id}/submit`)">提交审核</button>
         <button v-if="isAdmin && cap.status === 'published'" class="btn btn-danger" @click="doAction(`/admin/capabilities/${props.id}/deprecate`)">弃用</button>
         <button v-if="isAdmin && ['published', 'deprecated', 'rejected', 'returned'].includes(cap.status)" class="btn btn-danger" @click="doAction(`/admin/capabilities/${props.id}/archive`)">归档</button>
-      </div>
-
-      <div v-if="cap.status === 'published'" class="runtime panel mt-24">
-        <h3>执行引擎 · 使用演示</h3>
-        <template v-if="cap.type === 'agent'">
-          <div class="field"><label>任务描述</label><input v-model="task" class="input" /></div>
-        </template>
-        <template v-else-if="cap.type === 'tool'">
-          <div class="field"><label>参数 JSON</label><textarea v-model="runtimeParams" class="textarea" rows="4"></textarea></div>
-        </template>
-        <template v-else-if="cap.type === 'skill'">
-          <div class="field"><label>任务上下文</label><input v-model="context" class="input" placeholder="如：写测试" /></div>
-        </template>
-        <template v-else-if="cap.type === 'mcp'">
-          <div class="field"><label>连接配置 JSON</label><textarea v-model="mcpConfig" class="textarea" rows="4"></textarea></div>
-        </template>
-        <template v-else-if="cap.type === 'workflow'">
-          <div class="field"><label>工作流入参 JSON</label><textarea v-model="workflowInput" class="textarea" rows="4"></textarea></div>
-        </template>
-        <button class="btn btn-primary" @click="runtimeAction">{{ actionLabel }}</button>
-        <div v-if="cap.type === 'tool' && lastInvokeResult" class="invoke-result mt-16">
-          <h4>执行结果</h4>
-          <div v-if="lastInvokeResult.result?.status === 'ok'" class="alert alert-success">
-            {{ lastInvokeResult.message }}
-          </div>
-          <div v-else class="alert alert-error">{{ lastInvokeResult.message }}</div>
-          <pre class="json-pre">{{ JSON.stringify(lastInvokeResult.result, null, 2) }}</pre>
-        </div>
       </div>
 
       <div v-if="cap.type === 'tool' && Object.keys(cap.input_schema || {}).length" class="panel mt-24">
@@ -280,11 +250,12 @@ onMounted(load)
 
       <div v-if="isAgent && cap.status === 'published'" class="a2a-panel panel mt-24">
         <div class="flex-between flex-wrap">
-          <h3>A2A 互调（Agent-to-Agent 协议）</h3>
+          <h3>A2A 互调信息（Agent-to-Agent 协议）</h3>
           <span class="badge badge-primary">protocolVersion 1.0</span>
         </div>
         <div class="muted" style="font-size: 13px">
-          其他 Agent 可通过标准 A2A JSON-RPC 发现并委派任务给本 Agent。
+          本 Agent 可作为标准 A2A Agent 被发现与委派；tasks/send 属于外部调用，
+          需要管理员授权令牌。
         </div>
         <div class="mt-16 a2a-urls">
           <div class="flex"><span class="muted" style="width: 120px">Agent Card</span>
@@ -296,39 +267,33 @@ onMounted(load)
             <button class="btn btn-sm" @click="copyText(rpcUrl(cap.id))">复制</button>
           </div>
         </div>
-        <div class="flex mt-16">
-          <input v-model="a2aInput" class="input" placeholder="输入委派的任务内容" @keyup.enter="sendA2ATask" />
-          <button class="btn btn-primary" :disabled="a2aBusy" @click="sendA2ATask">
-            {{ a2aBusy ? '委派中…' : '发送任务 (tasks/send)' }}
-          </button>
+      </div>
+
+      <div v-if="(isOwner || isAdmin) && ['published', 'deprecated'].includes(cap.status)" class="panel mt-24">
+        <div class="flex-between flex-wrap">
+          <h3>调用权限</h3>
+          <span v-if="accessSaved" class="muted" style="font-size: 12px">{{ accessSaved }}</span>
         </div>
-        <div v-if="a2aResult" class="a2a-result mt-16">
-          <div v-if="a2aResult.error" class="alert alert-error">{{ a2aResult.error.message }}（code {{ a2aResult.error.code }}）</div>
-          <template v-else>
-            <div class="flex" style="gap: 8px">
-              <span class="badge" :class="a2aResult.result?.status?.state === 'completed' ? 'badge-success' : 'badge-warning'">
-                state: {{ a2aResult.result?.status?.state }}
-              </span>
-              <span class="muted" style="font-size: 12px">task id: {{ a2aResult.result?.id }}</span>
-            </div>
-            <pre class="json-pre mt-8">{{ textOf(a2aResult.result?.status?.message?.parts) }}</pre>
-          </template>
+        <div class="muted" style="font-size: 13px">
+          运行配置，不占版本：控制哪些账号可以调用/调试该能力。
+        </div>
+        <div class="flex mt-16" style="gap: 10px; flex-wrap: wrap">
+          <select v-model="accessPolicy" class="select" style="max-width: 300px">
+            <option value="open">开放：所有登录用户可加入并调用</option>
+            <option value="admin_only">仅管理员：普通账号不可调用</option>
+            <option value="restricted">白名单：仅指定用户可调用</option>
+          </select>
+          <input
+            v-if="accessPolicy === 'restricted'"
+            v-model="allowedUsers"
+            class="input"
+            style="max-width: 260px"
+            placeholder="白名单用户名（逗号分隔）"
+          />
+          <button class="btn btn-primary" @click="saveAccess">保存</button>
         </div>
       </div>
     </div>
-
-        <div v-if="cap.type === 'agent' && lastInvokeResult" class="invoke-result mt-16">
-          <h4>执行结果（mode: {{ lastInvokeResult.mode }}）</h4>
-          <div class="alert" :class="lastInvokeResult.mode === 'llm' ? 'alert-success' : 'alert-warning'">{{ lastInvokeResult.output }}</div>
-          <pre class="json-pre">{{ JSON.stringify({ tool_calls: lastInvokeResult.tool_calls, runtime: lastInvokeResult.runtime }, null, 2) }}</pre>
-        </div>
-        <div v-if="cap.type === 'workflow' && lastInvokeResult" class="invoke-result mt-16">
-          <h4>执行结果</h4>
-          <div class="alert" :class="lastInvokeResult.state === 'succeeded' ? 'alert-success' : 'alert-error'">
-            state: {{ lastInvokeResult.state }}{{ lastInvokeResult.error ? ' · ' + lastInvokeResult.error : '' }}
-          </div>
-          <pre class="json-pre">{{ JSON.stringify({ node_states: lastInvokeResult.node_states, outputs: lastInvokeResult.outputs }, null, 2) }}</pre>
-        </div>
 
     <div class="grid mt-24" style="grid-template-columns: 1.4fr 1fr">
       <div class="panel">
@@ -427,5 +392,4 @@ h3 { margin: 0 0 12px; }
   background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
   padding: 12px; font-size: 12px; overflow: auto; max-height: 260px; white-space: pre-wrap;
 }
-.invoke-result h4 { margin: 0 0 8px; }
 </style>

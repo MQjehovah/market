@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { api } from '../api'
+import { authState } from '../stores/auth'
 import { TYPE_LABELS } from '../utils/format'
 import CapabilityCard from '../components/CapabilityCard.vue'
 
@@ -11,7 +12,9 @@ const total = ref(0)
 const page = ref(1)
 const pageSize = 12
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
-const filters = reactive({ q: '', type: '', category: '', status: '', sort: 'latest' })
+const filters = reactive({ q: '', type: '', category: '', sort: 'latest' })
+const myIds = ref(new Set())
+const notice = ref('')
 
 async function load() {
   loading.value = true
@@ -32,8 +35,42 @@ async function loadCategories() {
   categories.value = await api.get('/meta/categories')
 }
 
+async function loadMy() {
+  if (!authState.token) return
+  try {
+    const items = await api.get('/my/capabilities')
+    myIds.value = new Set(items.map((c) => c.id))
+  } catch {
+    myIds.value = new Set()
+  }
+}
+
+async function addToMy(cap) {
+  notice.value = ''
+  try {
+    const r = await api.post('/my/capabilities', { capability_id: cap.id })
+    myIds.value = new Set([...myIds.value, cap.id])
+    notice.value = r.message
+  } catch (e) {
+    notice.value = e.message
+  }
+}
+
+async function removeFromMy(cap) {
+  notice.value = ''
+  try {
+    const r = await api.delete(`/my/capabilities/${cap.id}`)
+    const next = new Set(myIds.value)
+    next.delete(cap.id)
+    myIds.value = next
+    notice.value = r.message
+  } catch (e) {
+    notice.value = e.message
+  }
+}
+
 function reset() {
-  Object.assign(filters, { q: '', type: '', category: '', status: '', sort: 'latest' })
+  Object.assign(filters, { q: '', type: '', category: '', sort: 'latest' })
   page.value = 1
   load()
 }
@@ -53,27 +90,28 @@ function goPage(p) {
 onMounted(() => {
   load()
   loadCategories()
+  loadMy()
 })
 </script>
 
 <template>
   <div>
+    <div class="flex-between mb-16">
+      <div>
+        <h2 style="margin: 0">能力市场</h2>
+        <div class="muted" style="font-size: 13px">浏览全部已发布能力，点击「加入」收藏到我的能力</div>
+      </div>
+    </div>
+    <div v-if="notice" class="alert alert-success mb-16">{{ notice }}</div>
     <div class="panel toolbar">
       <input v-model="filters.q" class="input" style="max-width: 300px" placeholder="搜索名称 / 描述 / 标签…" @keyup.enter="load" />
       <select v-model="filters.type" class="select" style="max-width: 160px" @change="filters.category = ''; applyFilter()">
-        <option value="">全部市场</option>
+        <option value="">全部类型</option>
         <option v-for="(label, key) in TYPE_LABELS" :key="key" :value="key">{{ label }}</option>
       </select>
       <select v-model="filters.category" class="select" style="max-width: 160px" @change="applyFilter()">
         <option value="">全部分类</option>
         <option v-for="c in (categories[filters.type] || [])" :key="c" :value="c">{{ c }}</option>
-      </select>
-      <select v-model="filters.status" class="select" style="max-width: 130px" @change="applyFilter()">
-        <option value="">全部状态</option>
-        <option value="published">正式版</option>
-        <option value="reviewing">待审</option>
-        <option value="draft">草稿</option>
-        <option value="deprecated">已弃用</option>
       </select>
       <select v-model="filters.sort" class="select" style="max-width: 130px" @change="applyFilter()">
         <option value="latest">最新发布</option>
@@ -87,7 +125,14 @@ onMounted(() => {
     <div v-if="loading" class="empty">加载中…</div>
     <div v-else-if="caps.length === 0" class="empty">没有找到符合条件的能力</div>
     <div v-else class="grid grid-3">
-      <CapabilityCard v-for="cap in caps" :key="cap.id" :cap="cap" />
+      <CapabilityCard
+        v-for="cap in caps"
+        :key="cap.id"
+        :cap="cap"
+        :in-my="myIds.has(cap.id)"
+        @add="addToMy"
+        @remove="removeFromMy"
+      />
     </div>
     <div v-if="total > 0" class="pagination">
       <button class="btn btn-sm" :disabled="page <= 1" @click="goPage(page - 1)">上一页</button>

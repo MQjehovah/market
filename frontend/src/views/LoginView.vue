@@ -28,7 +28,7 @@ async function submit() {
 <template>
   <div class="auth-wrap">
     <div class="panel auth-card">
-      <h2>登录市场</h2>
+      <h2>登录</h2>
       <p class="muted">演示账号：admin / admin123（管理员），publisher / publisher123（发布者），user / user123456（普通用户）</p>
       <div v-if="error" class="alert alert-error">{{ error }}</div>
       <div class="field">

@@ -182,9 +182,29 @@ async def execute_tool_package(uri: str, params: dict[str, Any]) -> dict[str, An
 
 
 async def execute_tool(cap, params: dict[str, Any]) -> dict[str, Any]:
-    """对外入口：有实现包则真实执行，否则返回模拟执行结果。"""
+    """对外入口：有实现包则真实执行；声明 sandbox=false 的本地运行工具直接拒绝云端执行。"""
     artifacts = cap.__dict__.get("artifacts") if "artifacts" in cap.__dict__ else None
     if artifacts:
+        try:
+            content = get_storage().open(artifacts[-1].uri).read()
+        except HTTPException:
+            content = b""
+        if content:
+            try:
+                with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                    sec = json.loads(zf.read("security.json").decode("utf-8"))
+            except (zipfile.BadZipFile, KeyError, ValueError, UnicodeDecodeError):
+                sec = {}
+            if sec.get("sandbox") is False:
+                return {
+                    "execution": "local_only",
+                    "ok": False,
+                    "error": (
+                        "该工具声明为本地运行工具（security.json sandbox=false），"
+                        "不支持云端沙箱执行；请通过本地 agent 调用，或发布沙箱安全的实现包"
+                    ),
+                    "output": None,
+                }
         try:
             result = await execute_tool_package(artifacts[-1].uri, params)
             return {"execution": "real", "ok": True, "output": result}

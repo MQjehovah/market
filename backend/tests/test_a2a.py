@@ -23,7 +23,7 @@ async def test_agent_discovery(client):
 
 
 @pytest.mark.asyncio
-async def test_tasks_send_and_get(client, user_headers):
+async def test_tasks_send_and_get(client, admin_headers):
     r = await client.get("/api/capabilities", params={"q": "数字中台"})
     agent_id = r.json()["items"][0]["id"]
 
@@ -37,7 +37,7 @@ async def test_tasks_send_and_get(client, user_headers):
             "metadata": {"source": "pytest"},
         },
     }
-    r = await client.post(f"/api/a2a/agents/{agent_id}/a2a", headers=user_headers, json=payload)
+    r = await client.post(f"/api/a2a/agents/{agent_id}/a2a", headers=admin_headers, json=payload)
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["id"] == "req-1"
@@ -47,14 +47,14 @@ async def test_tasks_send_and_get(client, user_headers):
     task_id = body["result"]["id"]
 
     # REST 查询
-    r = await client.get(f"/api/a2a/tasks/{task_id}", headers=user_headers)
+    r = await client.get(f"/api/a2a/tasks/{task_id}", headers=admin_headers)
     assert r.status_code == 200
     assert r.json()["id"] == task_id
 
     # JSON-RPC 查询
     r = await client.post(
         f"/api/a2a/agents/{agent_id}/a2a",
-        headers=user_headers,
+        headers=admin_headers,
         json={"jsonrpc": "2.0", "id": "req-2", "method": "tasks/get", "params": {"id": task_id}},
     )
     assert r.status_code == 200
@@ -62,12 +62,12 @@ async def test_tasks_send_and_get(client, user_headers):
 
 
 @pytest.mark.asyncio
-async def test_tasks_cancel_terminal_task(client, user_headers):
+async def test_tasks_cancel_terminal_task(client, admin_headers):
     r = await client.get("/api/capabilities", params={"q": "数字中台"})
     agent_id = r.json()["items"][0]["id"]
     r = await client.post(
         f"/api/a2a/agents/{agent_id}/a2a",
-        headers=user_headers,
+        headers=admin_headers,
         json={
             "jsonrpc": "2.0",
             "id": "req-3",
@@ -81,11 +81,33 @@ async def test_tasks_cancel_terminal_task(client, user_headers):
     task_id = r.json()["result"]["id"]
     r = await client.post(
         f"/api/a2a/agents/{agent_id}/a2a",
-        headers=user_headers,
+        headers=admin_headers,
         json={"jsonrpc": "2.0", "id": "req-4", "method": "tasks/cancel", "params": {"id": task_id}},
     )
     assert r.status_code == 200
     assert r.json()["result"]["status"]["state"] == "completed"  # 已终态任务取消后保持终态
+
+
+@pytest.mark.asyncio
+async def test_normal_user_cannot_send_a2a_task(client, user_headers):
+    """A2A 委派属于外部调用，普通用户无授权会被拒绝。"""
+    r = await client.get("/api/capabilities", params={"q": "数字中台"})
+    agent_id = r.json()["items"][0]["id"]
+    r = await client.post(
+        f"/api/a2a/agents/{agent_id}/a2a",
+        headers=user_headers,
+        json={
+            "jsonrpc": "2.0",
+            "id": "req-denied",
+            "method": "tasks/send",
+            "params": {
+                "id": "denied-task",
+                "message": {"role": "user", "parts": [{"type": "text", "text": "hi"}]},
+            },
+        },
+    )
+    assert r.status_code == 403
+    assert "权限" in r.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -134,13 +156,13 @@ async def test_a2a_requires_auth(client):
 
 
 @pytest.mark.asyncio
-async def test_a2a_records_usage(client, user_headers, admin_headers):
+async def test_a2a_records_usage(client, admin_headers):
     before = (await client.get("/api/admin/stats", headers=admin_headers)).json()["total_usage"]
     r = await client.get("/api/capabilities", params={"q": "数字中台"})
     agent_id = r.json()["items"][0]["id"]
     await client.post(
         f"/api/a2a/agents/{agent_id}/a2a",
-        headers=user_headers,
+        headers=admin_headers,
         json={
             "jsonrpc": "2.0",
             "id": "usage-req",

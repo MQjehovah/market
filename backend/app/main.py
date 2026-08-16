@@ -5,6 +5,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import select
 
 from app.config import get_settings
 from app.database import SessionLocal, init_db
@@ -16,12 +17,29 @@ from app.routers import (
     assemble,
     auth,
     bindings,
+    my,
     portal,
     publish,
     runtime,
+    skill_edit,
     workflows,
+    mcp_gateway,
 )
+from app.models import MCPGatewayServer
 from app.seed import seed_if_empty
+from app.services.mcp_gateway import GatewayASGIApp, GatewayRegistry, row_to_config
+
+
+async def _load_gateway_config(name: str) -> dict | None:
+    async with SessionLocal() as db:
+        row = await db.scalar(
+            select(MCPGatewayServer).where(MCPGatewayServer.name == name)
+        )
+        return row_to_config(row) if row is not None else None
+
+
+gateway_registry = GatewayRegistry(_load_gateway_config)
+gateway_app = GatewayASGIApp(gateway_registry, _load_gateway_config)
 
 
 @asynccontextmanager
@@ -29,7 +47,10 @@ async def lifespan(app: FastAPI):
     await init_db()
     async with SessionLocal() as session:
         await seed_if_empty(session)
-    yield
+    try:
+        yield
+    finally:
+        await gateway_registry.shutdown()
 
 
 settings = get_settings()
@@ -56,9 +77,15 @@ app.include_router(runtime.router)
 app.include_router(assemble.router)
 app.include_router(workflows.router)
 app.include_router(bindings.router)
+app.include_router(my.router)
 app.include_router(agent_edit.router)
+app.include_router(skill_edit.router)
+app.include_router(mcp_gateway.router)
 app.include_router(a2a_router)
 app.include_router(well_known_router)
+
+# MCP HTTP 中转网关（SSE + Streamable HTTP），挂在 /api/mcp-gateway 下
+app.mount("/api/mcp-gateway", gateway_app)
 
 
 @app.get("/api")

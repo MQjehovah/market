@@ -10,6 +10,7 @@ from sqlalchemy.orm import joinedload, selectinload
 from app.auth import CurrentUser, DbSession, OptionalUser
 from app.models import Capability, Notification, Rating, Subscription, User
 from app.schemas import (
+    AccessPolicyUpdate,
     CapabilityOut,
     CapabilityPage,
     MessageOut,
@@ -59,6 +60,7 @@ async def browse_capabilities(
     page: int = Query(1, ge=1),
     page_size: int = Query(24, ge=1, le=100),
 ):
+    """浏览市场：默认只展示已发布能力，且每个逻辑能力只保留最新版本。"""
     conditions: list = []
     visibility_where = _visibility_where(user)
     if visibility_where is not None:
@@ -67,8 +69,8 @@ async def browse_capabilities(
         conditions.append(Capability.type == type)
     if category:
         conditions.append(Capability.category == category)
-    if status:
-        conditions.append(Capability.status == status)
+    # 列表默认只显示已发布；显式指定状态时按指定状态过滤（如管理侧排查用）
+    conditions.append(Capability.status == (status or "published"))
     if visibility:
         conditions.append(Capability.visibility == visibility)
     if q:
@@ -82,33 +84,37 @@ async def browse_capabilities(
         )
     where_clause = and_(*conditions) if conditions else None
 
-    total_stmt = select(func.count()).select_from(Capability)
-    if where_clause is not None:
-        total_stmt = total_stmt.where(where_clause)
-    total = (await db.scalar(total_stmt)) or 0
-
-    order_by = {
-        "latest": Capability.updated_at.desc(),
-        "usage": Capability.usage_count.desc(),
-        "rating": case(
-            (Capability.rating_count > 0, Capability.rating_sum / Capability.rating_count),
-            else_=0,
-        ).desc(),
-    }.get(sort, Capability.updated_at.desc())
-
     stmt = (
         select(Capability)
         .options(joinedload(Capability.author))
-        .order_by(order_by)
-        .offset((page - 1) * page_size)
-        .limit(page_size)
+        .order_by(Capability.updated_at.desc())
     )
     if where_clause is not None:
         stmt = stmt.where(where_clause)
-    caps = (await db.scalars(stmt)).all()
+    all_caps = list((await db.scalars(stmt)).all())
+
+    # 每个逻辑能力（名称 + 类型）只保留最新版本
+    latest: dict[tuple[str, str], Capability] = {}
+    for cap in all_caps:
+        key = (cap.name, cap.type)
+        cur = latest.get(key)
+        if cur is None or parse_semver(cap.version) > parse_semver(cur.version):
+            latest[key] = cap
+    caps = list(latest.values())
+
+    if sort == "usage":
+        caps.sort(key=lambda c: c.usage_count, reverse=True)
+    elif sort == "rating":
+        caps.sort(key=lambda c: c.avg_rating, reverse=True)
+    else:
+        caps.sort(key=lambda c: c.updated_at, reverse=True)
+
+    total = len(caps)
+    start = (page - 1) * page_size
+    page_items = caps[start : start + page_size]
 
     return CapabilityPage(
-        items=[_to_out(c) for c in caps],
+        items=[_to_out(c, all_caps) for c in page_items],
         total=total,
         page=page,
         page_size=page_size,
@@ -262,6 +268,25 @@ async def subscribe(data: SubscribeRequest, db: DbSession, user: CurrentUser):
     db.add(Subscription(user_id=user.id, capability_name=data.capability_name))
     await db.commit()
     return MessageOut(message="订阅成功")
+
+
+@router.post("/capabilities/{cap_id}/access", response_model=CapabilityOut)
+async def update_access_policy(
+    cap_id: str, data: AccessPolicyUpdate, db: DbSession, user: CurrentUser
+):
+    """设置能力调用权限（运行配置，不占版本）：open / admin_only / restricted。"""
+    cap = await db.get(Capability, cap_id)
+    if cap is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
+    if user.role != "admin" and cap.author_id != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "只有作者或管理员可以设置调用权限")
+    if cap.status not in ("published", "deprecated", "draft", "returned", "rejected"):
+        raise HTTPException(status.HTTP_409_CONFLICT, f"当前状态（{cap.status}）不允许修改调用权限")
+    cap.access_policy = data.access_policy
+    cap.allowed_users = [u.strip() for u in data.allowed_users if u.strip()]
+    await db.commit()
+    await db.refresh(cap)
+    return _to_out(cap)
 
 
 @router.delete("/subscriptions", response_model=MessageOut)

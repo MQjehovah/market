@@ -70,6 +70,8 @@ def to_capability_out(
         "category": cap.category or "",
         "tags": cap.tags or [],
         "visibility": cap.visibility,
+        "access_policy": cap.access_policy or "open",
+        "allowed_users": list(cap.allowed_users or []),
         "author_id": cap.author_id,
         "organization": cap.organization or "",
         "input_schema": cap.input_schema or {},
@@ -138,6 +140,8 @@ async def create_capability(
         category=data.category,
         tags=data.tags,
         visibility=data.visibility,
+        access_policy=data.access_policy,
+        allowed_users=list(data.allowed_users or []),
         author_id=user.id,
         organization=user.organization,
         status="draft",
@@ -159,6 +163,10 @@ async def update_capability(
         cap.tags = data.tags
     if data.visibility is not None:
         cap.visibility = data.visibility
+    if data.access_policy is not None:
+        cap.access_policy = data.access_policy
+    if data.allowed_users is not None:
+        cap.allowed_users = [u.strip() for u in data.allowed_users if u.strip()]
     await db.commit()
     await db.refresh(cap)
     return cap
@@ -204,10 +212,37 @@ async def review_capability(
         )
 
     if target == "published":
+        await _deprecate_other_published(db, cap)
         await _notify_subscribers(db, cap)
     await db.commit()
     await db.refresh(cap)
     return cap
+
+
+async def _deprecate_other_published(db: AsyncSession, cap: Capability) -> None:
+    """同一逻辑能力只保留一个正式版：新版本发布时，旧正式版自动转为「已弃用」。"""
+    others = (
+        await db.scalars(
+            select(Capability).where(
+                Capability.name == cap.name,
+                Capability.type == cap.type,
+                Capability.status == "published",
+                Capability.id != cap.id,
+            )
+        )
+    ).all()
+    for old in others:
+        old.status = "deprecated"
+        db.add(
+            Notification(
+                user_id=old.author_id,
+                title=f"能力 {old.name} v{old.version} 已被 v{cap.version} 替代",
+                body=(
+                    f"新正式版 v{cap.version} 已发布，旧版本自动转为「已弃用」。"
+                    "如需继续使用请迁移到新版本。"
+                ),
+            )
+        )
 
 
 async def _notify_subscribers(db: AsyncSession, cap: Capability) -> None:

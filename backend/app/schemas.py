@@ -35,7 +35,34 @@ class UserOut(BaseModel):
     role: str
     organization: str
     team: str
+    is_active: bool = True
     created_at: datetime
+
+
+class UserAdminCreate(BaseModel):
+    username: str = Field(min_length=3, max_length=64, pattern=r"^[\w.\-]+$")
+    email: str = Field(max_length=255)
+    password: str = Field(min_length=6, max_length=128)
+    display_name: str = Field(default="", max_length=64)
+    organization: str = Field(default="", max_length=100)
+    team: str = Field(default="", max_length=100)
+    role: Literal["admin", "publisher", "user"] = "user"
+
+
+class UserAdminUpdate(BaseModel):
+    username: str | None = Field(default=None, min_length=3, max_length=64, pattern=r"^[\w.\-]+$")
+    email: str | None = Field(default=None, max_length=255)
+    password: str | None = Field(default=None, min_length=6, max_length=128, description="留空不修改")
+    display_name: str | None = Field(default=None, max_length=64)
+    organization: str | None = Field(default=None, max_length=100)
+    team: str | None = Field(default=None, max_length=100)
+    role: Literal["admin", "publisher", "user"] | None = None
+    is_active: bool | None = None
+
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=6, max_length=128)
 
 
 class TokenOut(BaseModel):
@@ -52,6 +79,8 @@ class CapabilityBase(BaseModel):
     category: str = Field(default="", max_length=100)
     tags: list[str] = Field(default_factory=list)
     visibility: Literal["private", "team", "internal", "public"] = "internal"
+    access_policy: Literal["open", "admin_only", "restricted"] = "open"
+    allowed_users: list[str] = Field(default_factory=list, description="restricted 时的白名单用户名")
 
     @field_validator("version")
     @classmethod
@@ -76,6 +105,8 @@ class CapabilityUpdate(BaseModel):
     category: str | None = Field(default=None, max_length=100)
     tags: list[str] | None = None
     visibility: Literal["private", "team", "internal", "public"] | None = None
+    access_policy: Literal["open", "admin_only", "restricted"] | None = None
+    allowed_users: list[str] | None = None
 
 
 class VersionCreate(BaseModel):
@@ -216,6 +247,11 @@ class RuntimeInstallRequest(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
 
 
+class McpCallRequest(BaseModel):
+    tool: str = Field(min_length=1, max_length=200, description="MCP 暴露的工具名（mcp_<服务>_<工具>）")
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
 class AssembleDependency(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     type: Literal["tool", "skill", "mcp"]
@@ -272,6 +308,12 @@ class WorkflowCreate(BaseModel):
     category: str = Field(default="工作流", max_length=100)
     tags: list[str] = Field(default_factory=list)
     visibility: Literal["private", "team", "internal", "public"] = "internal"
+    access_policy: Literal["open", "admin_only", "restricted"] = "open"
+    allowed_users: list[str] = Field(default_factory=list, description="restricted 时的白名单用户名")
+    workflow: dict[str, Any] = Field(description="workflow.json 内容：nodes + edges")
+
+
+class WorkflowUpdate(BaseModel):
     workflow: dict[str, Any] = Field(description="workflow.json 内容：nodes + edges")
 
 
@@ -297,6 +339,7 @@ class RuntimeTaskOut(BaseModel):
     output: str
     tool_calls: int = 0
     runtime: dict[str, Any] = Field(default_factory=dict)
+    steps: list[dict[str, Any]] = Field(default_factory=list, description="执行步骤轨迹（LLM/工具/技能/MCP 调用）")
 
 
 class AgentEditOut(BaseModel):
@@ -315,6 +358,21 @@ class AgentEditSave(BaseModel):
     dependencies: list[AssembleDependency] = Field(default_factory=list)
 
 
+class SkillEditOut(BaseModel):
+    capability: CapabilityOut
+    skill_md: str = ""
+    files: list[dict[str, Any]] = Field(default_factory=list)
+    base_version: str = ""
+
+
+class SkillEditSave(BaseModel):
+    skill_md: str = Field(default="", max_length=500000)
+    description: str = Field(default="", max_length=20000)
+    category: str = Field(default="", max_length=100)
+    tags: list[str] = Field(default_factory=list)
+    new_version: str = Field(default="", max_length=50, description="留空则基于最新版本 patch+1")
+
+
 class WorkflowExecutionOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -331,5 +389,53 @@ class WorkflowExecutionOut(BaseModel):
     updated_at: datetime
 
 
+class MCPGatewayServerIn(BaseModel):
+    name: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+    description: str = Field(default="", max_length=2000)
+    transport: Literal["stdio", "http", "sse"] = "stdio"
+    url: str = Field(default="", max_length=500)
+    headers: dict[str, str] = Field(default_factory=dict)
+    command: str = Field(default="", max_length=255)
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    cwd: str = Field(default="", max_length=500)
+    api_token: str = Field(default="", max_length=255)
+    enabled: bool = True
+
+
+class MCPGatewayServerOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    description: str = ""
+    transport: str = "stdio"
+    url: str = ""
+    headers: dict = {}
+    command: str = ""
+    args: list = []
+    env: dict = {}
+    cwd: str = ""
+    api_token: str = ""
+    enabled: bool = True
+    created_at: datetime
+    updated_at: datetime
+
+
+class MCPGatewayTestOut(BaseModel):
+    connected: bool
+    error: str = ""
+    tools: list[dict] = []
+
+
 class MessageOut(BaseModel):
     message: str
+
+
+class MyCapabilityAdd(BaseModel):
+    capability_id: str
+
+
+class AccessPolicyUpdate(BaseModel):
+    access_policy: Literal["open", "admin_only", "restricted"] = "open"
+    allowed_users: list[str] = Field(default_factory=list, description="restricted 时的白名单用户名")

@@ -54,7 +54,8 @@ def build_agent_card(
     return AgentCard(
         name=cap.name,
         description=cap.description or f"Agent {cap.name}",
-        url=f"{base_url}/api/a2a/agents/{cap.id}",
+        # A2A 规范：card.url 是 Agent 的 JSON-RPC 任务端点（tasks/send 等 POST 目标）
+        url=f"{base_url}/api/a2a/agents/{cap.id}/a2a",
         version=cap.version,
         provider={"organization": cap.organization or "平台部", "author": cap.author.username if cap.author else ""},
         documentation_url=f"{base_url}/api/capabilities/{cap.id}",

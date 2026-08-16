@@ -1,8 +1,9 @@
 export const TYPE_LABELS = {
-  agent: 'Agent 市场',
-  tool: '工具市场',
-  skill: '技能市场',
-  mcp: 'MCP 市场'
+  agent: 'Agent',
+  tool: '工具',
+  skill: '技能',
+  mcp: 'MCP',
+  workflow: '工作流'
 }
 
 export const STATUS_LABELS = {

@@ -66,6 +66,9 @@ class Capability(Base):
     organization: Mapped[str] = mapped_column(String(100), default="")
     visibility: Mapped[str] = mapped_column(String(16), default="internal")
     # private | team | internal | public
+    access_policy: Mapped[str] = mapped_column(String(20), default="open")
+    # open（所有登录用户可加入并调用）| admin_only（仅管理员/作者）| restricted（白名单用户名）
+    allowed_users: Mapped[list] = mapped_column(JSON, default=list)
     usage_count: Mapped[int] = mapped_column(Integer, default=0)
     rating_sum: Mapped[float] = mapped_column(Float, default=0.0)
     rating_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -253,3 +256,44 @@ class AgentBinding(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
     )
+
+
+class MCPGatewayServer(Base):
+    """MCP HTTP 中转网关注册表：把 stdio / HTTP / SSE 的 MCP 服务统一暴露为 HTTP 端点。"""
+
+    __tablename__ = "mcp_gateway_servers"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(100), unique=True, index=True, nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="")
+    transport: Mapped[str] = mapped_column(String(20), default="stdio")
+    # stdio | http(streamable_http) | sse
+    url: Mapped[str] = mapped_column(String(512), default="")
+    headers: Mapped[dict] = mapped_column(JSON, default=dict)
+    command: Mapped[str] = mapped_column(String(255), default="")
+    args: Mapped[list] = mapped_column(JSON, default=list)
+    env: Mapped[dict] = mapped_column(JSON, default=dict)
+    cwd: Mapped[str] = mapped_column(String(512), default="")
+    api_token: Mapped[str] = mapped_column(String(255), default="")
+    # 外部调用该网关端点所需的令牌；留空表示内部免鉴权
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class UserCapability(Base):
+    """用户从市场加入的能力（「我的能力」集合）。"""
+
+    __tablename__ = "user_capabilities"
+    __table_args__ = (UniqueConstraint("user_id", "capability_id", name="uq_user_capability"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    capability_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("capabilities.id"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    capability: Mapped["Capability"] = relationship()

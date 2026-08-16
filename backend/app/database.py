@@ -48,5 +48,13 @@ async def _auto_migrate(conn) -> None:
             sync_conn.exec_driver_sql(
                 "ALTER TABLE capabilities ADD COLUMN input_schema JSON DEFAULT '{}'"
             )
+        if "access_policy" not in cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE capabilities ADD COLUMN access_policy VARCHAR(20) DEFAULT 'open'"
+            )
+        if "allowed_users" not in cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE capabilities ADD COLUMN allowed_users JSON DEFAULT '[]'"
+            )
 
     await conn.run_sync(_do)

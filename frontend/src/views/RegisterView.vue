@@ -5,7 +5,7 @@ import { api } from '../api'
 import { setAuth } from '../stores/auth'
 
 const router = useRouter()
-const form = ref({ username: '', email: '', password: '', display_name: '', organization: '', team: '' })
+const form = ref({ username: '', email: '', password: '', display_name: '', organization: '' })
 const error = ref('')
 
 async function submit() {
@@ -43,15 +43,9 @@ async function submit() {
         <label>密码（至少 6 位）</label>
         <input v-model="form.password" type="password" class="input" />
       </div>
-      <div class="field-row">
-        <div class="field">
-          <label>组织</label>
-          <input v-model="form.organization" class="input" placeholder="如：数字中台部" />
-        </div>
-        <div class="field">
-          <label>团队</label>
-          <input v-model="form.team" class="input" placeholder="如：中台团队" />
-        </div>
+      <div class="field">
+        <label>组织</label>
+        <input v-model="form.organization" class="input" placeholder="如：数字中台部" />
       </div>
       <button class="btn btn-primary" style="width: 100%" @click="submit">注 册</button>
       <div class="muted mt-16" style="text-align: center">

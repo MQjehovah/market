@@ -6,7 +6,7 @@ from sqlalchemy import or_, select
 
 from app.auth import CurrentUser, DbSession, create_access_token, hash_password, verify_password
 from app.models import User
-from app.schemas import TokenOut, UserLogin, UserOut, UserRegister
+from app.schemas import ChangePasswordRequest, MessageOut, TokenOut, UserLogin, UserOut, UserRegister
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -63,3 +63,13 @@ async def login(data: UserLogin, request: Request, db: DbSession):
 @router.get("/me", response_model=UserOut)
 async def me(user: CurrentUser):
     return UserOut.model_validate(user)
+
+
+@router.post("/change-password", response_model=MessageOut)
+async def change_password(data: ChangePasswordRequest, db: DbSession, user: CurrentUser):
+    """用户自助修改密码（需验证原密码）。"""
+    if not verify_password(data.old_password, user.password_hash):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "原密码不正确")
+    user.password_hash = hash_password(data.new_password)
+    await db.commit()
+    return MessageOut(message="密码已修改，请重新登录")

@@ -1,0 +1,40 @@
+# .agentignore — 控制 Agent 扫描/修改哪些文件
+# 语法与 .gitignore 相同
+
+# 依赖目录（避免 Agent 读到几十万行第三方代码撑爆上下文）
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# 构建产物
+dist/
+build/
+*.egg-info/
+
+# 版本控制和 IDE
+.git/
+.vscode/
+.idea/
+
+# Agent 自身文件
+.agent/
+.grok/
+
+# 密钥和敏感文件
+.env
+.env.*
+*.pem
+*.key
+
+# 大文件（避免浪费 token）
+*.log
+*.bin
+*.zip
+*.tar.gz
+*.png
+*.jpg
+
+# 例外：如果想允许某些被排除的文件，用 ! 开头
+# !.env.example

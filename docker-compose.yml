@@ -21,4 +21,5 @@ services:
       - LLM_API_KEY=${LLM_API_KEY:-}
       - LLM_MODEL=${LLM_MODEL:-}
       - AGENT_MAX_ITERATIONS=${AGENT_MAX_ITERATIONS:-10}
+      - RUNTIME_ACCESS_ROLES=${RUNTIME_ACCESS_ROLES:-admin}
     restart: unless-stopped

@@ -127,7 +127,7 @@ async def test_workflow_create_execute_query(client, publisher_headers, admin_he
 
     r = await client.post(
         f"/api/runtime/workflows/{wf_name}/executions",
-        headers=publisher_headers,
+        headers=admin_headers,
         json={"input": {"name": "world"}},
     )
     assert r.status_code == 200, r.text
@@ -138,7 +138,7 @@ async def test_workflow_create_execute_query(client, publisher_headers, admin_he
     assert "echo:hello world" in json.dumps(body["outputs"]["t1"], ensure_ascii=False)
 
     r = await client.get(
-        f"/api/runtime/workflows/executions/{body['id']}", headers=publisher_headers
+        f"/api/runtime/workflows/executions/{body['id']}", headers=admin_headers
     )
     assert r.status_code == 200
     assert r.json()["workflow_name"] == wf_name
@@ -160,6 +160,102 @@ async def test_workflow_cycle_rejected(client, publisher_headers):
     )
     assert r.status_code == 422
     assert "环" in r.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_workflow_definition_read_update_test(
+    client, publisher_headers, admin_headers, user_headers
+):
+    """草稿定义可读回、可更新、可试运行；非作者不可读草稿。"""
+    tool_name = "wf-draft-tool"
+    await _publish_capability(
+        client, publisher_headers, admin_headers, tool_name, "tool", _tool_zip(tool_name)
+    )
+
+    workflow = {
+        "nodes": [
+            {
+                "id": "t1",
+                "type": "tool",
+                "capability": tool_name,
+                "params": {"text": "hi ${input.name}"},
+            }
+        ],
+        "edges": [],
+    }
+    r = await client.post(
+        "/api/workflows",
+        headers=publisher_headers,
+        json={
+            "name": "wf-draft-demo",
+            "description": "草稿工作流",
+            "version": "0.1.0",
+            "workflow": workflow,
+        },
+    )
+    assert r.status_code == 201, r.text
+    wf_id = r.json()["id"]
+
+    # 非作者不能读草稿定义
+    r = await client.get(f"/api/workflows/{wf_id}/definition", headers=user_headers)
+    assert r.status_code == 403
+
+    # 作者可读回画布
+    r = await client.get(
+        f"/api/workflows/{wf_id}/definition", headers=publisher_headers
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["workflow"]["nodes"][0]["id"] == "t1"
+    assert body["capability"]["status"] == "draft"
+
+    # 更新画布：追加第二个工具节点并连线
+    updated = {
+        "nodes": [
+            {
+                "id": "t1",
+                "type": "tool",
+                "capability": tool_name,
+                "params": {"text": "hello ${input.name}"},
+            },
+            {
+                "id": "t2",
+                "type": "tool",
+                "capability": tool_name,
+                "params": {"text": "${t1.output}"},
+            },
+        ],
+        "edges": [{"from": "t1", "to": "t2"}],
+    }
+    r = await client.put(
+        f"/api/workflows/{wf_id}", headers=publisher_headers, json={"workflow": updated}
+    )
+    assert r.status_code == 200, r.text
+
+    r = await client.get(
+        f"/api/workflows/{wf_id}/definition", headers=publisher_headers
+    )
+    assert r.status_code == 200
+    assert len(r.json()["workflow"]["nodes"]) == 2
+
+    # 试运行草稿
+    r = await client.post(
+        f"/api/workflows/{wf_id}/test",
+        headers=publisher_headers,
+        json={"input": {"name": "画布"}},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["state"] == "succeeded", body
+    assert body["node_states"]["t1"] == "succeeded"
+
+    # 已提交后不可再更新画布
+    r = await client.post(f"/api/publish/capabilities/{wf_id}/submit", headers=publisher_headers)
+    assert r.status_code == 200
+    r = await client.put(
+        f"/api/workflows/{wf_id}", headers=publisher_headers, json={"workflow": updated}
+    )
+    assert r.status_code == 409
 
 
 @pytest.mark.asyncio

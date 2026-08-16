@@ -71,13 +71,16 @@ async def test_publish_submit_review_publish_flow(client, publisher_headers, adm
 
 
 @pytest.mark.asyncio
-async def test_normal_user_cannot_publish(client, user_headers):
+async def test_normal_user_can_create_own_draft(client, user_headers):
+    """任何登录用户都可以创建自己的能力草稿（审核上架仍由管理员把关）。"""
     r = await client.post(
         "/api/publish/capabilities",
         headers=user_headers,
         json={"name": "越权工具", "type": "tool", "description": "x"},
     )
-    assert r.status_code == 403
+    assert r.status_code == 201, r.text
+    assert r.json()["status"] == "draft"
+    assert r.json()["author_id"] != ""
 
 
 @pytest.mark.asyncio
@@ -102,10 +105,10 @@ async def test_search_and_filter(client):
 
 
 @pytest.mark.asyncio
-async def test_runtime_invoke_records_usage(client, user_headers, admin_headers):
+async def test_runtime_invoke_records_usage(client, admin_headers):
     r = await client.post(
         "/api/runtime/tools/%E6%96%87%E4%BB%B6%E5%93%88%E5%B8%8C%E8%AE%A1%E7%AE%97/invoke",
-        headers=user_headers,
+        headers=admin_headers,
         json={"params": {"path": "/tmp/a.txt"}},
     )
     assert r.status_code == 200, r.text
@@ -114,6 +117,18 @@ async def test_runtime_invoke_records_usage(client, user_headers, admin_headers)
     r = await client.get("/api/admin/stats", headers=admin_headers)
     assert r.status_code == 200
     assert r.json()["total_usage"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_normal_user_cannot_invoke_runtime(client, user_headers):
+    """外部调用需授权：普通用户不能直接调用/执行能力。"""
+    r = await client.post(
+        "/api/runtime/tools/%E6%96%87%E4%BB%B6%E5%93%88%E5%B8%8C%E8%AE%A1%E7%AE%97/invoke",
+        headers=user_headers,
+        json={"params": {"path": "/tmp/a.txt"}},
+    )
+    assert r.status_code == 403
+    assert "权限" in r.json()["detail"]
 
 
 @pytest.mark.asyncio

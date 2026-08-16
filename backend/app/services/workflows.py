@@ -35,7 +35,9 @@ _TEMPLATE_RE = re.compile(r"\$\{([^}]+)\}")
 _NODE_TYPES = {"tool", "agent", "skill", "mcp"}
 
 
-def load_workflow_definition(cap: Capability) -> dict[str, Any]:
+def load_workflow_definition(
+    cap: Capability, require_nodes: bool = True
+) -> dict[str, Any]:
     if not cap.artifacts:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"工作流 {cap.name} 未上传能力包")
     content = get_storage().open(cap.artifacts[-1].uri).read()
@@ -48,14 +50,16 @@ def load_workflow_definition(cap: Capability) -> dict[str, Any]:
         definition = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "workflow.json 不是合法 JSON") from exc
-    validate_definition(definition)
+    validate_definition(definition, require_nodes=require_nodes)
     return definition
 
 
-def validate_definition(definition: dict[str, Any]) -> list[str]:
+def validate_definition(definition: dict[str, Any], require_nodes: bool = True) -> list[str]:
     """校验节点/边并返回拓扑顺序；非法或存在环时抛 422。"""
     nodes = definition.get("nodes")
-    if not isinstance(nodes, list) or not nodes:
+    if not isinstance(nodes, list):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "workflow.json 必须包含非空 nodes")
+    if not nodes and require_nodes:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "workflow.json 必须包含非空 nodes")
 
     node_ids: list[str] = []
@@ -195,7 +199,9 @@ async def execute_workflow(
     )
     db.add(execution)
     await db.flush()
-    await record_usage(db, user, cap, "workflow_execute", {"input": input_data})
+    # 正式/预发布记录用量；草稿试运行不产生市场使用量
+    if cap.status in ("published", "deprecated", "reviewing"):
+        await record_usage(db, user, cap, "workflow_execute", {"input": input_data})
     await db.commit()
 
     on_error = definition.get("on_error", "fail")

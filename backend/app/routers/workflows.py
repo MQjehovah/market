@@ -3,36 +3,32 @@
 import io
 import json
 import zipfile
+from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import and_, select
+from sqlalchemy.orm import joinedload, selectinload
 
 from app.auth import CurrentUser, DbSession
 from app.models import Capability, CapabilityArtifact, WorkflowExecution
+from app.permissions import can_view, require_runtime_access
 from app.schemas import (
     CapabilityOut,
     WorkflowCreate,
     WorkflowExecuteRequest,
     WorkflowExecutionOut,
+    WorkflowUpdate,
 )
 from app.services.capabilities import to_capability_out
 from app.services.marketplace import resolve_capability
-from app.services.workflows import execute_workflow, validate_definition
+from app.services.workflows import execute_workflow, load_workflow_definition, validate_definition
 from app.storage import get_storage
 
 router = APIRouter(prefix="/api", tags=["workflows"])
 
 
-def _require_publisher(user) -> None:
-    if user.role not in ("admin", "publisher"):
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            "普通用户无权限创建工作流，请联系管理员开通发布权限",
-        )
-
-
 def _workflow_zip(workflow: dict) -> bytes:
-    validate_definition(workflow)
+    validate_definition(workflow, require_nodes=False)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("workflow.json", json.dumps(workflow, ensure_ascii=False, indent=2))
@@ -46,7 +42,6 @@ def _workflow_zip(workflow: dict) -> bytes:
 @router.post("/workflows", response_model=CapabilityOut, status_code=status.HTTP_201_CREATED)
 async def create_workflow(data: WorkflowCreate, db: DbSession, user: CurrentUser):
     """从 workflow.json 直接创建 workflow 能力（draft + 能力包）。"""
-    _require_publisher(user)
     exists = await db.scalar(
         select(Capability.id).where(
             and_(
@@ -69,6 +64,8 @@ async def create_workflow(data: WorkflowCreate, db: DbSession, user: CurrentUser
         category=data.category,
         tags=data.tags,
         visibility=data.visibility,
+        access_policy=data.access_policy,
+        allowed_users=data.allowed_users,
         status="draft",
         author_id=user.id,
         organization=user.organization,
@@ -80,6 +77,85 @@ async def create_workflow(data: WorkflowCreate, db: DbSession, user: CurrentUser
     await db.commit()
     await db.refresh(cap)
     return to_capability_out(cap, author_name=user.username)
+
+
+async def _get_workflow_cap(db: DbSession, cap_id: str) -> Capability:
+    cap = await db.scalar(
+        select(Capability)
+        .options(selectinload(Capability.artifacts), joinedload(Capability.author))
+        .where(Capability.id == cap_id)
+    )
+    if cap is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
+    if cap.type != "workflow":
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"能力 {cap.name} 不是工作流")
+    return cap
+
+
+def _require_workflow_owner(cap: Capability, user) -> None:
+    if user.role != "admin" and cap.author_id != user.id:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "只能编辑自己创建的工作流草稿"
+        )
+
+
+def _load_workflow(cap: Capability) -> dict:
+    """返回工作流定义；未上传能力包时给出空画布结构。"""
+    if not cap.artifacts:
+        return {"nodes": [], "edges": []}
+    return load_workflow_definition(cap, require_nodes=False)
+
+
+@router.get("/workflows/{cap_id}/definition")
+async def workflow_definition(cap_id: str, db: DbSession, user: CurrentUser):
+    """读取工作流定义（画布数据）。草稿仅作者/管理员；正式版按可见性。"""
+    cap = await _get_workflow_cap(db, cap_id)
+    if cap.status in ("draft", "rejected", "returned"):
+        _require_workflow_owner(cap, user)
+    elif not can_view(cap, user):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "无权限查看该能力")
+    return {
+        "capability": to_capability_out(cap, author_name=cap.author.username if cap.author else ""),
+        "workflow": _load_workflow(cap),
+    }
+
+
+@router.put("/workflows/{cap_id}", response_model=CapabilityOut)
+async def update_workflow(cap_id: str, data: WorkflowUpdate, db: DbSession, user: CurrentUser):
+    """更新工作流草稿的能力包（workflow.json），仅草稿/驳回/打回状态可编辑。"""
+    cap = await _get_workflow_cap(db, cap_id)
+    _require_workflow_owner(cap, user)
+    if cap.status not in ("draft", "returned", "rejected"):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "仅草稿或被打回/驳回的工作流可以编辑"
+        )
+    pkg = _workflow_zip(data.workflow)
+    filename = f"{cap.name}-{cap.version}-draft.zip"
+    info = get_storage().save(cap.id, filename, io.BytesIO(pkg))
+    db.add(
+        CapabilityArtifact(
+            capability_id=cap.id,
+            filename=filename,
+            **info,
+        )
+    )
+    cap.updated_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(cap)
+    return to_capability_out(cap, author_name=user.username)
+
+
+@router.post("/workflows/{cap_id}/test", response_model=WorkflowExecutionOut)
+async def test_workflow(cap_id: str, data: WorkflowExecuteRequest, db: DbSession, user: CurrentUser):
+    """试运行当前草稿定义：作者/管理员可直接执行，不要求发布。"""
+    cap = await _get_workflow_cap(db, cap_id)
+    _require_workflow_owner(cap, user)
+    if not cap.artifacts:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "请先保存画布，再试运行"
+        )
+    execution = await execute_workflow(db, user, cap, data.input)
+    return _to_out(execution, cap)
 
 
 def _to_out(ex: WorkflowExecution, cap: Capability | None) -> WorkflowExecutionOut:
@@ -101,6 +177,7 @@ def _to_out(ex: WorkflowExecution, cap: Capability | None) -> WorkflowExecutionO
 @router.post("/runtime/workflows/{name}/executions", response_model=WorkflowExecutionOut)
 async def run_workflow(name: str, data: WorkflowExecuteRequest, db: DbSession, user: CurrentUser):
     cap = await resolve_capability(db, user, name)
+    await require_runtime_access(user, cap, db)
     if cap.type != "workflow":
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"能力 {name} 不是工作流")
     execution = await execute_workflow(db, user, cap, data.input)

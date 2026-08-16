@@ -14,17 +14,28 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.models import Capability, User
+from app.services.mcp_bridge import MCPBridge
 from app.services.agent_editor import read_prompt_deps
+from app.services.mcp_gateway import load_gateway_config_by_name
 from app.services.marketplace import (
     _resolve_manifest,
     invoke_tool,
     record_usage,
     resolve_capability,
 )
+from app.storage import get_storage
 
 logger = logging.getLogger("market.agent_runner")
 
 DEFAULT_MAX_ITERATIONS = 10
+TRACE_CLIP = 3000
+
+
+def _clip(text: str, limit: int = TRACE_CLIP) -> str:
+    if text is None:
+        return ""
+    text = str(text)
+    return text if len(text) <= limit else text[:limit] + f"…（截断，共 {len(text)} 字符）"
 
 
 def is_llm_configured() -> bool:
@@ -73,14 +84,80 @@ def _tool_defs(runtime: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]
     return defs
 
 
+def _skill_tool_def(skills: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """skill 工具定义：让 LLM 显式加载已绑定技能的执行指引。"""
+    names = [s["name"] for s in skills]
+    if not names:
+        return None
+    return {
+        "type": "function",
+        "function": {
+            "name": "skill",
+            "description": (
+                "加载并激活一个已绑定的技能，返回该技能的完整执行指引（SKILL.md）。"
+                "开始执行任务前，先判断是否有适用于当前任务的技能，如有则先调用本工具。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "skill": {
+                        "type": "string",
+                        "enum": names,
+                        "description": "要激活的技能名称",
+                    },
+                    "context": {"type": "string", "description": "当前任务上下文（可选）"},
+                },
+                "required": ["skill"],
+            },
+        },
+    }
+
+
+async def _activate_skill(db: AsyncSession, user: User, args: dict[str, Any]) -> str:
+    """执行 skill 工具：读取技能包的 SKILL.md 作为执行指引返回给 LLM。"""
+    import io
+    import zipfile
+
+    name = (args or {}).get("skill") or ""
+    if not name:
+        return json.dumps({"ok": False, "error": "缺少 skill 参数"}, ensure_ascii=False)
+    try:
+        cap = await resolve_capability(db, user, name)
+    except HTTPException as exc:
+        return json.dumps({"ok": False, "error": str(exc.detail)}, ensure_ascii=False)
+    if cap.type != "skill":
+        return json.dumps({"ok": False, "error": f"{name} 不是技能能力"}, ensure_ascii=False)
+    try:
+        content = get_storage().open(cap.artifacts[-1].uri).read() if cap.artifacts else b""
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            md = (
+                zf.read("SKILL.md").decode("utf-8", errors="replace")
+                if "SKILL.md" in zf.namelist()
+                else ""
+            )
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"ok": False, "error": f"读取技能失败：{exc}"}, ensure_ascii=False)
+    if not md:
+        return json.dumps({"ok": False, "error": "技能包缺少 SKILL.md"}, ensure_ascii=False)
+    return json.dumps(
+        {
+            "ok": True,
+            "skill": cap.name,
+            "version": cap.version,
+            "skill_md": md[:50000],
+        },
+        ensure_ascii=False,
+    )
+
+
 def _system_prompt(cap: Capability, prompt: str, runtime: dict) -> str:
     system = prompt.strip() or f"你是{cap.name}，请完成用户任务。"
     skill_lines = [
-        f"- {s['name']}（v{s.get('version', '')}）：激活后按 SKILL.md 定义执行"
+        f"- {s['name']}（v{s.get('version', '')}）：使用 skill 工具激活后按 SKILL.md 定义执行"
         for s in runtime.get("skills") or []
     ]
     mcp_lines = [
-        f"- {m['name']}（v{m.get('version', '')}）：MCP 连接，按 connection.json 使用"
+        f"- {m['name']}（v{m.get('version', '')}）：MCP 已连接，其工具已注册为可用函数（mcp_* 前缀）"
         for m in runtime.get("mcps") or []
     ]
     extra = []
@@ -117,64 +194,111 @@ async def run_agent(
 
     prompt, deps = read_prompt_deps(cap)
     runtime = await _resolve_manifest(db, user, deps or [])
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": _system_prompt(cap, prompt, runtime)},
-        {"role": "user", "content": task_text},
-    ]
-    tools = _tool_defs(runtime)
-    iterations = max_iterations or get_settings().agent_max_iterations or DEFAULT_MAX_ITERATIONS
-    tool_calls = 0
 
-    for _ in range(iterations):
-        data = await _chat_completion(messages, tools)
-        choice = (data.get("choices") or [{}])[0]
-        message = choice.get("message") or {}
-        tool_calls_msg = message.get("tool_calls")
-        if tool_calls_msg:
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": message.get("content") or "",
-                    "tool_calls": tool_calls_msg,
-                }
-            )
-            for tc in tool_calls_msg:
-                fn = tc.get("function") or {}
-                tool_name = fn.get("name", "")
-                try:
-                    args = json.loads(fn.get("arguments") or "{}")
-                except ValueError:
-                    args = {}
-                try:
-                    tool_cap = await resolve_capability(db, user, tool_name)
-                    result = await invoke_tool(db, user, tool_cap, args)
-                    content = json.dumps(result, ensure_ascii=False)
-                except HTTPException as exc:
-                    content = json.dumps({"error": str(exc.detail)}, ensure_ascii=False)
+    async def _gateway_loader(name: str):
+        try:
+            return await load_gateway_config_by_name(db, name)
+        except Exception:  # noqa: BLE001
+            return None
+
+    bridge = MCPBridge(gateway_loader=_gateway_loader)
+    try:
+        mcp_info: list[dict[str, Any]] = []
+        for m in runtime.get("mcps") or []:
+            try:
+                mcp_cap = await resolve_capability(db, user, m["name"])
+                mcp_info.append(await bridge.connect_capability(m["name"], mcp_cap))
+            except Exception as exc:  # noqa: BLE001
+                mcp_info.append({"name": m["name"], "connected": False, "error": str(exc)[:200]})
+        runtime["mcp_connected"] = mcp_info
+        runtime["mcp_tools"] = bridge.tool_names
+
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": _system_prompt(cap, prompt, runtime)},
+            {"role": "user", "content": task_text},
+        ]
+        tools = _tool_defs(runtime) + bridge.tool_defs
+        skill_def = _skill_tool_def(runtime.get("skills") or [])
+        if skill_def:
+            tools.append(skill_def)
+        iterations = max_iterations or get_settings().agent_max_iterations or DEFAULT_MAX_ITERATIONS
+        tool_calls = 0
+        steps: list[dict[str, Any]] = []
+
+        for _ in range(iterations):
+            data = await _chat_completion(messages, tools)
+            choice = (data.get("choices") or [{}])[0]
+            message = choice.get("message") or {}
+            tool_calls_msg = message.get("tool_calls")
+            if tool_calls_msg:
                 messages.append(
-                    {"role": "tool", "tool_call_id": tc.get("id", ""), "content": content}
+                    {
+                        "role": "assistant",
+                        "content": message.get("content") or "",
+                        "tool_calls": tool_calls_msg,
+                    }
                 )
-                tool_calls += 1
-            continue
+                for tc in tool_calls_msg:
+                    fn = tc.get("function") or {}
+                    tool_name = fn.get("name", "")
+                    try:
+                        args = json.loads(fn.get("arguments") or "{}")
+                    except ValueError:
+                        args = {}
+                    steps.append(
+                        {
+                            "kind": "call",
+                            "name": tool_name,
+                            "arguments": _clip(json.dumps(args, ensure_ascii=False)),
+                            "reasoning": _clip(message.get("content") or ""),
+                        }
+                    )
+                    try:
+                        if tool_name == "skill":
+                            content = await _activate_skill(db, user, args)
+                        elif bridge.has_tool(tool_name):
+                            content = await bridge.call(tool_name, args)
+                        else:
+                            tool_cap = await resolve_capability(db, user, tool_name)
+                            result = await invoke_tool(db, user, tool_cap, args)
+                            content = json.dumps(result, ensure_ascii=False)
+                    except HTTPException as exc:
+                        content = json.dumps({"error": str(exc.detail)}, ensure_ascii=False)
+                    messages.append(
+                        {"role": "tool", "tool_call_id": tc.get("id", ""), "content": content}
+                    )
+                    steps.append({"kind": "result", "name": tool_name, "result": _clip(content)})
+                    tool_calls += 1
+                continue
 
-        output = message.get("content") or ""
+            output = message.get("content") or ""
+            steps.append({"kind": "output", "output": _clip(output)})
+            await record_usage(
+                db, user, cap, "agent_run", {"task": task_text[:500], "tool_calls": tool_calls}
+            )
+            await db.commit()
+            return {
+                "mode": "llm",
+                "output": output,
+                "runtime": runtime,
+                "tool_calls": tool_calls,
+                "steps": steps,
+            }
+
         await record_usage(
-            db, user, cap, "agent_run", {"task": task_text[:500], "tool_calls": tool_calls}
+            db,
+            user,
+            cap,
+            "agent_run",
+            {"task": task_text[:500], "tool_calls": tool_calls, "truncated": True},
         )
         await db.commit()
-        return {"mode": "llm", "output": output, "runtime": runtime, "tool_calls": tool_calls}
-
-    await record_usage(
-        db,
-        user,
-        cap,
-        "agent_run",
-        {"task": task_text[:500], "tool_calls": tool_calls, "truncated": True},
-    )
-    await db.commit()
-    return {
-        "mode": "llm",
-        "output": f"（达到最大迭代次数 {iterations}，任务未完成）",
-        "runtime": runtime,
-        "tool_calls": tool_calls,
-    }
+        return {
+            "mode": "llm",
+            "output": f"（达到最大迭代次数 {iterations}，任务未完成）",
+            "runtime": runtime,
+            "tool_calls": tool_calls,
+            "steps": steps,
+        }
+    finally:
+        await bridge.close()

@@ -36,9 +36,10 @@ def _require_owner(cap: Capability, user) -> None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "只能操作自己发布的能力")
 
 
-def _require_publisher(user) -> None:
-    if user.role not in ("admin", "publisher"):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "普通用户无权发布能力，请联系管理员开通发布权限")
+def _require_creator(user) -> None:
+    """任何登录用户都可创建自己的能力草稿（审核上架仍由管理员把关）。"""
+    if user is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "请先登录")
 
 
 @router.get("/my", response_model=list[CapabilityOut])
@@ -61,14 +62,14 @@ async def my_capabilities(db: DbSession, user: CurrentUser):
 
 @router.post("/capabilities", response_model=CapabilityOut, status_code=status.HTTP_201_CREATED)
 async def create(data: CapabilityCreate, db: DbSession, user: CurrentUser):
-    _require_publisher(user)
+    _require_creator(user)
     cap = await create_capability(db, user, data)
     return to_capability_out(cap, author_name=user.username)
 
 
 @router.put("/capabilities/{cap_id}", response_model=CapabilityOut)
 async def update(cap_id: str, data: CapabilityUpdate, db: DbSession, user: CurrentUser):
-    _require_publisher(user)
+    _require_creator(user)
     cap = await db.get(Capability, cap_id)
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
@@ -81,7 +82,7 @@ async def update(cap_id: str, data: CapabilityUpdate, db: DbSession, user: Curre
 
 @router.post("/capabilities/{cap_id}/submit", response_model=CapabilityOut)
 async def submit(cap_id: str, db: DbSession, user: CurrentUser):
-    _require_publisher(user)
+    _require_creator(user)
     cap = await db.get(Capability, cap_id)
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
@@ -92,7 +93,7 @@ async def submit(cap_id: str, db: DbSession, user: CurrentUser):
 
 @router.post("/capabilities/{cap_id}/versions", response_model=CapabilityOut, status_code=status.HTTP_201_CREATED)
 async def new_version(cap_id: str, data: VersionCreate, db: DbSession, user: CurrentUser):
-    _require_publisher(user)
+    _require_creator(user)
     cap = await db.get(Capability, cap_id)
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
@@ -103,7 +104,7 @@ async def new_version(cap_id: str, data: VersionCreate, db: DbSession, user: Cur
 
 @router.get("/capabilities/{cap_id}/next-version", response_model=dict)
 async def suggest_version(cap_id: str, db: DbSession, user: CurrentUser):
-    _require_publisher(user)
+    _require_creator(user)
     cap = await db.get(Capability, cap_id)
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
@@ -118,7 +119,7 @@ async def suggest_version(cap_id: str, db: DbSession, user: CurrentUser):
 
 @router.post("/capabilities/{cap_id}/artifact", response_model=CapabilityOut)
 async def upload_artifact(cap_id: str, db: DbSession, user: CurrentUser, file: UploadFile = File(...)):
-    _require_publisher(user)
+    _require_creator(user)
     cap = await db.get(Capability, cap_id)
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
@@ -139,7 +140,7 @@ async def upload_artifact(cap_id: str, db: DbSession, user: CurrentUser, file: U
 
 @router.get("/capabilities/{cap_id}/artifact/download")
 async def download_artifact(cap_id: str, db: DbSession, user: CurrentUser):
-    _require_publisher(user)
+    _require_creator(user)
     cap = await db.scalar(
         select(Capability)
         .options(selectinload(Capability.artifacts))
@@ -157,7 +158,7 @@ async def download_artifact(cap_id: str, db: DbSession, user: CurrentUser):
 
 @router.delete("/capabilities/{cap_id}", response_model=MessageOut)
 async def delete_capability(cap_id: str, db: DbSession, user: CurrentUser):
-    _require_publisher(user)
+    _require_creator(user)
     cap = await db.get(Capability, cap_id)
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")

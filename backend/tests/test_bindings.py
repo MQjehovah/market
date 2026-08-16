@@ -6,7 +6,7 @@ from test_workflow import _agent_zip, _publish_capability, _tool_zip
 
 
 @pytest.mark.asyncio
-async def test_binding_crud_and_runtime_assembly(client, publisher_headers):
+async def test_binding_crud_and_runtime_assembly(client, publisher_headers, admin_headers):
     r = await client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
     admin_headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
 
@@ -47,7 +47,7 @@ async def test_binding_crud_and_runtime_assembly(client, publisher_headers):
     # 按绑定名实例化 → 运行时包含工具
     r = await client.post(
         f"/api/runtime/agents/{persona}/instances",
-        headers=publisher_headers,
+        headers=admin_headers,
         json={"task": "测试", "binding": "默认绑定"},
     )
     assert r.status_code == 200, r.text
@@ -58,7 +58,7 @@ async def test_binding_crud_and_runtime_assembly(client, publisher_headers):
     # 临时绑定（不落库）
     r = await client.post(
         f"/api/runtime/agents/{persona}/instances",
-        headers=publisher_headers,
+        headers=admin_headers,
         json={"task": "x", "bindings": [{"name": dep_tool, "type": "tool"}]},
     )
     assert r.status_code == 200, r.text
@@ -73,7 +73,7 @@ async def test_binding_crud_and_runtime_assembly(client, publisher_headers):
     assert r.status_code == 204
     r = await client.post(
         f"/api/runtime/agents/{persona}/instances",
-        headers=publisher_headers,
+        headers=admin_headers,
         json={"task": "x", "binding": "默认绑定"},
     )
     assert r.status_code == 404

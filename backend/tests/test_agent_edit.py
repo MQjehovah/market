@@ -71,7 +71,7 @@ async def test_agent_edit_prompt_and_deps_versioned(client, publisher_headers, a
 
     # 实例化：按包内 dependencies.json 动态组装
     r = await client.post(
-        f"/api/runtime/agents/{persona}/instances", headers=publisher_headers, json={"task": "x"}
+        f"/api/runtime/agents/{persona}/instances", headers=admin_headers, json={"task": "x"}
     )
     assert r.status_code == 200, r.text
     runtime = r.json()["result"]["runtime"]
