@@ -22,11 +22,15 @@ def _out(cap: Capability, *, added: bool, owned: bool) -> dict:
 
 
 @router.get("/capabilities")
-async def my_capabilities(db: DbSession, user: CurrentUser, scope: str = "all"):
+async def my_capabilities(
+    db: DbSession, user: CurrentUser, scope: str = "all", include_components: bool = False
+):
     """我的能力列表：scope=all | added（从市场加入）| owned（我创建的）。
 
     每个逻辑能力只展示一个“当前版本”（最新版本）；若存在草稿/被打回版本，
     附带 draft_* 信息供编辑入口使用（编辑仍可操作草稿）。
+
+    include_components：默认 false，隐藏 plugin 拆出的子能力（仍可在 plugin 详情查看）。
     """
     rows = (
         await db.scalars(
@@ -89,6 +93,12 @@ async def my_capabilities(db: DbSession, user: CurrentUser, scope: str = "all"):
             item["has_draft"] = False
 
     result = list(items.values())
+    if not include_components:
+        result = [
+            i
+            for i in result
+            if "plugin-component" not in (i.get("tags") or [])
+        ]
     if scope == "added":
         result = [i for i in result if i["added"]]
     elif scope == "owned":
@@ -114,18 +124,32 @@ async def add_capability(data: MyCapabilityAdd, db: DbSession, user: CurrentUser
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "只有已发布（或弃用期内）的能力可以加入我的能力",
         )
-    exists = await db.scalar(
-        select(UserCapability.id).where(
-            and_(
-                UserCapability.user_id == user.id,
-                UserCapability.capability_id == cap.id,
+
+    ids = [cap.id]
+    if cap.type == "plugin":
+        from app.services.plugins import plugin_component_ids
+
+        ids.extend(plugin_component_ids(cap))
+
+    added = 0
+    for cid in ids:
+        exists = await db.scalar(
+            select(UserCapability.id).where(
+                and_(
+                    UserCapability.user_id == user.id,
+                    UserCapability.capability_id == cid,
+                )
             )
         )
-    )
-    if exists:
-        return MessageOut(message="已在你的能力中")
-    db.add(UserCapability(user_id=user.id, capability_id=cap.id))
+        if exists:
+            continue
+        db.add(UserCapability(user_id=user.id, capability_id=cid))
+        added += 1
     await db.commit()
+    if added == 0:
+        return MessageOut(message="已在你的能力中")
+    if cap.type == "plugin" and len(ids) > 1:
+        return MessageOut(message=f"已加入插件及其 {len(ids) - 1} 个组件")
     return MessageOut(message="已加入我的能力")
 
 

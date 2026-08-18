@@ -2,7 +2,7 @@
 
 基于 [README](README)（设计文档）实现的公司内部 AI 能力公共市场：
 
-- **四类能力**：Agent、工具、技能、MCP（另支持第 5 类 workflow 编排）
+- **四类能力**：Agent、工具、技能、MCP（另支持 workflow 编排与 **plugin 组合包**）
 - **页面结构**：能力市场（浏览+加入）、我的能力（创建/加入/调用调试）、管理后台（审核/下架/统计/用户）、个人中心；工作流作为能力类型，不单开页面
 - **统一门户**：能力浏览 / 搜索 / 详情 / 评分评论 / 订阅通知
 - **发布-审核-上架流程**：草稿 → 提交审核 → 通过/驳回/打回 → 正式版 → 弃用 → 归档；
@@ -321,6 +321,21 @@ Agent 在同一个编辑页完成提示词与绑定能力编辑，保存即生�
   Agent 运行时与工作流 MCP 节点通过网关连接任意语言的远程 MCP server（占位符 `${ENV}` / `${ENV:default}` 从环境变量解析）。
 - 管理接口：`/api/admin/mcp-gateway/servers`（仅管理员，CRUD + 连接测试）；管理后台 →「MCP 网关」可视化操作。
 - 演示服务：`backend/scripts/demo_mcp_server.py`（FastMCP stdio），可在管理后台注册 `python /app/backend/scripts/demo_mcp_server.py` 立即联调。
+
+## Plugin（一键上架）
+
+对齐 Cursor / Agent Plugins：创建类型为 `plugin` 的草稿后，上传单个 zip：
+
+```text
+plugin.json                 # 或 .cursor-plugin/plugin.json
+agents/<name>/agent.json
+agents/<name>/PROMPT.md
+skills/<name>/SKILL.md
+mcp.json                    # { "mcpServers": { ... } }
+tools/<name>/...            # 可选
+```
+
+平台自动拆出子能力；市场只展示一条插件；「加入我的能力」一键带上全部组件；发布插件时子能力一并上架。
 
 ## Docker 部署
 

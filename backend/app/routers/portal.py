@@ -56,11 +56,19 @@ async def browse_capabilities(
     category: str = "",
     status: str = "",
     visibility: str = "",
+    skill: str = "",
+    mcp: str = "",
+    include_components: bool = False,
     sort: str = "latest",
     page: int = Query(1, ge=1),
     page_size: int = Query(24, ge=1, le=100),
 ):
-    """浏览市场：默认只展示已发布能力，且每个逻辑能力只保留最新版本。"""
+    """浏览市场：默认只展示已发布能力，且每个逻辑能力只保留最新版本。
+
+    skill / mcp：按 Agent 内嵌能力名筛选（匹配 input_schema.embedded_*）。
+    include_components：为 false 时隐藏「未发布」的 plugin 拆出子能力；
+    已发布 / 弃用的组件始终可搜，供其他 Agent 依赖选用。
+    """
     conditions: list = []
     visibility_where = _visibility_where(user)
     if visibility_where is not None:
@@ -93,6 +101,15 @@ async def browse_capabilities(
         stmt = stmt.where(where_clause)
     all_caps = list((await db.scalars(stmt)).all())
 
+    # 未发布的 plugin 拆出子能力默认隐藏；已发布/弃用的可搜可依赖
+    if not include_components:
+        all_caps = [
+            c
+            for c in all_caps
+            if "plugin-component" not in (c.tags or [])
+            or c.status in ("published", "deprecated")
+        ]
+
     # 每个逻辑能力（名称 + 类型）只保留最新版本
     latest: dict[tuple[str, str], Capability] = {}
     for cap in all_caps:
@@ -101,6 +118,50 @@ async def browse_capabilities(
         if cur is None or parse_semver(cap.version) > parse_semver(cur.version):
             latest[key] = cap
     caps = list(latest.values())
+
+    def _embedded_names(cap: Capability, key: str) -> set[str]:
+        schema = cap.input_schema or {}
+        items = schema.get(key) or []
+        return {
+            str(i.get("name")).strip()
+            for i in items
+            if isinstance(i, dict) and i.get("name")
+        }
+
+    if skill:
+        skill_q = skill.strip().lower()
+        caps = [
+            c
+            for c in caps
+            if (c.type == "skill" and c.name.lower() == skill_q)
+            or any(n.lower() == skill_q for n in _embedded_names(c, "embedded_skills"))
+            or (
+                c.type == "plugin"
+                and any(
+                    isinstance(x, dict)
+                    and x.get("type") == "skill"
+                    and str(x.get("name", "")).lower() == skill_q
+                    for x in ((c.input_schema or {}).get("components") or [])
+                )
+            )
+        ]
+    if mcp:
+        mcp_q = mcp.strip().lower()
+        caps = [
+            c
+            for c in caps
+            if (c.type == "mcp" and c.name.lower() == mcp_q)
+            or any(n.lower() == mcp_q for n in _embedded_names(c, "embedded_mcp"))
+            or (
+                c.type == "plugin"
+                and any(
+                    isinstance(x, dict)
+                    and x.get("type") == "mcp"
+                    and str(x.get("name", "")).lower() == mcp_q
+                    for x in ((c.input_schema or {}).get("components") or [])
+                )
+            )
+        ]
 
     if sort == "usage":
         caps.sort(key=lambda c: c.usage_count, reverse=True)
@@ -123,7 +184,10 @@ async def browse_capabilities(
 
 @router.get("/capabilities/sync", response_model=list[dict])
 async def sync_capabilities(db: DbSession, user: OptionalUser):
-    """同步接口：返回各能力的最新发布版本/商业包，供 Agent 等消费者拉取目录。"""
+    """同步接口：返回各能力的最新发布版本/商业包，供 Agent 等消费者拉取目录。
+
+    含已发布的 plugin 拆出组件（skill/mcp 等），便于其他 Agent 依赖复用。
+    """
     visible = await get_visible_capabilities(db, user)
     published = [c for c in visible if c.status in ("published", "deprecated")]
     latest: dict[tuple[str, str], Capability] = {}
@@ -211,7 +275,14 @@ async def capability_detail(cap_id: str, db: DbSession, user: OptionalUser):
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
     same_name = [c for c in visible if c.name == cap.name]
-    return _to_out(cap, same_name)
+    out = _to_out(cap, same_name)
+    if cap.type == "agent":
+        schema = out.input_schema or {}
+        if schema.get("embedded_skills") is not None or schema.get("embedded_mcp") is not None:
+            from app.services.agent_metadata import enrich_embedded_with_market
+
+            out.input_schema = await enrich_embedded_with_market(db, schema)
+    return out
 
 
 @router.get("/capabilities/{cap_id}/versions", response_model=list[CapabilityOut])

@@ -4,31 +4,41 @@ import re
 from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, delete as sql_delete, func, select
 from sqlalchemy.orm import joinedload, selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
+    A2ATask,
+    AgentBinding,
     Capability,
+    CapabilityArtifact,
     Notification,
     Rating,
     Review,
     Subscription,
+    UsageEvent,
     User,
+    UserCapability,
+    WorkflowExecution,
 )
+from app.storage import get_storage
 from app.schemas import ArtifactOut, CapabilityCreate, CapabilityOut, CapabilityUpdate
 
 SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
 STATUS_FLOW: dict[str, set[str]] = {
     "draft": {"reviewing"},
-    "reviewing": {"published", "rejected", "returned"},
+    "reviewing": {"published", "rejected", "returned", "draft"},
     "rejected": {"reviewing", "archived"},
     "returned": {"reviewing", "archived"},
     "published": {"deprecated", "archived"},
     "deprecated": {"archived", "published"},
     "archived": set(),
 }
+
+EDITABLE_STATUSES = {"draft", "returned", "rejected"}
+DELETABLE_STATUSES = {"draft", "returned", "rejected", "reviewing"}
 
 
 def parse_semver(version: str) -> tuple[int, int, int]:
@@ -152,9 +162,62 @@ async def create_capability(
     return cap
 
 
+async def _sibling_count(db: AsyncSession, cap: Capability) -> int:
+    return (
+        await db.scalar(
+            select(func.count())
+            .select_from(Capability)
+            .where(and_(Capability.name == cap.name, Capability.id != cap.id))
+        )
+    ) or 0
+
+
+async def _clear_artifacts(db: AsyncSession, cap: Capability) -> None:
+    storage = get_storage()
+    rows = (
+        await db.scalars(
+            select(CapabilityArtifact).where(CapabilityArtifact.capability_id == cap.id)
+        )
+    ).all()
+    for artifact in rows:
+        try:
+            storage.delete(artifact.uri)
+        except Exception:
+            pass
+        await db.delete(artifact)
+
+
 async def update_capability(
     db: AsyncSession, cap: Capability, data: CapabilityUpdate
 ) -> Capability:
+    siblings = await _sibling_count(db, cap)
+    if data.name is not None and data.name != cap.name:
+        if siblings:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "该能力已有其他版本，不能改名"
+            )
+        taken = await db.scalar(
+            select(Capability.id).where(
+                and_(
+                    Capability.name == data.name,
+                    Capability.version == cap.version,
+                    Capability.id != cap.id,
+                )
+            )
+        )
+        if taken:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, f"能力 {data.name} 已存在版本 {cap.version}"
+            )
+        cap.name = data.name
+    if data.type is not None and data.type != cap.type:
+        if siblings:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "该能力已有其他版本，不能更改类型"
+            )
+        await _clear_artifacts(db, cap)
+        cap.type = data.type
+        cap.input_schema = {}
     if data.description is not None:
         cap.description = data.description
     if data.category is not None:
@@ -170,6 +233,46 @@ async def update_capability(
     await db.commit()
     await db.refresh(cap)
     return cap
+
+
+async def withdraw_capability(db: AsyncSession, cap: Capability, user: User) -> Capability:
+    _transition(cap, "draft")
+    db.add(
+        Review(
+            capability_id=cap.id,
+            reviewer_id=user.id,
+            action="withdrawn",
+            comment="作者撤回审核",
+        )
+    )
+    await db.commit()
+    await db.refresh(cap)
+    return cap
+
+
+async def delete_capability(db: AsyncSession, cap: Capability) -> None:
+    storage = get_storage()
+    rows = (
+        await db.scalars(
+            select(CapabilityArtifact).where(CapabilityArtifact.capability_id == cap.id)
+        )
+    ).all()
+    for artifact in rows:
+        try:
+            storage.delete(artifact.uri)
+        except Exception:
+            pass
+    cid = cap.id
+    await db.execute(sql_delete(CapabilityArtifact).where(CapabilityArtifact.capability_id == cid))
+    await db.execute(sql_delete(Review).where(Review.capability_id == cid))
+    await db.execute(sql_delete(Rating).where(Rating.capability_id == cid))
+    await db.execute(sql_delete(UsageEvent).where(UsageEvent.capability_id == cid))
+    await db.execute(sql_delete(UserCapability).where(UserCapability.capability_id == cid))
+    await db.execute(sql_delete(A2ATask).where(A2ATask.agent_id == cid))
+    await db.execute(sql_delete(WorkflowExecution).where(WorkflowExecution.workflow_id == cid))
+    await db.execute(sql_delete(AgentBinding).where(AgentBinding.agent_id == cid))
+    await db.delete(cap)
+    await db.commit()
 
 
 async def submit_for_review(db: AsyncSession, cap: Capability) -> Capability:
@@ -212,6 +315,10 @@ async def review_capability(
         )
 
     if target == "published":
+        if cap.type == "plugin":
+            from app.services.plugins import publish_plugin_components
+
+            await publish_plugin_components(db, cap)
         await _deprecate_other_published(db, cap)
         await _notify_subscribers(db, cap)
     await db.commit()

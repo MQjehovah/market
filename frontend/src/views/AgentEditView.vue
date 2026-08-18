@@ -162,7 +162,9 @@ onMounted(() => {
           </select>
           <select v-model="dep.name" class="select" style="flex: 1">
             <option value="">选择能力…</option>
-            <option v-for="c in depCaps(dep.type)" :key="c.id" :value="c.name">{{ c.name }} v{{ c.version }}</option>
+            <option v-for="c in depCaps(dep.type)" :key="c.id" :value="c.name">
+              {{ c.name }} v{{ c.version }}{{ (c.tags || []).includes('plugin-component') ? ' · 来自插件' : '' }}
+            </option>
           </select>
           <input v-model="dep.version" class="input" style="max-width: 130px" placeholder="版本(留空=最新)" />
           <button class="btn btn-sm btn-danger" @click="form.deps.splice(i, 1)">移除</button>

@@ -600,7 +600,7 @@ onMounted(load)
         </p>
         <div class="flex mt-16" style="gap: 10px; flex-wrap: wrap">
           <select v-model="debugType" class="select" style="max-width: 160px" @change="selectDebugType(debugType)">
-            <option v-for="t in ['tool', 'agent', 'skill', 'mcp', 'workflow']" :key="t" :value="t">{{ TYPE_LABELS[t] }}</option>
+            <option v-for="t in ['tool', 'agent', 'skill', 'mcp', 'workflow', 'plugin']" :key="t" :value="t">{{ TYPE_LABELS[t] }}</option>
           </select>
           <select v-model="debugName" class="select" style="max-width: 320px">
             <option value="">选择已发布的能力…</option>

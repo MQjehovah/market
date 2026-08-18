@@ -77,8 +77,17 @@ class MarketClient:
             return item
         return None
 
-    def download(self, name: str, version: str = "") -> tuple[bytes, dict[str, str]]:
-        """下载能力包 zip，返回 (内容, 响应头)。"""
+    def download(self, name: str, version: str = "", cap_type: str = "") -> tuple[bytes, dict[str, str]]:
+        """下载能力包 zip，返回 (内容, 响应头)。
+
+        cap_type 用于同名不同类型的消歧（目录查找）；下载 URL 仍按 name+version。
+        """
+        if cap_type:
+            item = self.find_in_catalog(name, cap_type)
+            if item is None:
+                raise CapabilityLayerError(f"目录中未找到 {cap_type}:{name}")
+            if not version:
+                version = str(item.get("version") or "")
         url = f"{self.base_url}/api/capabilities/{quote(name, safe='')}/download"
         if version:
             url += f"?version={quote(version, safe='')}"

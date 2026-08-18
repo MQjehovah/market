@@ -3,7 +3,8 @@ export const TYPE_LABELS = {
   tool: '工具',
   skill: '技能',
   mcp: 'MCP',
-  workflow: '工作流'
+  workflow: '工作流',
+  plugin: 'Plugin'
 }
 
 export const STATUS_LABELS = {
@@ -37,7 +38,18 @@ export const TYPE_CATEGORIES = {
   agent: ['开发助手类', '运维管理类', '业务分析类', '客服支持类', '通用助手类'],
   tool: ['文件操作', '数据查询', 'API调用', '代码分析', '文档处理', '消息通知', '系统管理', '安全审计'],
   skill: ['开发流程', '测试', '文档', '数据分析', '通用效率', '沟通协作'],
-  mcp: ['数据库连接', 'DevOps工具', '项目管理', '消息通知', '数据分析', '内部系统']
+  mcp: ['数据库连接', 'DevOps工具', '项目管理', '消息通知', '数据分析', '内部系统'],
+  workflow: ['自动化', '数据分析', '开发流程', '通用效率'],
+  plugin: ['工单场景', '业务分析', '开发助手', '运维管理', '通用场景']
+}
+
+export const PACKAGE_HINTS = {
+  agent: 'agent.json + PROMPT.md',
+  tool: 'tool.json + schema.json + implementation/tool.py',
+  skill: 'skill.json + SKILL.md',
+  mcp: 'mcp.json + connection.json + tools.json + security.json',
+  workflow: 'workflow.json',
+  plugin: 'plugin.json + agents/ + skills/ + mcp.json（一键上传，对齐 Cursor / Agent Plugins）'
 }
 
 export function formatDate(value) {

@@ -200,11 +200,22 @@ async function create() {
         </details>
       </div>
 
+      <div v-if="form.type === 'plugin'" class="field mt-12">
+        <label>Plugin 一键上架</label>
+        <div class="muted" style="font-size: 13px; line-height: 1.5">
+          对齐 Cursor / Agent Plugins：创建一个草稿后，在详情页上传单个 zip，平台会自动拆出 Agent、技能、MCP（及可选工具）。
+          包内需含 <code>plugin.json</code>（或 <code>.cursor-plugin/plugin.json</code>），以及
+          <code>agents/</code>、<code>skills/</code>、<code>mcp.json</code> 中至少一类。
+        </div>
+      </div>
+
       <div v-if="error" class="alert alert-error mt-12">{{ error }}</div>
 
       <div class="modal-foot">
         <span class="muted" style="font-size: 12px">
-          创建后为草稿，可在详情页上传能力包并提交审核（审核由管理员完成）
+          {{ form.type === 'plugin'
+            ? '创建后请在详情页上传 plugin zip；审核通过后用户可一键加入整个插件'
+            : '创建后为草稿，可在详情页上传能力包并提交审核（审核由管理员完成）' }}
         </span>
         <div class="flex" style="gap: 10px">
           <button class="btn" @click="emit('close')">取消</button>

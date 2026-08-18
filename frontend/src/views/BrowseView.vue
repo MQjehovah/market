@@ -12,7 +12,7 @@ const total = ref(0)
 const page = ref(1)
 const pageSize = 12
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
-const filters = reactive({ q: '', type: '', category: '', sort: 'latest' })
+const filters = reactive({ q: '', type: '', category: '', skill: '', mcp: '', sort: 'latest' })
 const myIds = ref(new Set())
 const notice = ref('')
 
@@ -70,7 +70,7 @@ async function removeFromMy(cap) {
 }
 
 function reset() {
-  Object.assign(filters, { q: '', type: '', category: '', sort: 'latest' })
+  Object.assign(filters, { q: '', type: '', category: '', skill: '', mcp: '', sort: 'latest' })
   page.value = 1
   load()
 }
@@ -118,6 +118,8 @@ onMounted(() => {
         <option value="usage">使用最多</option>
         <option value="rating">评分最高</option>
       </select>
+      <input v-model="filters.skill" class="input" style="max-width: 160px" placeholder="按 Skill 名筛选" @keyup.enter="applyFilter" />
+      <input v-model="filters.mcp" class="input" style="max-width: 160px" placeholder="按 MCP 名筛选" @keyup.enter="applyFilter" />
       <button class="btn btn-primary" @click="applyFilter">搜索</button>
       <button class="btn" @click="reset">重置</button>
     </div>

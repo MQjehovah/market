@@ -10,7 +10,27 @@ const props = defineProps({
 })
 const emit = defineEmits(['add', 'remove'])
 
-const icon = computed(() => ({ agent: '🤖', tool: '🛠️', skill: '📚', mcp: '🔌' }[props.cap.type]))
+const icon = computed(() => ({ agent: '🤖', tool: '🛠️', skill: '📚', mcp: '🔌', workflow: '🔀', plugin: '📦' }[props.cap.type]))
+
+function isGarbageLabel(value) {
+  if (!value || typeof value !== 'string') return true
+  const t = value.trim()
+  if (!t) return true
+  // 历史乱码：整段变成问号
+  if (/^\?+$/.test(t)) return true
+  return false
+}
+
+const displayCategory = computed(() => {
+  const c = props.cap.category
+  return isGarbageLabel(c) ? '' : c
+})
+
+const displayTags = computed(() =>
+  (props.cap.tags || []).filter((t) => t !== 'plugin-component' && !isGarbageLabel(t)).slice(0, 3)
+)
+
+const fromPlugin = computed(() => (props.cap.tags || []).includes('plugin-component'))
 </script>
 
 <template>
@@ -23,8 +43,9 @@ const icon = computed(() => ({ agent: '🤖', tool: '🛠️', skill: '📚', mc
       <h3 class="cap-name">{{ cap.name }}</h3>
       <p class="cap-desc">{{ cap.description || '暂无描述' }}</p>
       <div class="cap-tags">
-        <span v-if="cap.category" class="badge">{{ cap.category }}</span>
-        <span v-for="t in (cap.tags || []).slice(0, 3)" :key="t" class="badge">{{ t }}</span>
+        <span v-if="displayCategory" class="badge">{{ displayCategory }}</span>
+        <span v-if="fromPlugin" class="badge badge-primary">来自插件</span>
+        <span v-for="t in displayTags" :key="t" class="badge">{{ t }}</span>
       </div>
       <div class="cap-meta">
         <span>{{ TYPE_LABELS[cap.type] }} · v{{ cap.version }}</span>

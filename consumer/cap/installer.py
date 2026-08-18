@@ -261,3 +261,202 @@ def install_agent(
     )
     print(f"[install] 完成：{agent_dir}")
     return manifest
+
+
+def install_skill(
+    client: MarketClient,
+    name: str,
+    *,
+    version: str = "",
+    target: str | Path,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """独立安装 skill 到 target/skills/<name>/。"""
+    target_path = Path(target).resolve()
+    skill_dir = target_path / "skills" / name
+    if dry_run:
+        print(f"[dry-run] 将下载 skill「{name}」v{version or 'latest'} 到 {skill_dir}")
+        return {"name": name, "type": "skill", "dry_run": True}
+
+    content, headers = client.download(name, version, cap_type="skill")
+    files = extract_zip(content)
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    for rel, data in files.items():
+        if rel == "skill.json":
+            continue
+        out = skill_dir / rel
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(data)
+    manifest = {
+        "name": name,
+        "type": "skill",
+        "version": headers.get("x-capability-version") or version or "latest",
+        "installed_at": datetime.now(timezone.utc).isoformat(),
+        "path": str(skill_dir),
+    }
+    (skill_dir / "installed.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    print(f"[install] skill:{name} -> {skill_dir}")
+    return manifest
+
+
+def install_mcp(
+    client: MarketClient,
+    name: str,
+    *,
+    version: str = "",
+    target: str | Path,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """独立安装 mcp：合并 connection.json 到 target/mcp_servers.json。"""
+    target_path = Path(target).resolve()
+    mcp_file = target_path / "mcp_servers.json"
+    if dry_run:
+        print(f"[dry-run] 将下载 mcp「{name}」并合并到 {mcp_file}")
+        return {"name": name, "type": "mcp", "dry_run": True}
+
+    content, headers = client.download(name, version, cap_type="mcp")
+    files = extract_zip(content)
+    conn: dict[str, Any] = {}
+    raw = files.get("connection.json")
+    if raw is not None:
+        try:
+            conn = json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            conn = {}
+    conn.setdefault("name", name)
+    conn.setdefault("enabled", False)
+
+    existing: list[dict[str, Any]] = []
+    if mcp_file.is_file():
+        try:
+            existing = json.loads(mcp_file.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            existing = []
+    if not isinstance(existing, list):
+        existing = []
+    merged = _merge_mcp_config(existing, conn)
+    target_path.mkdir(parents=True, exist_ok=True)
+    mcp_file.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
+    manifest = {
+        "name": name,
+        "type": "mcp",
+        "version": headers.get("x-capability-version") or version or "latest",
+        "installed_at": datetime.now(timezone.utc).isoformat(),
+        "path": str(mcp_file),
+    }
+    print(f"[install] mcp:{name} -> {mcp_file}（凭据为 ${{VAR}} 占位，需人工启用）")
+    return manifest
+
+
+def install_plugin(
+    client: MarketClient,
+    name: str,
+    *,
+    version: str = "",
+    target: str | Path,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """安装 plugin：整包解压到 target/plugins/<name>/，并尽量安装已发布子组件。"""
+    target_path = Path(target).resolve()
+    plugin_dir = target_path / "plugins" / name
+    if dry_run:
+        print(f"[dry-run] 将下载 plugin「{name}」v{version or 'latest'} 到 {plugin_dir}")
+        return {"name": name, "type": "plugin", "dry_run": True}
+
+    content, headers = client.download(name, version, cap_type="plugin")
+    files = extract_zip(content)
+    plugin_dir.mkdir(parents=True, exist_ok=True)
+    for rel, data in files.items():
+        out = plugin_dir / rel
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(data)
+
+    # 尝试从市场详情拉取 components 并安装已发布子能力
+    components: list[dict[str, Any]] = []
+    try:
+        item = client.find_in_catalog(name, "plugin")
+        # sync 不含 components；再拉详情需能力 id。用包内 plugin.json + 目录启发式即可。
+        meta_raw = files.get("plugin.json") or files.get(".cursor-plugin/plugin.json")
+        if meta_raw:
+            meta = json.loads(meta_raw.decode("utf-8"))
+        else:
+            meta = {}
+        # 若目录里有 skills/ mcp.json，记录组件清单
+        for path in files:
+            if path.startswith("skills/") and path.endswith("/SKILL.md"):
+                skill_name = path[len("skills/") : -len("/SKILL.md")]
+                if skill_name and "/" not in skill_name:
+                    components.append({"type": "skill", "name": skill_name})
+        mcp_cfg = files.get("mcp.json")
+        if mcp_cfg:
+            try:
+                cfg = json.loads(mcp_cfg.decode("utf-8"))
+                servers = cfg.get("mcpServers") or {}
+                for srv_name in servers:
+                    components.append({"type": "mcp", "name": srv_name})
+            except (ValueError, UnicodeDecodeError):
+                pass
+        _ = item, meta  # catalog presence checked via download
+    except Exception:  # noqa: BLE001
+        components = []
+
+    installed_children: list[dict[str, Any]] = []
+    for comp in components:
+        ctype, cname = comp.get("type"), comp.get("name")
+        if not ctype or not cname:
+            continue
+        try:
+            if ctype == "skill":
+                child = install_skill(
+                    client, cname, target=target_path, dry_run=False
+                )
+            elif ctype == "mcp":
+                child = install_mcp(
+                    client, cname, target=target_path, dry_run=False
+                )
+            else:
+                continue
+            installed_children.append(child)
+        except Exception as exc:  # noqa: BLE001
+            installed_children.append(
+                {"name": cname, "type": ctype, "installed": False, "note": str(exc)}
+            )
+            print(f"  [skip] {ctype}:{cname} — {exc}")
+
+    manifest = {
+        "name": name,
+        "type": "plugin",
+        "version": headers.get("x-capability-version") or version or "latest",
+        "installed_at": datetime.now(timezone.utc).isoformat(),
+        "path": str(plugin_dir),
+        "components": installed_children,
+    }
+    (plugin_dir / "installed.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    print(f"[install] plugin:{name} -> {plugin_dir}")
+    return manifest
+
+
+def install_capability(
+    client: MarketClient,
+    name: str,
+    *,
+    cap_type: str = "agent",
+    version: str = "",
+    target: str | Path,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """按类型安装能力：agent / skill / mcp / plugin。"""
+    t = (cap_type or "agent").lower()
+    if t == "agent":
+        return install_agent(client, name, version=version, target=target, dry_run=dry_run)
+    if t == "skill":
+        return install_skill(client, name, version=version, target=target, dry_run=dry_run)
+    if t == "mcp":
+        return install_mcp(client, name, version=version, target=target, dry_run=dry_run)
+    if t == "plugin":
+        return install_plugin(client, name, version=version, target=target, dry_run=dry_run)
+    raise ValueError(f"不支持的安装类型：{cap_type}")

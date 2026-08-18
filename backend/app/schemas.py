@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-CAPABILITY_TYPES = ("agent", "tool", "skill", "mcp", "workflow")
+CAPABILITY_TYPES = ("agent", "tool", "skill", "mcp", "workflow", "plugin")
 VISIBILITY_LEVELS = ("private", "team", "internal", "public")
 STATUS_LEVELS = ("draft", "reviewing", "published", "deprecated", "archived", "rejected", "returned")
 ROLES = ("admin", "publisher", "user")
@@ -74,7 +74,7 @@ class TokenOut(BaseModel):
 class CapabilityBase(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str = Field(default="", max_length=20000)
-    type: Literal["agent", "tool", "skill", "mcp", "workflow"]
+    type: Literal["agent", "tool", "skill", "mcp", "workflow", "plugin"]
     version: str = Field(default="0.1.0", max_length=50)
     category: str = Field(default="", max_length=100)
     tags: list[str] = Field(default_factory=list)
@@ -101,6 +101,8 @@ class CapabilityCreate(CapabilityBase):
 
 
 class CapabilityUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    type: Literal["agent", "tool", "skill", "mcp", "workflow", "plugin"] | None = None
     description: str | None = None
     category: str | None = Field(default=None, max_length=100)
     tags: list[str] | None = None

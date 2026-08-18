@@ -30,9 +30,11 @@ const schema = computed(() => props.cap?.input_schema || {})
 const hasSchema = computed(() => Object.keys(schema.value.properties || {}).length > 0)
 const isTool = computed(() => props.cap?.type === 'tool')
 const isAgent = computed(() => props.cap?.type === 'agent')
+const isPlugin = computed(() => props.cap?.type === 'plugin')
 const isSkill = computed(() => props.cap?.type === 'skill')
 const isWorkflow = computed(() => props.cap?.type === 'workflow')
 const isMcp = computed(() => props.cap?.type === 'mcp')
+const isAgentLike = computed(() => isAgent.value || isPlugin.value)
 const selectedMcpTool = computed(() => mcpTools.value.find((t) => t.name === mcpSelected.value) || null)
 
 function defaultValue(prop) {
@@ -138,7 +140,7 @@ async function run() {
     if (isTool.value) {
       path = `/runtime/tools/${name}/invoke`
       payload = { params: mode.value === 'form' ? collectToolParams() : JSON.parse(jsonInput.value || '{}') }
-    } else if (isAgent.value) {
+    } else if (isAgentLike.value) {
       path = `/runtime/agents/${name}/tasks`
       payload = { task: textInput.value }
     } else if (isSkill.value) {
@@ -214,7 +216,7 @@ const resultState = computed(() => {
       extra: r.result?.execution ? `执行方式：${r.result.execution}` : ''
     }
   }
-  if (isAgent.value) {
+  if (isAgentLike.value) {
     return {
       ok: r.mode === 'llm',
       label: r.mode === 'llm' ? '真实执行（LLM）' : '模拟执行',
@@ -300,11 +302,14 @@ function stepBadge(name) {
         </div>
       </template>
 
-      <!-- Agent / 技能 -->
-      <template v-else-if="isAgent || isSkill">
+      <!-- Agent / 项目 / 技能 -->
+      <template v-else-if="isAgentLike || isSkill">
+        <div v-if="isPlugin" class="muted" style="font-size: 13px; margin-bottom: 8px">
+          将委派给插件内主 Agent 执行
+        </div>
         <div class="field">
-          <label>{{ isAgent ? '任务内容' : '任务上下文' }}</label>
-          <textarea v-model="textInput" class="textarea" rows="6" :placeholder="isAgent ? '如：生成上月销售报表' : '如：写测试'"></textarea>
+          <label>{{ isAgentLike ? '任务内容' : '任务上下文' }}</label>
+          <textarea v-model="textInput" class="textarea" rows="6" :placeholder="isAgentLike ? '如：生成上月销售报表' : '如：写测试'"></textarea>
         </div>
       </template>
 
@@ -365,7 +370,7 @@ function stepBadge(name) {
             <button class="btn btn-sm" @click="copyResult">{{ copied ? '已复制' : '复制' }}</button>
           </div>
         </div>
-        <div v-if="isAgent && result.steps && result.steps.length" class="steps mt-16">
+        <div v-if="isAgentLike && result.steps && result.steps.length" class="steps mt-16">
           <h4 style="margin: 0 0 10px">执行过程（{{ result.steps.length }} 步）</h4>
           <div v-for="(s, i) in result.steps" :key="i" class="step">
             <template v-if="s.kind === 'call'">

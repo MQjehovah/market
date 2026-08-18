@@ -17,15 +17,19 @@ from app.schemas import (
     VersionCreate,
 )
 from app.services.capabilities import (
+    DELETABLE_STATUSES,
+    EDITABLE_STATUSES,
     create_capability,
     create_new_version,
+    delete_capability,
     get_visible_capabilities,
     next_version,
     submit_for_review,
     to_capability_out,
     update_capability,
+    withdraw_capability,
 )
-from app.services.packages import validate_package
+from app.services.packages import prepare_package
 from app.storage import get_storage
 
 router = APIRouter(prefix="/api/publish", tags=["publish"])
@@ -74,9 +78,25 @@ async def update(cap_id: str, data: CapabilityUpdate, db: DbSession, user: Curre
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
     _require_owner(cap, user)
-    if cap.status not in ("draft", "returned"):
-        raise HTTPException(status.HTTP_409_CONFLICT, "仅草稿或被打回的能力可以编辑")
+    if cap.status not in EDITABLE_STATUSES:
+        raise HTTPException(status.HTTP_409_CONFLICT, "仅草稿、打回或驳回的能力可以编辑")
     cap = await update_capability(db, cap, data)
+    cap = await db.scalar(
+        select(Capability)
+        .options(selectinload(Capability.artifacts), joinedload(Capability.author))
+        .where(Capability.id == cap.id)
+    )
+    return to_capability_out(cap, author_name=user.username)
+
+
+@router.post("/capabilities/{cap_id}/withdraw", response_model=CapabilityOut)
+async def withdraw(cap_id: str, db: DbSession, user: CurrentUser):
+    _require_creator(user)
+    cap = await db.get(Capability, cap_id)
+    if cap is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
+    _require_owner(cap, user)
+    cap = await withdraw_capability(db, cap, user)
     return to_capability_out(cap, author_name=user.username)
 
 
@@ -125,16 +145,37 @@ async def upload_artifact(cap_id: str, db: DbSession, user: CurrentUser, file: U
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
     _require_owner(cap, user)
     content = await file.read()
-    details = validate_package(cap.type, content)
+    content, details = prepare_package(cap.type, content)
     if cap.type == "tool" and details.get("schema"):
         cap.input_schema = details["schema"]
+    if cap.type == "agent":
+        import zipfile
+
+        from app.services.agent_metadata import extract_agent_embedded
+
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            logical = {logical: zf.read(raw) for logical, raw in details["files"].items()}
+        embedded = extract_agent_embedded(logical)
+        # 保留既有非嵌入字段，仅刷新 embedded_*
+        schema = dict(cap.input_schema or {})
+        schema["embedded_skills"] = embedded["embedded_skills"]
+        schema["embedded_mcp"] = embedded["embedded_mcp"]
+        cap.input_schema = schema
+    if cap.type == "plugin":
+        from app.services.plugins import materialize_plugin_components
+
+        await materialize_plugin_components(db, user, cap, content, details)
     info = get_storage().save(cap.id, file.filename or "package.zip", io.BytesIO(content))
     from app.models import CapabilityArtifact
 
     artifact = CapabilityArtifact(capability_id=cap.id, **info, filename=file.filename or "package.zip")
     db.add(artifact)
     await db.commit()
-    await db.refresh(cap)
+    cap = await db.scalar(
+        select(Capability)
+        .options(selectinload(Capability.artifacts), joinedload(Capability.author))
+        .where(Capability.id == cap.id)
+    )
     return to_capability_out(cap, author_name=user.username)
 
 
@@ -157,14 +198,13 @@ async def download_artifact(cap_id: str, db: DbSession, user: CurrentUser):
 
 
 @router.delete("/capabilities/{cap_id}", response_model=MessageOut)
-async def delete_capability(cap_id: str, db: DbSession, user: CurrentUser):
+async def remove_capability(cap_id: str, db: DbSession, user: CurrentUser):
     _require_creator(user)
     cap = await db.get(Capability, cap_id)
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
     _require_owner(cap, user)
-    if cap.status not in ("draft", "rejected", "returned"):
-        raise HTTPException(status.HTTP_409_CONFLICT, "仅草稿、驳回或打回状态的能力可以删除")
-    await db.delete(cap)
-    await db.commit()
+    if cap.status not in DELETABLE_STATUSES:
+        raise HTTPException(status.HTTP_409_CONFLICT, "仅草稿、待审、驳回或打回状态的能力可以删除")
+    await delete_capability(db, cap)
     return MessageOut(message="已删除")

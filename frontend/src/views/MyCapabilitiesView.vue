@@ -65,7 +65,6 @@ function onCreated(cap) {
 
 function switchScope(s) {
   scope.value = s
-  active.value = null
   load()
 }
 
@@ -89,10 +88,21 @@ async function submitDraft(cap) {
   }
 }
 
+async function withdraw(cap) {
+  try {
+    await api.post(`/publish/capabilities/${cap.id}/withdraw`)
+    notice.value = `「${cap.name}」已撤回审核，可修改类型或删除`
+    await load()
+  } catch (e) {
+    error.value = e.message
+  }
+}
+
 async function removeDraft(cap) {
-  if (!confirm(`确认删除「${cap.name} v${cap.version}」？此操作不可恢复。`)) return
+  if (!confirm(`确认删除「${cap.name} v${cap.version}」？删除后可使用该名称重新创建。`)) return
   try {
     await api.delete(`/publish/capabilities/${cap.id}`)
+    notice.value = `「${cap.name}」已删除`
     await load()
   } catch (e) {
     error.value = e.message
@@ -211,7 +221,12 @@ onMounted(load)
                 </template>
                 <template v-else-if="cap.owned && ['draft', 'returned', 'rejected'].includes(cap.status)">
                   <button class="btn btn-sm btn-success" @click="submit(cap)">提交审核</button>
+                  <router-link :to="`/capabilities/${cap.id}`" class="btn btn-sm">编辑类型</router-link>
                   <router-link v-if="cap.type === 'workflow'" :to="`/workflows/${cap.id}/edit`" class="btn btn-sm">可视化编辑</router-link>
+                  <button class="btn btn-sm btn-danger" @click="removeDraft(cap)">删除</button>
+                </template>
+                <template v-else-if="cap.owned && cap.status === 'reviewing'">
+                  <button class="btn btn-sm" @click="withdraw(cap)">撤回审核</button>
                   <button class="btn btn-sm btn-danger" @click="removeDraft(cap)">删除</button>
                 </template>
                 <button v-if="cap.added && !cap.owned" class="btn btn-sm" @click="removeFromMy(cap)">移除</button>
