@@ -65,6 +65,9 @@ const embeddedMcp = computed(() => {
   const schema = cap.value?.input_schema || {}
   return Array.isArray(schema.embedded_mcp) ? schema.embedded_mcp : []
 })
+const usedBy = computed(() => Array.isArray(cap.value?.used_by) ? cap.value.used_by : [])
+const parentPluginId = computed(() => cap.value?.parent_plugin_id || null)
+const isSkillOrMcp = computed(() => ['skill', 'mcp'].includes(cap.value?.type))
 const hasSiblings = computed(() => (versions.value || []).some((v) => v.id !== cap.value?.id))
 const canChangeIdentity = computed(() => canEdit.value && !hasSiblings.value)
 const editCategories = computed(() => TYPE_CATEGORIES[editForm.type] || [])
@@ -359,6 +362,8 @@ onMounted(() => {
         </div>
         <router-link v-if="cap.type === 'agent' && (isAdmin || isPublisher)" :to="`/agents/${encodeURIComponent(cap.name)}/edit`" class="btn">编辑 Agent</router-link>
         <router-link v-if="cap.type === 'skill' && (isOwner || isAdmin || isPublisher)" :to="`/skills/${encodeURIComponent(cap.name)}/edit`" class="btn">编辑技能</router-link>
+        <router-link v-if="cap.type === 'tool' && (isOwner || isAdmin || isPublisher)" :to="`/tools/${encodeURIComponent(cap.name)}/edit`" class="btn">编辑工具</router-link>
+        <router-link v-if="cap.type === 'mcp' && (isOwner || isAdmin || isPublisher)" :to="`/mcp/${encodeURIComponent(cap.name)}/edit`" class="btn">编辑 MCP</router-link>
         <router-link
           v-if="cap.type === 'workflow' && (canEdit || isAdmin || (authState.token && ['published', 'deprecated'].includes(cap.status)))"
           :to="`/workflows/${props.id}/edit`"
@@ -407,6 +412,37 @@ onMounted(() => {
         </table>
       </div>
 
+      <div v-if="parentPluginId" class="panel mt-24">
+        <h3>来自插件</h3>
+        <div class="muted" style="font-size: 13px">本能力由插件拆包生成，可返回父插件查看完整组合。</div>
+        <div class="mt-16">
+          <router-link :to="`/capabilities/${parentPluginId}`">查看父插件</router-link>
+        </div>
+      </div>
+
+      <div v-if="isSkillOrMcp && usedBy.length" class="panel mt-24">
+        <h3>被以下能力使用</h3>
+        <div class="muted" style="font-size: 13px">
+          来自 Agent 内嵌声明或 Plugin 组件引用。
+          <router-link :to="`/browse?${cap.type}=${encodeURIComponent(cap.name)}`">在市场中筛选</router-link>
+        </div>
+        <table class="table mt-16">
+          <thead>
+            <tr><th>类型</th><th>名称</th><th>版本</th><th></th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="u in usedBy" :key="u.capability_id">
+              <td>{{ TYPE_LABELS[u.type] || u.type }}</td>
+              <td>{{ u.name }}</td>
+              <td>v{{ u.version }}</td>
+              <td>
+                <router-link :to="`/capabilities/${u.capability_id}`">查看</router-link>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
       <div v-if="isAgent && (embeddedSkills.length || embeddedMcp.length)" class="panel mt-24">
         <h3>包含的 Skills / MCP</h3>
         <div class="muted" style="font-size: 13px">
@@ -422,12 +458,15 @@ onMounted(() => {
               <tr v-for="s in embeddedSkills" :key="s.name">
                 <td>{{ s.display_name || s.name }}</td>
                 <td class="muted">{{ s.description || '-' }}</td>
-                <td>{{ s.version ? `v${s.version}` : '-' }}</td>
+                <td>
+                  {{ s.version ? `v${s.version}` : '-' }}
+                  <span v-if="s.version_mismatch" class="badge badge-warning" title="与市场最新版本不一致">版本差异</span>
+                </td>
                 <td>
                   <router-link v-if="s.capability_id" :to="`/capabilities/${s.capability_id}`">
                     市场已收录
                   </router-link>
-                  <span v-else class="muted">-</span>
+                  <span v-else class="muted">市场未收录</span>
                 </td>
               </tr>
             </tbody>
@@ -443,12 +482,15 @@ onMounted(() => {
               <tr v-for="m in embeddedMcp" :key="m.name">
                 <td>{{ m.name }}</td>
                 <td class="muted">{{ m.description || '-' }}</td>
-                <td class="muted">{{ m.command || m.package || '-' }}</td>
+                <td class="muted">
+                  {{ m.command || m.package || '-' }}
+                  <span v-if="m.version_mismatch" class="badge badge-warning">版本差异</span>
+                </td>
                 <td>
                   <router-link v-if="m.capability_id" :to="`/capabilities/${m.capability_id}`">
                     市场已收录
                   </router-link>
-                  <span v-else class="muted">-</span>
+                  <span v-else class="muted">市场未收录</span>
                 </td>
               </tr>
             </tbody>

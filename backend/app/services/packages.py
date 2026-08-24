@@ -146,6 +146,48 @@ def _warn_hardcoded_env(env: Any, label: str) -> list[str]:
     return warnings
 
 
+def validate_skill_meta(meta: dict[str, Any], label: str = "skill.json", *, require_version: bool = True) -> str:
+    """共享 skill 元数据校验；返回规范化 name。"""
+    name = _resolve_meta_name(meta, label)
+    _check_name(name, label)
+    identity = meta.get("identity") if isinstance(meta.get("identity"), dict) else None
+    has_version = bool(meta.get("version") or (identity and identity.get("version")))
+    if require_version and not has_version:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"{label} \u7f3a\u5c11 identity.version\uff08\u6216\u9876\u5c42 version\uff09",
+        )
+    return name
+
+
+def validate_mcp_connection(connection: dict[str, Any], label: str = "connection.json") -> list[str]:
+    """共享 MCP connection 校验；返回 warnings。"""
+    if not isinstance(connection, dict):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{label} \u5fc5\u987b\u662f JSON \u5bf9\u8c61")
+    warnings = _warn_hardcoded_env(connection.get("env"), label)
+    transport = connection.get("transport") or connection.get("type")
+    if transport in ("stdio", None) and not connection.get("command") and not connection.get("url") and not connection.get("server"):
+        if connection.get("url") or connection.get("server"):
+            return warnings
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"{label} \u9700\u5305\u542b command\u3001url \u6216 server\uff08gateway\uff09\u4e4b\u4e00",
+        )
+    if transport in ("http", "sse", "streamable_http", "streamable-http") and not connection.get("url"):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"{label} transport={transport} \u65f6\u9700\u8981 url",
+        )
+    return warnings
+
+
+def validate_tool_schema(schema: Any, label: str = "schema.json") -> dict[str, Any]:
+    """共享 tool schema 校验。"""
+    if not isinstance(schema, dict):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{label} \u9876\u5c42\u5fc5\u987b\u662f JSON \u5bf9\u8c61")
+    return schema
+
+
 def _validate_agent_embedded(zf: zipfile.ZipFile, files: dict[str, str], meta: dict[str, Any]) -> list[str]:
     """Extra checks for agent packages: skill dirs, mcp config, name uniqueness."""
     warnings: list[str] = []
@@ -181,12 +223,8 @@ def _validate_agent_embedded(zf: zipfile.ZipFile, files: dict[str, str], meta: d
                         f"skills/{folder}/ \u7f3a\u5c11 SKILL.md",
                     )
             sj = _read_json(zf, files[logical], logical)
-            identity = sj.get("identity") if isinstance(sj.get("identity"), dict) else {}
-            sname = str(identity.get("name") or sj.get("name") or folder.split("/")[0])
-            if identity and not identity.get("version") and not sj.get("version"):
-                warnings.append(f"{logical} \u7f3a\u5c11 identity.version")
+            sname = validate_skill_meta(sj, logical, require_version=True)
             if sname and sname not in skill_names:
-                _check_name(sname, logical)
                 skill_names.append(sname)
 
     mcp_names: list[str] = []
@@ -201,6 +239,9 @@ def _validate_agent_embedded(zf: zipfile.ZipFile, files: dict[str, str], meta: d
                 )
             mcp_names.append(name)
             warnings.extend(_warn_hardcoded_env(srv.get("env"), f"mcp_servers[{name}]"))
+            # 内联声明：有 command 时按 connection 规则校验
+            if srv.get("command") or srv.get("url") or srv.get("server"):
+                warnings.extend(validate_mcp_connection(srv, f"mcp_servers[{name}]"))
 
     mcp_cfg = meta.get("mcp") if isinstance(meta.get("mcp"), dict) else {}
     for srv in mcp_cfg.get("required_servers") or []:
@@ -228,43 +269,21 @@ def _validate_agent_embedded(zf: zipfile.ZipFile, files: dict[str, str], meta: d
                     status.HTTP_422_UNPROCESSABLE_ENTITY,
                     f"{cfg_path} \u4e2d server '{name}' \u683c\u5f0f\u65e0\u6548",
                 )
-            if not srv.get("command") and not srv.get("url"):
-                raise HTTPException(
-                    status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    f"{cfg_path} \u4e2d server '{name}' \u7f3a\u5c11 command \u6216 url",
-                )
+            warnings.extend(validate_mcp_connection(srv, f"{cfg_path}[{name}]"))
             if str(name) not in mcp_names:
                 mcp_names.append(str(name))
-            warnings.extend(_warn_hardcoded_env(srv.get("env"), f"{cfg_path}[{name}]"))
 
     return warnings
 
 
 def _validate_skill_package(zf: zipfile.ZipFile, files: dict[str, str], meta: dict[str, Any]) -> None:
-    name = _resolve_meta_name(meta, "skill.json")
-    _check_name(name, "skill.json")
-    identity = meta.get("identity") if isinstance(meta.get("identity"), dict) else None
-    if identity is not None and not identity.get("version") and not meta.get("version"):
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "skill.json \u7f3a\u5c11 identity.version\uff08\u6216\u9876\u5c42 version\uff09",
-        )
+    validate_skill_meta(meta, "skill.json", require_version=True)
 
 
 def _validate_mcp_package(zf: zipfile.ZipFile, files: dict[str, str], meta: dict[str, Any], connection: dict[str, Any]) -> list[str]:
-    name = _resolve_meta_name(meta, "mcp.json")
-    _check_name(name, "mcp.json")
-    warnings = _warn_hardcoded_env(connection.get("env"), "connection.json")
-    transport = connection.get("transport") or connection.get("type")
-    if transport in ("stdio", None) and not connection.get("command") and not connection.get("url") and not connection.get("server"):
-        # gateway uses server; http uses url; stdio needs command
-        if connection.get("url") or connection.get("server"):
-            return warnings
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "connection.json \u9700\u5305\u542b command\u3001url \u6216 server\uff08gateway\uff09\u4e4b\u4e00",
-        )
-    return warnings
+    _resolve_meta_name(meta, "mcp.json")
+    _check_name(str(meta["name"]), "mcp.json")
+    return validate_mcp_connection(connection, "connection.json")
 
 
 def validate_package(capability_type: str, content: bytes) -> dict[str, Any]:
@@ -337,7 +356,9 @@ def validate_package(capability_type: str, content: bytes) -> dict[str, Any]:
         details["connection"] = _read_json(zf, files["connection.json"], "connection.json")
         details["warnings"] = _validate_mcp_package(zf, files, meta, details["connection"])
     elif capability_type == "tool":
-        details["schema"] = _read_json(zf, files["schema.json"], "schema.json")
+        details["schema"] = validate_tool_schema(
+            _read_json(zf, files["schema.json"], "schema.json"), "schema.json"
+        )
     elif capability_type == "skill":
         _validate_skill_package(zf, files, meta)
     elif capability_type == "agent":

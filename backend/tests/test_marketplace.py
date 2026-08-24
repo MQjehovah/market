@@ -11,7 +11,8 @@ async def test_public_browse_returns_published(client):
     assert len(items) >= 4
     assert all(item["status"] == "published" for item in items)
     types = {item["type"] for item in items}
-    assert types == {"agent", "tool", "skill", "mcp"}
+    # 默认浏览隐藏 plugin-component；至少应有独立上架的 agent/tool/skill/mcp
+    assert {"agent", "tool", "skill", "mcp"} <= types
 
 
 @pytest.mark.asyncio

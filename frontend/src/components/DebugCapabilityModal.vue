@@ -1,5 +1,6 @@
 <script setup>
 import { computed, reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { api } from '../api'
 import { TYPE_LABELS } from '../utils/format'
 
@@ -9,6 +10,7 @@ const props = defineProps({
   title: { type: String, default: '调用 / 调试' }
 })
 const emit = defineEmits(['close'])
+const router = useRouter()
 
 const params = reactive({})
 const complexParams = reactive({})
@@ -35,6 +37,11 @@ const isSkill = computed(() => props.cap?.type === 'skill')
 const isWorkflow = computed(() => props.cap?.type === 'workflow')
 const isMcp = computed(() => props.cap?.type === 'mcp')
 const isAgentLike = computed(() => isAgent.value || isPlugin.value)
+const pluginComponents = computed(() => {
+  const s = props.cap?.input_schema || {}
+  if (s.kind !== 'plugin') return []
+  return Array.isArray(s.components) ? s.components : []
+})
 const selectedMcpTool = computed(() => mcpTools.value.find((t) => t.name === mcpSelected.value) || null)
 
 function defaultValue(prop) {
@@ -305,7 +312,23 @@ function stepBadge(name) {
       <!-- Agent / 项目 / 技能 -->
       <template v-else-if="isAgentLike || isSkill">
         <div v-if="isPlugin" class="muted" style="font-size: 13px; margin-bottom: 8px">
-          将委派给插件内主 Agent 执行
+          将委派给插件内主 Agent 执行；也可打开组件详情分别调试。
+        </div>
+        <div v-if="isPlugin && pluginComponents.length" class="plugin-comps" style="margin-bottom: 12px">
+          <div
+            v-for="c in pluginComponents"
+            :key="c.capability_id"
+            class="comp-row"
+          >
+            <span class="badge">{{ TYPE_LABELS[c.type] || c.type }}</span>
+            <span>{{ c.name }}</span>
+            <button
+              v-if="c.capability_id"
+              class="btn btn-sm"
+              type="button"
+              @click="emit('close'); router.push(`/capabilities/${c.capability_id}`)"
+            >打开</button>
+          </div>
         </div>
         <div class="field">
           <label>{{ isAgentLike ? '任务内容' : '任务上下文' }}</label>
@@ -440,6 +463,9 @@ function stepBadge(name) {
   margin: 6px 0 0 28px; background: var(--panel-2); border: 1px solid var(--border);
   border-radius: 8px; padding: 8px 10px; font-size: 12px; white-space: pre-wrap;
   max-height: 180px; overflow: auto;
+}
+.comp-row {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 13px;
 }
 @media (max-width: 700px) {
   .form-grid { grid-template-columns: 1fr; }

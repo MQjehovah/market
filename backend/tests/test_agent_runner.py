@@ -21,7 +21,9 @@ def _zip(files: dict[str, bytes]) -> bytes:
 def _skill_zip(name: str, marker: str) -> bytes:
     return _zip(
         {
-            "skill.json": json.dumps({"name": name, "description": "测试技能"}).encode("utf-8"),
+            "skill.json": json.dumps(
+                {"name": name, "description": "测试技能", "version": "1.0.0"}
+            ).encode("utf-8"),
             "SKILL.md": f"# {name}\n\n{marker}\n".encode("utf-8"),
         }
     )

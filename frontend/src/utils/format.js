@@ -44,12 +44,12 @@ export const TYPE_CATEGORIES = {
 }
 
 export const PACKAGE_HINTS = {
-  agent: 'agent.json + PROMPT.md',
+  agent: 'agent.json + PROMPT.md（可含 skills/、mcp/；内嵌与市场同名 skill/mcp 自动关联）',
   tool: 'tool.json + schema.json + implementation/tool.py',
   skill: 'skill.json + SKILL.md',
   mcp: 'mcp.json + connection.json + tools.json + security.json',
-  workflow: 'workflow.json',
-  plugin: 'plugin.json + agents/ + skills/ + mcp.json（一键上传，对齐 Cursor / Agent Plugins）'
+  workflow: 'workflow.json（含 nodes / edges）',
+  plugin: 'plugin.json + agents/ + skills/ + mcp.json（拆包子能力；浏览默认隐藏子项，详情进入）'
 }
 
 export function formatDate(value) {

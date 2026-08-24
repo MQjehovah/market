@@ -324,7 +324,7 @@ Agent 在同一个编辑页完成提示词与绑定能力编辑，保存即生�
 
 ## Plugin（一键上架）
 
-对齐 Cursor / Agent Plugins：创建类型为 `plugin` 的草稿后，上传单个 zip：
+创建类型为 `plugin` 的草稿后，上传单个 zip：
 
 ```text
 plugin.json                 # 或 .cursor-plugin/plugin.json
@@ -335,7 +335,16 @@ mcp.json                    # { "mcpServers": { ... } }
 tools/<name>/...            # 可选
 ```
 
-平台自动拆出子能力；市场只展示一条插件；「加入我的能力」一键带上全部组件；发布插件时子能力一并上架。
+平台自动拆出子能力；**浏览市场默认不列出** `plugin-component`（`include_components=true` 可列出）；详情页从插件进入子组件。  
+「加入我的能力」一键带上全部组件，**移除插件时级联移除组件**；发布 / 驳回 / 撤回 / 弃用 / 删除会对子能力做对称级联。  
+重上传去掉某组件时：草稿子能力删除，已发布子能力弃用并断开。
+
+## 能力对齐（内嵌 vs 独立）
+
+- **Agent 内嵌** skill/mcp：上传时写入 `input_schema.embedded_*`，并按名称匹配市场已发布能力，固化 `capability_id` / `market_version`（版本不一致时标 `version_mismatch`）。**不会**自动拆成独立市场上架行。
+- **Skill / MCP 详情**：展示 `used_by`（引用它的 Agent / Plugin）。
+- **Plugin 子能力**：物化为独立 Capability，带 `parent_plugin_id`；校验规则与独立 skill/mcp/tool 包对齐。
+- **新版本**：复制 `input_schema`（含 plugin components 草案）；能力包仍需重新上传。
 
 ## Docker 部署
 

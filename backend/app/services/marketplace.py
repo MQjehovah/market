@@ -93,16 +93,32 @@ async def instantiate_agent(
 async def _resolve_runtime(
     db: AsyncSession, user: User | None, cap: Capability
 ) -> dict[str, list[dict[str, Any]]]:
-    """运行时组装：解析 agent 包 dependencies.json，返回工具/技能/MCP 的已发布版本清单。"""
+    """运行时组装：解析 agent 包 dependencies.json，返回工具/技能/MCP 的已发布版本清单。
+
+    若无 dependencies.json，回退读取 input_schema 中已关联 capability_id 的
+    embedded_skills / embedded_mcp。
+    """
     if not cap.artifacts:
         return {"tools": [], "skills": [], "mcps": []}
     try:
         content = get_storage().open(cap.artifacts[-1].uri).read()
         with zipfile.ZipFile(io.BytesIO(content)) as zf:
-            if "dependencies.json" not in zf.namelist():
-                return {"tools": [], "skills": [], "mcps": []}
-            manifest = json.loads(zf.read("dependencies.json").decode("utf-8"))
+            if "dependencies.json" in zf.namelist():
+                manifest = json.loads(zf.read("dependencies.json").decode("utf-8"))
+                return await _resolve_manifest(db, user, manifest)
     except Exception:  # noqa: BLE001
+        pass
+
+    # 无 dependencies.json：用已固化的市场关联回退
+    schema = cap.input_schema or {}
+    manifest: list[dict[str, Any]] = []
+    for item in schema.get("embedded_skills") or []:
+        if isinstance(item, dict) and item.get("capability_id") and item.get("name"):
+            manifest.append({"name": item["name"], "type": "skill"})
+    for item in schema.get("embedded_mcp") or []:
+        if isinstance(item, dict) and item.get("capability_id") and item.get("name"):
+            manifest.append({"name": item["name"], "type": "mcp"})
+    if not manifest:
         return {"tools": [], "skills": [], "mcps": []}
     return await _resolve_manifest(db, user, manifest)
 

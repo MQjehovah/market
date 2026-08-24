@@ -17,11 +17,13 @@ from app.routers import (
     assemble,
     auth,
     bindings,
+    mcp_edit,
     my,
     portal,
     publish,
     runtime,
     skill_edit,
+    tool_edit,
     workflows,
     mcp_gateway,
 )
@@ -80,6 +82,8 @@ app.include_router(bindings.router)
 app.include_router(my.router)
 app.include_router(agent_edit.router)
 app.include_router(skill_edit.router)
+app.include_router(tool_edit.router)
+app.include_router(mcp_edit.router)
 app.include_router(mcp_gateway.router)
 app.include_router(a2a_router)
 app.include_router(well_known_router)
@@ -97,9 +101,21 @@ async def root():
     }
 
 
-# 生产部署时若存在前端构建产物，则由后端直接托管
+# 生产部署时若存在前端构建产物，则由后端直接托管。
+# html=True 只处理目录 index，深链刷新（如 /capabilities/:id）仍会 404，需回退到 index.html。
 frontend_dist = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
 if frontend_dist.is_dir():
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+    from starlette.responses import Response
     from fastapi.staticfiles import StaticFiles
 
-    app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")
+    class SPAStaticFiles(StaticFiles):
+        async def get_response(self, path: str, scope) -> Response:
+            try:
+                return await super().get_response(path, scope)
+            except StarletteHTTPException as exc:
+                if exc.status_code != 404:
+                    raise
+                return await super().get_response("index.html", scope)
+
+    app.mount("/", SPAStaticFiles(directory=frontend_dist, html=True), name="frontend")

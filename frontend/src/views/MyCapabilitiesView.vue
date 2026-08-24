@@ -216,12 +216,18 @@ onMounted(load)
                   <button class="btn btn-sm btn-success" @click="submitDraft(cap)">提交草稿审核</button>
                   <router-link v-if="cap.type === 'skill'" :to="`/skills/${encodeURIComponent(cap.name)}/edit`" class="btn btn-sm">编辑草稿</router-link>
                   <router-link v-else-if="cap.type === 'agent'" :to="`/agents/${encodeURIComponent(cap.name)}/edit`" class="btn btn-sm">编辑草稿</router-link>
+                  <router-link v-else-if="cap.type === 'tool'" :to="`/tools/${encodeURIComponent(cap.name)}/edit`" class="btn btn-sm">编辑草稿</router-link>
+                  <router-link v-else-if="cap.type === 'mcp'" :to="`/mcp/${encodeURIComponent(cap.name)}/edit`" class="btn btn-sm">编辑草稿</router-link>
                   <router-link v-else-if="cap.type === 'workflow'" :to="`/workflows/${cap.draft_id}/edit`" class="btn btn-sm">可视化编辑</router-link>
                   <router-link :to="`/capabilities/${cap.draft_id}`" class="btn btn-sm">查看草稿</router-link>
                 </template>
                 <template v-else-if="cap.owned && ['draft', 'returned', 'rejected'].includes(cap.status)">
                   <button class="btn btn-sm btn-success" @click="submit(cap)">提交审核</button>
                   <router-link :to="`/capabilities/${cap.id}`" class="btn btn-sm">编辑类型</router-link>
+                  <router-link v-if="cap.type === 'skill'" :to="`/skills/${encodeURIComponent(cap.name)}/edit`" class="btn btn-sm">编辑草稿</router-link>
+                  <router-link v-else-if="cap.type === 'agent'" :to="`/agents/${encodeURIComponent(cap.name)}/edit`" class="btn btn-sm">编辑草稿</router-link>
+                  <router-link v-else-if="cap.type === 'tool'" :to="`/tools/${encodeURIComponent(cap.name)}/edit`" class="btn btn-sm">编辑草稿</router-link>
+                  <router-link v-else-if="cap.type === 'mcp'" :to="`/mcp/${encodeURIComponent(cap.name)}/edit`" class="btn btn-sm">编辑草稿</router-link>
                   <router-link v-if="cap.type === 'workflow'" :to="`/workflows/${cap.id}/edit`" class="btn btn-sm">可视化编辑</router-link>
                   <button class="btn btn-sm btn-danger" @click="removeDraft(cap)">删除</button>
                 </template>

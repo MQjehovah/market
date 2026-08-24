@@ -165,6 +165,29 @@ async def remove_capability(capability_id: str, db: DbSession, user: CurrentUser
     )
     if row is None:
         return MessageOut(message="该能力不在你的能力中")
-    await db.delete(row)
+
+    cap = await db.get(Capability, capability_id)
+    ids = [capability_id]
+    if cap is not None and cap.type == "plugin":
+        from app.services.plugins import plugin_component_ids
+
+        ids.extend(plugin_component_ids(cap))
+
+    removed = 0
+    for cid in ids:
+        link = await db.scalar(
+            select(UserCapability).where(
+                and_(
+                    UserCapability.user_id == user.id,
+                    UserCapability.capability_id == cid,
+                )
+            )
+        )
+        if link is None:
+            continue
+        await db.delete(link)
+        removed += 1
     await db.commit()
+    if cap is not None and cap.type == "plugin" and removed > 1:
+        return MessageOut(message=f"已从我的能力移除插件及其 {removed - 1} 个组件")
     return MessageOut(message="已从我的能力移除")

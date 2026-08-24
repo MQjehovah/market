@@ -66,8 +66,8 @@ async def browse_capabilities(
     """浏览市场：默认只展示已发布能力，且每个逻辑能力只保留最新版本。
 
     skill / mcp：按 Agent 内嵌能力名筛选（匹配 input_schema.embedded_*）。
-    include_components：为 false 时隐藏「未发布」的 plugin 拆出子能力；
-    已发布 / 弃用的组件始终可搜，供其他 Agent 依赖选用。
+    include_components：为 false 时隐藏全部 plugin 拆出子能力（含已发布）；
+    仅通过 plugin 详情进入子组件，避免与独立 skill/mcp 列表重复。
     """
     conditions: list = []
     visibility_where = _visibility_where(user)
@@ -101,14 +101,9 @@ async def browse_capabilities(
         stmt = stmt.where(where_clause)
     all_caps = list((await db.scalars(stmt)).all())
 
-    # 未发布的 plugin 拆出子能力默认隐藏；已发布/弃用的可搜可依赖
+    # 默认隐藏全部 plugin-component；include_components=true 时才列出
     if not include_components:
-        all_caps = [
-            c
-            for c in all_caps
-            if "plugin-component" not in (c.tags or [])
-            or c.status in ("published", "deprecated")
-        ]
+        all_caps = [c for c in all_caps if "plugin-component" not in (c.tags or [])]
 
     # 每个逻辑能力（名称 + 类型）只保留最新版本
     latest: dict[tuple[str, str], Capability] = {}
@@ -282,6 +277,13 @@ async def capability_detail(cap_id: str, db: DbSession, user: OptionalUser):
             from app.services.agent_metadata import enrich_embedded_with_market
 
             out.input_schema = await enrich_embedded_with_market(db, schema)
+    if cap.type in ("skill", "mcp"):
+        from app.services.agent_metadata import find_used_by
+
+        out.used_by = await find_used_by(db, cap)
+    parent_id = (cap.input_schema or {}).get("parent_plugin_id")
+    if parent_id:
+        out.parent_plugin_id = str(parent_id)
     return out
 
 

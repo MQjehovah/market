@@ -310,6 +310,7 @@ def extract_plugin_components(files: dict[str, bytes], plugin: dict[str, Any]) -
                 if isinstance(loaded, dict):
                     meta = {**meta, **loaded}
                     meta.setdefault("name", skill_name)
+                    meta.setdefault("version", version)
             except Exception as exc:
                 raise HTTPException(
                     status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -317,6 +318,9 @@ def extract_plugin_components(files: dict[str, bytes], plugin: dict[str, Any]) -
                 ) from exc
         else:
             pkg_files["skill.json"] = _json_bytes(meta)
+        from app.services.packages import validate_skill_meta
+
+        validate_skill_meta(meta, f"skills/{skill_name}/skill.json", require_version=True)
         components.append(
             {
                 "type": "skill",
@@ -347,7 +351,16 @@ def extract_plugin_components(files: dict[str, bytes], plugin: dict[str, Any]) -
         if not isinstance(meta, dict):
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"tools/{tool_name}/tool.json 必须是对象")
         name = str(meta.get("name") or tool_name)
-        schema = json.loads(pkg_files["schema.json"].decode("utf-8-sig"))
+        try:
+            schema = json.loads(pkg_files["schema.json"].decode("utf-8-sig"))
+        except Exception as exc:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"tools/{tool_name}/schema.json 解析失败：{exc}",
+            ) from exc
+        from app.services.packages import validate_tool_schema
+
+        schema = validate_tool_schema(schema, f"tools/{tool_name}/schema.json")
         components.append(
             {
                 "type": "tool",
@@ -385,18 +398,25 @@ def extract_plugin_components(files: dict[str, bytes], plugin: dict[str, Any]) -
             connection = _rewrite_plugin_root_paths(dict(cfg))
             if "transport" not in connection:
                 # Agent Plugins 常用 type: stdio
-                t = connection.pop("type", None) if connection.get("type") in ("stdio", "http", "sse") else None
+                t = connection.pop("type", None) if connection.get("type") in ("stdio", "http", "sse", "streamable-http") else None
                 if t:
-                    connection["transport"] = t
+                    connection["transport"] = "http" if t == "streamable-http" else t
                 elif connection.get("url"):
                     connection["transport"] = "http"
                 else:
                     connection["transport"] = "stdio"
-            elif connection.get("type") in ("stdio", "http", "sse") and "transport" not in connection:
-                connection["transport"] = connection.pop("type")
+            elif connection.get("type") in ("stdio", "http", "sse", "streamable-http") and "transport" not in connection:
+                t = connection.pop("type")
+                connection["transport"] = "http" if t == "streamable-http" else t
             # 若同时有 type 与 transport，去掉冗余 type
-            if connection.get("type") in ("stdio", "http", "sse") and connection.get("transport"):
+            if connection.get("type") in ("stdio", "http", "sse", "streamable-http") and connection.get("transport"):
                 connection.pop("type", None)
+            if connection.get("transport") == "streamable-http":
+                connection["transport"] = "http"
+
+            from app.services.packages import validate_mcp_connection
+
+            validate_mcp_connection(connection, f"mcp.json[{srv_name}]")
 
             pkg: dict[str, bytes] = {
                 "mcp.json": _json_bytes(
@@ -444,6 +464,11 @@ def extract_plugin_components(files: dict[str, bytes], plugin: dict[str, Any]) -
         }
         if "mcp.json" not in pkg_files:
             pkg_files["mcp.json"] = _json_bytes(meta)
+        from app.services.packages import validate_mcp_connection
+
+        conn = json.loads(pkg_files["connection.json"].decode("utf-8-sig"))
+        if isinstance(conn, dict):
+            validate_mcp_connection(conn, "connection.json")
         components.append(
             {
                 "type": "mcp",
@@ -475,6 +500,10 @@ async def _upsert_component(
     name = comp["name"]
     version = comp["version"]
     type_ = comp["type"]
+    parent_schema = {"parent_plugin_id": plugin_cap.id}
+    if comp.get("input_schema"):
+        parent_schema = {**comp["input_schema"], **parent_schema}
+
     existing = await db.scalar(
         select(Capability)
         .options(selectinload(Capability.artifacts))
@@ -498,13 +527,20 @@ async def _upsert_component(
                     status.HTTP_409_CONFLICT,
                     f"组件 {name} v{version} 已存在为 {existing.type}，与 plugin 中的 {type_} 冲突",
                 )
+            schema = dict(existing.input_schema or {})
+            schema["parent_plugin_id"] = plugin_cap.id
+            existing.input_schema = schema
             return existing
         cap = existing
         cap.type = type_
         cap.description = comp.get("description") or cap.description
         cap.visibility = plugin_cap.visibility
         cap.organization = user.organization
-        cap.input_schema = comp.get("input_schema") or {}
+        tags = list(cap.tags or [])
+        if "plugin-component" not in tags:
+            tags.append("plugin-component")
+        cap.tags = tags
+        cap.input_schema = parent_schema
         storage = get_storage()
         for art in list(cap.artifacts or []):
             try:
@@ -526,7 +562,7 @@ async def _upsert_component(
             author_id=user.id,
             organization=user.organization,
             status="draft",
-            input_schema=comp.get("input_schema") or {},
+            input_schema=parent_schema,
         )
         db.add(cap)
         await db.flush()
@@ -540,6 +576,56 @@ async def _upsert_component(
         )
     )
     return cap
+
+
+async def _cleanup_orphan_components(
+    db: AsyncSession,
+    user: User,
+    plugin_cap: Capability,
+    orphan_ids: set[Any],
+) -> list[dict[str, Any]]:
+    """重上传后清理不再引用的子能力：草稿删除，已发布则弃用。"""
+    from app.models import Notification
+
+    detached: list[dict[str, Any]] = []
+    ids = [str(i) for i in orphan_ids if i]
+    if not ids:
+        return detached
+    rows = (await db.scalars(select(Capability).where(Capability.id.in_(ids)))).all()
+    for row in rows:
+        if row.author_id != user.id:
+            continue
+        if "plugin-component" not in (row.tags or []):
+            continue
+        parent = (row.input_schema or {}).get("parent_plugin_id")
+        if parent and str(parent) != str(plugin_cap.id):
+            continue
+        if row.status in ("draft", "returned", "rejected", "reviewing"):
+            from app.services.capabilities import delete_capability_row
+
+            await delete_capability_row(db, row, commit=False)
+        elif row.status in ("published", "deprecated"):
+            row.status = "deprecated"
+            schema = dict(row.input_schema or {})
+            schema.pop("parent_plugin_id", None)
+            schema["detached_from_plugin"] = plugin_cap.id
+            row.input_schema = schema
+            detached.append(
+                {
+                    "type": row.type,
+                    "name": row.name,
+                    "version": row.version,
+                    "capability_id": row.id,
+                }
+            )
+            db.add(
+                Notification(
+                    user_id=row.author_id,
+                    title=f"插件组件 {row.name} v{row.version} 已从插件断开并弃用",
+                    body=f"父插件 {plugin_cap.name} 重新上传后不再包含该组件。",
+                )
+            )
+    return detached
 
 
 async def materialize_plugin_components(
@@ -558,7 +644,11 @@ async def materialize_plugin_components(
     extracted = extract_plugin_components(logical_files, plugin)
 
     old = (plugin_cap.input_schema or {}).get("components") or []
-    old_ids = {c.get("capability_id") for c in old if isinstance(c, dict)}
+    old_ids = {
+        str(c.get("capability_id"))
+        for c in old
+        if isinstance(c, dict) and c.get("capability_id")
+    }
 
     refs: list[dict[str, Any]] = []
     for comp in extracted:
@@ -572,7 +662,9 @@ async def materialize_plugin_components(
                 "role": comp.get("role") or cap.type,
             }
         )
-        old_ids.discard(cap.id)
+        old_ids.discard(str(cap.id))
+
+    detached = await _cleanup_orphan_components(db, user, plugin_cap, old_ids)
 
     plugin_cap.input_schema = {
         "kind": "plugin",
@@ -580,8 +672,14 @@ async def materialize_plugin_components(
             "name": plugin.get("name"),
             "description": plugin.get("description", ""),
             "version": plugin.get("version", plugin_cap.version),
+            "author": plugin.get("author"),
+            "homepage": plugin.get("homepage"),
+            "repository": plugin.get("repository"),
+            "license": plugin.get("license"),
+            "keywords": plugin.get("keywords") or [],
         },
         "components": refs,
+        "detached": detached,
     }
     if not plugin_cap.description and plugin.get("description"):
         plugin_cap.description = str(plugin["description"])
@@ -609,3 +707,44 @@ async def publish_plugin_components(db: AsyncSession, plugin_cap: Capability) ->
     for row in rows:
         if row.status in ("draft", "reviewing", "returned", "rejected"):
             row.status = "published"
+
+
+async def cascade_plugin_components(
+    db: AsyncSession,
+    plugin_cap: Capability,
+    *,
+    action: str,
+) -> None:
+    """对 plugin 当前 components[] 内的子能力做状态级联。
+
+    action: reject | return | withdraw | deprecate | delete
+    """
+    ids = plugin_component_ids(plugin_cap)
+    if not ids:
+        return
+    rows = (await db.scalars(select(Capability).where(Capability.id.in_(ids)))).all()
+    for row in rows:
+        if "plugin-component" not in (row.tags or []):
+            continue
+        parent = (row.input_schema or {}).get("parent_plugin_id")
+        if parent and str(parent) != str(plugin_cap.id):
+            continue
+        if action == "delete":
+            if row.status in ("draft", "returned", "rejected", "reviewing"):
+                from app.services.capabilities import delete_capability_row
+
+                await delete_capability_row(db, row, commit=False)
+            elif row.status in ("published", "deprecated"):
+                row.status = "deprecated"
+        elif action == "deprecate":
+            if row.status == "published":
+                row.status = "deprecated"
+        elif action == "reject":
+            if row.status in ("draft", "reviewing", "returned"):
+                row.status = "rejected"
+        elif action == "return":
+            if row.status in ("draft", "reviewing", "rejected"):
+                row.status = "returned"
+        elif action == "withdraw":
+            if row.status in ("reviewing", "returned", "rejected"):
+                row.status = "draft"

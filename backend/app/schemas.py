@@ -178,6 +178,9 @@ class CapabilityOut(CapabilityBase):
     updated_at: datetime
     artifacts: list[ArtifactOut] = Field(default_factory=list)
     latest: bool = False
+    # skill/mcp：被哪些 agent/plugin 引用；plugin 子能力：父插件 id
+    used_by: list[dict[str, Any]] = Field(default_factory=list)
+    parent_plugin_id: str | None = None
 
 
 class CapabilityPage(BaseModel):
@@ -369,6 +372,40 @@ class SkillEditOut(BaseModel):
 
 class SkillEditSave(BaseModel):
     skill_md: str = Field(default="", max_length=500000)
+    description: str = Field(default="", max_length=20000)
+    category: str = Field(default="", max_length=100)
+    tags: list[str] = Field(default_factory=list)
+    new_version: str = Field(default="", max_length=50, description="留空则基于最新版本 patch+1")
+
+
+class ToolEditOut(BaseModel):
+    capability: CapabilityOut
+    tool_schema: dict[str, Any] = Field(default_factory=dict)
+    implementation: str = ""
+    files: list[dict[str, Any]] = Field(default_factory=list)
+    base_version: str = ""
+
+
+class ToolEditSave(BaseModel):
+    tool_schema: dict[str, Any] = Field(default_factory=dict)
+    implementation: str = Field(default="", max_length=500000)
+    description: str = Field(default="", max_length=20000)
+    category: str = Field(default="", max_length=100)
+    tags: list[str] = Field(default_factory=list)
+    new_version: str = Field(default="", max_length=50, description="留空则基于最新版本 patch+1")
+
+
+class McpEditOut(BaseModel):
+    capability: CapabilityOut
+    connection: dict[str, Any] = Field(default_factory=dict)
+    tools_json: Any = None
+    files: list[dict[str, Any]] = Field(default_factory=list)
+    base_version: str = ""
+
+
+class McpEditSave(BaseModel):
+    connection: dict[str, Any] = Field(default_factory=dict)
+    tools_json: Any = None
     description: str = Field(default="", max_length=20000)
     category: str = Field(default="", max_length=100)
     tags: list[str] = Field(default_factory=list)

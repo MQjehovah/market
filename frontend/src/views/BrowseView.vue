@@ -1,10 +1,12 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { api } from '../api'
 import { authState } from '../stores/auth'
 import { TYPE_LABELS } from '../utils/format'
 import CapabilityCard from '../components/CapabilityCard.vue'
 
+const route = useRoute()
 const caps = ref([])
 const categories = ref({})
 const loading = ref(false)
@@ -88,6 +90,10 @@ function goPage(p) {
 }
 
 onMounted(() => {
+  if (route.query.skill) filters.skill = String(route.query.skill)
+  if (route.query.mcp) filters.mcp = String(route.query.mcp)
+  if (route.query.type) filters.type = String(route.query.type)
+  if (route.query.q) filters.q = String(route.query.q)
   load()
   loadCategories()
   loadMy()

@@ -147,6 +147,8 @@ async def test_browse_filter_by_skill_and_hide_plugin_components(
         files={"file": ("p.zip", _unique_plugin_zip(), "application/zip")},
     )
     assert r.status_code == 200, r.text
+    comps = r.json()["input_schema"]["components"]
+    skill_comp = next(c for c in comps if c["type"] == "skill")
     await client.post(f"/api/publish/capabilities/{plugin_id}/submit", headers=publisher_headers)
     await client.post(
         f"/api/admin/capabilities/{plugin_id}/review",
@@ -154,10 +156,16 @@ async def test_browse_filter_by_skill_and_hide_plugin_components(
         json={"action": "approve", "comment": "ok"},
     )
 
+    # 默认浏览隐藏全部 plugin-component
     r = await client.get("/api/capabilities?type=skill&page_size=100")
     assert r.status_code == 200
     names = {i["name"] for i in r.json()["items"]}
-    # 已发布的 plugin 组件可在市场搜到，供其他 Agent 依赖
+    assert "filter-skill-x" not in names
+
+    # include_components=true 时可列出
+    r = await client.get("/api/capabilities?type=skill&include_components=true&page_size=100")
+    assert r.status_code == 200
+    names = {i["name"] for i in r.json()["items"]}
     assert "filter-skill-x" in names
     skill_item = next(i for i in r.json()["items"] if i["name"] == "filter-skill-x")
     assert "plugin-component" in (skill_item.get("tags") or [])
@@ -165,9 +173,13 @@ async def test_browse_filter_by_skill_and_hide_plugin_components(
     r = await client.get("/api/capabilities?skill=filter-skill-x&page_size=100")
     assert r.status_code == 200
     assert any(i["name"] == "filter-plugin" for i in r.json()["items"])
-    assert any(i["name"] == "filter-skill-x" for i in r.json()["items"])
 
-    # sync 目录也包含已发布组件
+    # 子能力详情有 parent_plugin_id
+    r = await client.get(f"/api/capabilities/{skill_comp['capability_id']}")
+    assert r.status_code == 200
+    assert r.json().get("parent_plugin_id") == plugin_id
+
+    # sync 目录仍包含已发布组件，便于消费者依赖
     r = await client.get("/api/capabilities/sync")
     sync_names = {(i["name"], i["type"]) for i in r.json()}
     assert ("filter-skill-x", "skill") in sync_names
@@ -215,6 +227,12 @@ async def test_agent_detail_links_published_skill(client, publisher_headers, adm
         files={"file": ("a.zip", _agent_zip_with_embedded(name="link-agent"), "application/zip")},
     )
     assert r.status_code == 200, r.text
+    # 上传时即固化市场关联
+    upload_skills = r.json()["input_schema"]["embedded_skills"]
+    wecom_upload = next(s for s in upload_skills if s["name"] == "wecom-message")
+    assert wecom_upload.get("capability_id") == skill_id
+    assert wecom_upload.get("market_version") == "1.0.0"
+
     await client.post(f"/api/publish/capabilities/{agent_id}/submit", headers=publisher_headers)
     await client.post(
         f"/api/admin/capabilities/{agent_id}/review",
@@ -227,3 +245,9 @@ async def test_agent_detail_links_published_skill(client, publisher_headers, adm
     skills = r.json()["input_schema"]["embedded_skills"]
     wecom = next(s for s in skills if s["name"] == "wecom-message")
     assert wecom.get("capability_id") == skill_id
+
+    # skill 详情 used_by 包含该 agent
+    r = await client.get(f"/api/capabilities/{skill_id}")
+    assert r.status_code == 200
+    used = r.json().get("used_by") or []
+    assert any(u["capability_id"] == agent_id and u["type"] == "agent" for u in used)

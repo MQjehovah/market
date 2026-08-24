@@ -7,6 +7,7 @@ data/
 frontend/logs/
 *.log
 .env
+deploy.config.py
 *.db
 node_modules/
 dist/

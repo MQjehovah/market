@@ -151,16 +151,56 @@ async def upload_artifact(cap_id: str, db: DbSession, user: CurrentUser, file: U
     if cap.type == "agent":
         import zipfile
 
-        from app.services.agent_metadata import extract_agent_embedded
+        from app.services.agent_metadata import enrich_embedded_with_market, extract_agent_embedded
 
         with zipfile.ZipFile(io.BytesIO(content)) as zf:
             logical = {logical: zf.read(raw) for logical, raw in details["files"].items()}
         embedded = extract_agent_embedded(logical)
-        # 保留既有非嵌入字段，仅刷新 embedded_*
+        # 保留既有非嵌入字段，仅刷新 embedded_*；上传时固化市场关联
         schema = dict(cap.input_schema or {})
         schema["embedded_skills"] = embedded["embedded_skills"]
         schema["embedded_mcp"] = embedded["embedded_mcp"]
-        cap.input_schema = schema
+        cap.input_schema = await enrich_embedded_with_market(db, schema)
+    if cap.type == "skill" and details.get("meta"):
+        meta = details["meta"]
+        identity = meta.get("identity") if isinstance(meta.get("identity"), dict) else {}
+        cap.input_schema = {
+            "kind": "skill",
+            "name": meta.get("name") or identity.get("name") or cap.name,
+            "version": meta.get("version") or identity.get("version") or cap.version,
+            "description": meta.get("description") or identity.get("description") or "",
+            "category": meta.get("category") or identity.get("category") or cap.category or "",
+            "display_name": identity.get("display_name") or meta.get("display_name") or "",
+        }
+    if cap.type == "mcp":
+        meta = details.get("meta") or {}
+        conn = details.get("connection") or {}
+        env = conn.get("env") if isinstance(conn.get("env"), dict) else {}
+        cap.input_schema = {
+            "kind": "mcp",
+            "name": meta.get("name") or cap.name,
+            "version": meta.get("version") or cap.version,
+            "description": meta.get("description") or "",
+            "transport": conn.get("transport") or conn.get("type") or "stdio",
+            "command": conn.get("command") or "",
+            "url": conn.get("url") or "",
+            "server": conn.get("server") or "",
+            "required_env": [str(k) for k in env.keys()],
+        }
+    if cap.type == "workflow" and details.get("meta"):
+        meta = details["meta"]
+        nodes = meta.get("nodes") if isinstance(meta.get("nodes"), list) else []
+        edges = meta.get("edges") if isinstance(meta.get("edges"), list) else []
+        cap.input_schema = {
+            "kind": "workflow",
+            "name": meta.get("name") or cap.name,
+            "version": meta.get("version") or cap.version,
+            "node_count": len(nodes),
+            "edge_count": len(edges),
+            "node_types": sorted(
+                {str(n.get("type")) for n in nodes if isinstance(n, dict) and n.get("type")}
+            ),
+        }
     if cap.type == "plugin":
         from app.services.plugins import materialize_plugin_components
 

@@ -245,12 +245,17 @@ async def withdraw_capability(db: AsyncSession, cap: Capability, user: User) -> 
             comment="作者撤回审核",
         )
     )
+    if cap.type == "plugin":
+        from app.services.plugins import cascade_plugin_components
+
+        await cascade_plugin_components(db, cap, action="withdraw")
     await db.commit()
     await db.refresh(cap)
     return cap
 
 
-async def delete_capability(db: AsyncSession, cap: Capability) -> None:
+async def delete_capability_row(db: AsyncSession, cap: Capability, *, commit: bool = True) -> None:
+    """删除单个能力及其关联行（可嵌套调用，由外层统一 commit）。"""
     storage = get_storage()
     rows = (
         await db.scalars(
@@ -272,7 +277,16 @@ async def delete_capability(db: AsyncSession, cap: Capability) -> None:
     await db.execute(sql_delete(WorkflowExecution).where(WorkflowExecution.workflow_id == cid))
     await db.execute(sql_delete(AgentBinding).where(AgentBinding.agent_id == cid))
     await db.delete(cap)
-    await db.commit()
+    if commit:
+        await db.commit()
+
+
+async def delete_capability(db: AsyncSession, cap: Capability) -> None:
+    if cap.type == "plugin":
+        from app.services.plugins import cascade_plugin_components
+
+        await cascade_plugin_components(db, cap, action="delete")
+    await delete_capability_row(db, cap, commit=True)
 
 
 async def submit_for_review(db: AsyncSession, cap: Capability) -> Capability:
@@ -321,6 +335,10 @@ async def review_capability(
             await publish_plugin_components(db, cap)
         await _deprecate_other_published(db, cap)
         await _notify_subscribers(db, cap)
+    elif cap.type == "plugin" and target in ("rejected", "returned"):
+        from app.services.plugins import cascade_plugin_components
+
+        await cascade_plugin_components(db, cap, action="reject" if target == "rejected" else "return")
     await db.commit()
     await db.refresh(cap)
     return cap
@@ -376,6 +394,10 @@ async def change_status(db: AsyncSession, cap: Capability, target: str) -> Capab
                 body="请迁移到新版本。",
             )
         )
+        if cap.type == "plugin":
+            from app.services.plugins import cascade_plugin_components
+
+            await cascade_plugin_components(db, cap, action="deprecate")
     await db.commit()
     await db.refresh(cap)
     return cap
@@ -408,9 +430,13 @@ async def create_new_version(
         category=cap.category,
         tags=list(cap.tags or []),
         visibility=cap.visibility,
+        access_policy=cap.access_policy,
+        allowed_users=list(cap.allowed_users or []),
         author_id=user.id,
         organization=cap.organization,
         status="draft",
+        # 复制结构化元数据；artifact 需重新上传。plugin 的 components 仅作草案引用。
+        input_schema=dict(cap.input_schema or {}),
     )
     db.add(new_cap)
     await db.commit()

@@ -88,6 +88,7 @@ async def test_plugin_upload_materializes_components(client, publisher_headers, 
         assert r.status_code == 200
         assert r.json()["status"] == "draft"
         assert r.json()["type"] == c["type"]
+        assert r.json().get("parent_plugin_id") == plugin_id
 
     r = await client.post(
         f"/api/publish/capabilities/{plugin_id}/submit", headers=publisher_headers
@@ -152,6 +153,75 @@ async def test_join_plugin_adds_all_components(client, publisher_headers, admin_
     assert plugin_id in ids_default
     for c in comps:
         assert c["capability_id"] not in ids_default
+
+    # 移除 plugin 时级联移除组件
+    r = await client.delete(f"/api/my/capabilities/{plugin_id}", headers=user_headers)
+    assert r.status_code == 200
+    assert "组件" in r.json()["message"]
+    r = await client.get(
+        "/api/my/capabilities?scope=added&include_components=true", headers=user_headers
+    )
+    ids_after = {c["id"] for c in r.json()}
+    assert plugin_id not in ids_after
+    for c in comps:
+        assert c["capability_id"] not in ids_after
+
+
+@pytest.mark.asyncio
+async def test_plugin_reupload_cleans_orphan_skill(client, publisher_headers):
+    def _zip(*, with_skill: bool) -> bytes:
+        files: dict[str, bytes] = {
+            "plugin.json": json.dumps(
+                {
+                    "name": "orphan-plugin",
+                    "description": "o",
+                    "version": "1.0.0",
+                    "primary_agent": "orphan-agent-x",
+                },
+                ensure_ascii=False,
+            ).encode("utf-8"),
+            "agents/orphan-agent-x/agent.json": json.dumps(
+                {"name": "orphan-agent-x", "description": "a", "version": "1.0.0"},
+                ensure_ascii=False,
+            ).encode("utf-8"),
+            "agents/orphan-agent-x/PROMPT.md": b"# a\n",
+        }
+        if with_skill:
+            files["skills/orphan-skill-x/SKILL.md"] = b"# s\n"
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            for path, data in files.items():
+                zf.writestr(path, data)
+        return buf.getvalue()
+
+    r = await client.post(
+        "/api/publish/capabilities",
+        headers=publisher_headers,
+        json={"name": "orphan-plugin", "type": "plugin", "version": "1.0.0", "description": "o"},
+    )
+    plugin_id = r.json()["id"]
+    r = await client.post(
+        f"/api/publish/capabilities/{plugin_id}/artifact",
+        headers=publisher_headers,
+        files={"file": ("p.zip", _zip(with_skill=True), "application/zip")},
+    )
+    assert r.status_code == 200, r.text
+    comps = r.json()["input_schema"]["components"]
+    skill = next(c for c in comps if c["type"] == "skill")
+    skill_id = skill["capability_id"]
+
+    # 重上传去掉 skill
+    r = await client.post(
+        f"/api/publish/capabilities/{plugin_id}/artifact",
+        headers=publisher_headers,
+        files={"file": ("p2.zip", _zip(with_skill=False), "application/zip")},
+    )
+    assert r.status_code == 200, r.text
+    new_comps = r.json()["input_schema"]["components"]
+    assert not any(c["type"] == "skill" for c in new_comps)
+    # 草稿孤儿应被删除
+    r = await client.get(f"/api/capabilities/{skill_id}", headers=publisher_headers)
+    assert r.status_code == 404
 
 
 @pytest.mark.asyncio

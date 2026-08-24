@@ -237,11 +237,19 @@ def extract_agent_embedded(files: dict[str, bytes]) -> dict[str, Any]:
     }
 
 
+def _mark_version_mismatch(item: dict[str, Any], market_version: str) -> None:
+    embedded_ver = str(item.get("version") or "").strip()
+    if embedded_ver and market_version and embedded_ver != market_version:
+        item["version_mismatch"] = True
+    else:
+        item.pop("version_mismatch", None)
+
+
 async def enrich_embedded_with_market(
     db,
     schema: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """为内嵌 skill/mcp 匹配市场上已发布的同名能力，写入 capability_id。"""
+    """为内嵌 skill/mcp 匹配市场上已发布的同名能力，写入 capability_id / market_version。"""
     from sqlalchemy import and_, select
 
     from app.models import Capability
@@ -282,6 +290,11 @@ async def enrich_embedded_with_market(
         if hit is not None:
             item["capability_id"] = hit.id
             item["market_version"] = hit.version
+            _mark_version_mismatch(item, hit.version)
+        else:
+            item.pop("capability_id", None)
+            item.pop("market_version", None)
+            item.pop("version_mismatch", None)
         out_skills.append(item)
 
     out_mcps = []
@@ -293,8 +306,81 @@ async def enrich_embedded_with_market(
         if hit is not None:
             item["capability_id"] = hit.id
             item["market_version"] = hit.version
+            _mark_version_mismatch(item, hit.version)
+        else:
+            item.pop("capability_id", None)
+            item.pop("market_version", None)
+            item.pop("version_mismatch", None)
         out_mcps.append(item)
 
     schema["embedded_skills"] = out_skills
     schema["embedded_mcp"] = out_mcps
     return schema
+
+
+async def find_used_by(db, cap) -> list[dict[str, Any]]:
+    """查找引用该 skill/mcp 的已发布 Agent（内嵌）与 Plugin（components）。"""
+    from sqlalchemy import select
+
+    from app.models import Capability
+
+    if cap.type not in ("skill", "mcp"):
+        return []
+
+    target_name = (cap.name or "").strip().lower()
+    if not target_name:
+        return []
+
+    rows = (
+        await db.scalars(
+            select(Capability).where(
+                Capability.type.in_(("agent", "plugin")),
+                Capability.status.in_(("published", "deprecated")),
+            )
+        )
+    ).all()
+
+    used: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    embed_key = "embedded_skills" if cap.type == "skill" else "embedded_mcp"
+
+    for row in rows:
+        schema = row.input_schema or {}
+        matched = False
+        if row.type == "agent":
+            for item in schema.get(embed_key) or []:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name") or "").strip().lower()
+                if name != target_name:
+                    continue
+                # Prefer capability_id match when present
+                cid = item.get("capability_id")
+                if cid and cid != cap.id and name == target_name:
+                    # same name but linked to another id — still count as usage by name
+                    matched = True
+                    break
+                matched = True
+                break
+        elif row.type == "plugin":
+            for item in schema.get("components") or []:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") != cap.type:
+                    continue
+                if str(item.get("name") or "").strip().lower() != target_name:
+                    continue
+                matched = True
+                break
+        if matched and row.id not in seen:
+            seen.add(row.id)
+            used.append(
+                {
+                    "type": row.type,
+                    "name": row.name,
+                    "version": row.version,
+                    "capability_id": row.id,
+                }
+            )
+    used.sort(key=lambda x: (x["type"], x["name"], x["version"]))
+    return used
