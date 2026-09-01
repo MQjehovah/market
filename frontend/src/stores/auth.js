@@ -21,3 +21,17 @@ export function clearAuth() {
   localStorage.removeItem('mk_token')
   localStorage.removeItem('mk_user')
 }
+
+export function isTokenExpired(token = authState.token) {
+  if (!token) return true
+  try {
+    const part = token.split('.')[1]
+    if (!part) return true
+    const json = atob(part.replace(/-/g, '+').replace(/_/g, '/'))
+    const payload = JSON.parse(json)
+    if (!payload.exp) return false
+    return payload.exp * 1000 <= Date.now()
+  } catch {
+    return true
+  }
+}

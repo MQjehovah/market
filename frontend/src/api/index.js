@@ -1,4 +1,22 @@
-import { authState } from '../stores/auth'
+import { authState, clearAuth } from '../stores/auth'
+
+const AUTH_NO_REDIRECT = new Set(['/auth/login', '/auth/register', '/auth/change-password'])
+let sessionRedirecting = false
+
+async function redirectToLogin() {
+  if (sessionRedirecting) return
+  sessionRedirecting = true
+  clearAuth()
+  try {
+    const { default: router } = await import('../router')
+    const current = router.currentRoute.value
+    if (current.path === '/login') return
+    const redirect = current.fullPath && current.fullPath !== '/login' ? current.fullPath : undefined
+    await router.replace({ path: '/login', query: redirect ? { redirect } : {} })
+  } finally {
+    sessionRedirecting = false
+  }
+}
 
 const BASE = '/api'
 
@@ -41,6 +59,9 @@ async function request(path, options = {}) {
     body = null
   }
   if (!res.ok) {
+    if (res.status === 401 && !AUTH_NO_REDIRECT.has(path)) {
+      await redirectToLogin()
+    }
     throw new ApiError(res.status, errorMessage(body?.detail), body?.detail)
   }
   return body

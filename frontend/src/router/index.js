@@ -12,7 +12,7 @@ import WorkflowEditorView from '../views/WorkflowEditorView.vue'
 import MyCapabilitiesView from '../views/MyCapabilitiesView.vue'
 import ProfileView from '../views/ProfileView.vue'
 import AdminView from '../views/AdminView.vue'
-import { authState } from '../stores/auth'
+import { authState, clearAuth, isTokenExpired } from '../stores/auth'
 
 const ADMIN_TITLES = {
   review: '审核',
@@ -50,8 +50,8 @@ const router = createRouter({
     { path: '/mcp/:name/edit', component: McpEditView, meta: { title: '编辑连接器', auth: true } },
     { path: '/workflows/new', component: WorkflowEditorView, meta: { title: '新建能力编排', auth: true, full: true } },
     { path: '/workflows/:id/edit', component: WorkflowEditorView, props: true, meta: { title: '能力编排', auth: true, full: true } },
-    { path: '/login', component: LoginView, meta: { title: '登录' } },
-    { path: '/register', component: RegisterView, meta: { title: '注册' } },
+    { path: '/login', component: LoginView, meta: { title: '登录', blank: true } },
+    { path: '/register', component: RegisterView, meta: { title: '注册', blank: true } },
     { path: '/capabilities/:id', component: CapabilityDetailView, props: true, meta: { title: '能力详情' } },
     { path: '/my', component: MyCapabilitiesView, meta: { title: '我的能力', auth: true } },
     { path: '/profile', component: ProfileView, meta: { title: '个人中心', auth: true } },
@@ -65,6 +65,12 @@ const router = createRouter({
 })
 
 router.beforeEach((to) => {
+  if (authState.token && isTokenExpired()) {
+    clearAuth()
+    if (to.path !== '/login') {
+      return { path: '/login', query: { redirect: to.fullPath } }
+    }
+  }
   if (to.meta.auth && !authState.token) {
     return { path: '/login', query: { redirect: to.fullPath } }
   }
