@@ -56,7 +56,7 @@ async def test_user_adds_capability_then_can_invoke(client, publisher_headers, a
 @pytest.mark.asyncio
 async def test_owner_can_invoke_without_joining(client, publisher_headers, admin_headers):
     """能力作者无需加入即可调用自己的能力。"""
-    tool_name = "owner-tool"
+    tool_name = "owner-invoke-tool"
     await _publish_capability(client, publisher_headers, admin_headers, tool_name, "tool", _tool_zip(tool_name))
     r = await client.post(
         f"/api/runtime/tools/{tool_name}/invoke",

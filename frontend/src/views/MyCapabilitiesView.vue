@@ -1,70 +1,149 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { api } from '../api'
-import { TYPE_LABELS, formatDate } from '../utils/format'
+import {
+  TYPE_LABELS,
+  VISIBILITY_LABELS,
+  formatDate,
+  shelfLabel
+} from '../utils/format'
 import StatusBadge from '../components/StatusBadge.vue'
 import CreateCapabilityModal from '../components/CreateCapabilityModal.vue'
 import DebugCapabilityModal from '../components/DebugCapabilityModal.vue'
 
-const scope = ref('all')
+const route = useRoute()
+/** mainTab: owned | added — 对齐截图「审核 / 已上架」双页签，对应「我创建的 / 已加入」 */
+const mainTab = ref('owned')
 const caps = ref([])
 const error = ref('')
 const notice = ref('')
 const showCreate = ref(false)
+const initialShelf = ref('')
 const debugCap = ref(null)
-const filters = reactive({ q: '', type: '', category: '', status: '', sort: 'updated' })
+const sourceFilter = ref('all')
+const filters = reactive({ q: '' })
+const page = ref(1)
+const pageSize = ref(20)
+const confirmAction = ref(null)
 
-const counts = computed(() => ({
-  all: caps.value.length,
-  owned: caps.value.filter((c) => c.owned).length,
-  added: caps.value.filter((c) => c.added).length
-}))
+const TYPE_COLORS = {
+  plugin: '#2f6bff',
+  agent: '#12b76a',
+  workflow: '#7a5cff',
+  skill: '#f5a524',
+  mcp: '#0ea5e9',
+  tool: '#64748b'
+}
 
-const categoryOptions = computed(() =>
-  [...new Set(caps.value.map((c) => c.category).filter(Boolean))].sort()
-)
+const scopedCaps = computed(() => {
+  if (mainTab.value === 'owned') return caps.value.filter((c) => c.owned)
+  return caps.value.filter((c) => c.added && !c.owned)
+})
+
+const sourceChips = computed(() => {
+  const list = scopedCaps.value
+  const chips = [{ key: 'all', label: '全部', count: list.length }]
+  if (mainTab.value === 'owned') {
+    chips.push(
+      { key: 'published', label: '已上架', count: list.filter((c) => c.status === 'published').length },
+      { key: 'reviewing', label: '审核中', count: list.filter((c) => c.status === 'reviewing').length },
+      {
+        key: 'todo',
+        label: '待处理',
+        count: list.filter((c) => ['draft', 'returned', 'rejected'].includes(c.status)).length
+      },
+      {
+        key: 'offline',
+        label: '已下线',
+        count: list.filter((c) => ['deprecated', 'archived'].includes(c.status)).length
+      }
+    )
+  } else {
+    Object.entries(TYPE_LABELS).forEach(([key, label]) => {
+      const count = list.filter((c) => c.type === key).length
+      if (count) chips.push({ key: `type:${key}`, label, count })
+    })
+  }
+  return chips
+})
 
 const filteredCaps = computed(() => {
   const q = filters.q.trim().toLowerCase()
-  const list = caps.value.filter((c) => {
-    if (filters.type && c.type !== filters.type) return false
-    if (filters.category && c.category !== filters.category) return false
-    if (filters.status && c.status !== filters.status) return false
+  return scopedCaps.value.filter((c) => {
+    if (sourceFilter.value === 'published' && c.status !== 'published') return false
+    if (sourceFilter.value === 'reviewing' && c.status !== 'reviewing') return false
+    if (sourceFilter.value === 'todo' && !['draft', 'returned', 'rejected'].includes(c.status)) return false
+    if (sourceFilter.value === 'offline' && !['deprecated', 'archived'].includes(c.status)) return false
+    if (sourceFilter.value.startsWith('type:')) {
+      if (c.type !== sourceFilter.value.slice(5)) return false
+    }
     if (q) {
       const hay = `${c.name} ${c.description || ''} ${(c.tags || []).join(' ')}`.toLowerCase()
       if (!hay.includes(q)) return false
     }
     return true
-  })
-  if (filters.sort === 'name') {
-    list.sort((a, b) => a.name.localeCompare(b.name, 'zh'))
-  } else if (filters.sort === 'usage') {
-    list.sort((a, b) => (b.usage_count || 0) - (a.usage_count || 0))
-  } else if (filters.sort === 'rating') {
-    list.sort((a, b) => (b.avg_rating || 0) - (a.avg_rating || 0))
-  } else {
-    list.sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0))
-  }
-  return list
+  }).sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0))
 })
+
+const totalPages = computed(() => Math.max(1, Math.ceil(filteredCaps.value.length / pageSize.value)))
+const pagedCaps = computed(() => {
+  const start = (page.value - 1) * pageSize.value
+  return filteredCaps.value.slice(start, start + pageSize.value)
+})
+
+const tabCounts = computed(() => ({
+  owned: caps.value.filter((c) => c.owned).length,
+  added: caps.value.filter((c) => c.added && !c.owned).length
+}))
+
+function typeColor(type) {
+  return TYPE_COLORS[type] || '#2f6bff'
+}
+
+function typeInitial(type) {
+  return (TYPE_LABELS[type] || type || '?').slice(0, 1)
+}
+
+function sourceLabel(cap) {
+  if (cap.owned) return '我创建的'
+  if (cap.added) return '从目录加入'
+  return '—'
+}
+
+function visibilityLabel(cap) {
+  return VISIBILITY_LABELS[cap.visibility] || cap.visibility || '—'
+}
 
 async function load() {
   error.value = ''
   try {
-    caps.value = await api.get(`/my/capabilities?scope=${scope.value}`)
+    caps.value = await api.get('/my/capabilities?scope=all')
   } catch (e) {
     error.value = e.message
   }
 }
 
-function onCreated(cap) {
-  showCreate.value = false
-  notice.value = `「${cap.name}」草稿已创建，可在详情页上传能力包并提交审核`
-  load()
+function switchTab(tab) {
+  mainTab.value = tab
+  sourceFilter.value = 'all'
+  page.value = 1
+  filters.q = ''
 }
 
-function switchScope(s) {
-  scope.value = s
+function setSourceFilter(key) {
+  sourceFilter.value = key
+  page.value = 1
+}
+
+function onCreated(cap) {
+  showCreate.value = false
+  if (cap.type === 'workflow') {
+    notice.value = `「${cap.name}」草稿已创建，正在打开画布`
+  } else {
+    notice.value = `「${cap.name}」草稿已创建，请在详情页上传能力包并提交审核`
+  }
+  mainTab.value = 'owned'
   load()
 }
 
@@ -98,168 +177,411 @@ async function withdraw(cap) {
   }
 }
 
-async function removeDraft(cap) {
-  if (!confirm(`确认删除「${cap.name} v${cap.version}」？删除后可使用该名称重新创建。`)) return
+function askRemoveDraft(cap) {
+  confirmAction.value = {
+    kind: 'delete',
+    title: '确定删除？',
+    body: `删除「${cap.name} v${cap.version}」后，可使用该名称重新创建。`,
+    okText: '删除',
+    danger: true,
+    cap
+  }
+}
+
+function askRemoveFromMy(cap) {
+  confirmAction.value = {
+    kind: 'remove',
+    title: '确定移除？',
+    body: `移除后，「${cap.name}」将不再出现在我的能力中，不影响目录上架状态。`,
+    okText: '移除',
+    danger: false,
+    cap
+  }
+}
+
+async function confirmOk() {
+  const action = confirmAction.value
+  if (!action) return
+  const cap = action.cap
+  confirmAction.value = null
   try {
-    await api.delete(`/publish/capabilities/${cap.id}`)
-    notice.value = `「${cap.name}」已删除`
+    if (action.kind === 'delete') {
+      await api.delete(`/publish/capabilities/${cap.id}`)
+      notice.value = `「${cap.name}」已删除`
+    } else if (action.kind === 'remove') {
+      const r = await api.delete(`/my/capabilities/${cap.id}`)
+      notice.value = r.message
+    }
     await load()
   } catch (e) {
     error.value = e.message
   }
 }
 
-async function removeFromMy(cap) {
-  try {
-    const r = await api.delete(`/my/capabilities/${cap.id}`)
-    notice.value = r.message
-    await load()
-  } catch (e) {
-    error.value = e.message
+function openCreate(shelf = '') {
+  initialShelf.value = shelf || ''
+  showCreate.value = true
+}
+
+function syncPublishQuery() {
+  if (route.query.publish === '1') {
+    initialShelf.value = String(route.query.shelf || '')
+    showCreate.value = true
   }
 }
 
-onMounted(load)
+function goPage(p) {
+  if (p < 1 || p > totalPages.value) return
+  page.value = p
+}
+
+watch(() => route.query.publish, syncPublishQuery)
+watch([mainTab, sourceFilter, () => filters.q, pageSize], () => {
+  page.value = 1
+})
+onMounted(() => {
+  load()
+  syncPublishQuery()
+})
 </script>
 
 <template>
-  <div>
-    <div class="flex-between mb-16" style="align-items: flex-end">
+  <div class="my-page">
+    <div class="page-head">
       <div>
-        <h2 style="margin: 0">我的能力</h2>
-        <div class="muted" style="font-size: 13px">
-          我创建的 + 从市场加入的能力；自己的能力可直接调用调试，无需管理员
-        </div>
+        <h1 class="page-title">我的能力</h1>
+        <p class="page-desc muted">管理我创建与已加入的能力；生产安装请用 cap install。</p>
       </div>
-      <button class="btn btn-primary" @click="showCreate = true">+ 新建能力</button>
+      <button class="btn btn-primary" type="button" @click="openCreate()">发布能力</button>
     </div>
 
     <div v-if="notice" class="alert alert-success mb-16">{{ notice }}</div>
     <div v-if="error" class="alert alert-error mb-16">{{ error }}</div>
 
-    <div class="tabs">
-      <button class="tab" :class="{ active: scope === 'all' }" @click="switchScope('all')">
-        全部 <span class="tab-count">{{ counts.all }}</span>
+    <div class="main-tabs">
+      <button type="button" class="main-tab" :class="{ active: mainTab === 'owned' }" @click="switchTab('owned')">
+        我创建的
+        <span class="count">{{ tabCounts.owned }}</span>
       </button>
-      <button class="tab" :class="{ active: scope === 'owned' }" @click="switchScope('owned')">
-        我创建的 <span class="tab-count">{{ counts.owned }}</span>
-      </button>
-      <button class="tab" :class="{ active: scope === 'added' }" @click="switchScope('added')">
-        从市场加入 <span class="tab-count">{{ counts.added }}</span>
+      <button type="button" class="main-tab" :class="{ active: mainTab === 'added' }" @click="switchTab('added')">
+        已加入
+        <span class="count">{{ tabCounts.added }}</span>
       </button>
     </div>
 
-    <div class="panel toolbar mt-16">
+    <div class="filter-bar">
+      <div class="source-chips">
+        <button
+          v-for="chip in sourceChips"
+          :key="chip.key"
+          type="button"
+          class="source-chip"
+          :class="{ active: sourceFilter === chip.key }"
+          @click="setSourceFilter(chip.key)"
+        >
+          {{ chip.label }}
+          <span class="chip-n">{{ chip.count }}</span>
+        </button>
+      </div>
       <input
         v-model="filters.q"
-        class="input"
-        style="max-width: 260px"
-        placeholder="搜索名称 / 描述 / 标签…"
+        class="input search-input"
+        placeholder="搜索能力"
       />
-      <select v-model="filters.type" class="select" style="max-width: 140px" @change="filters.category = ''">
-        <option value="">全部类型</option>
-        <option v-for="(label, key) in TYPE_LABELS" :key="key" :value="key">{{ label }}</option>
-      </select>
-      <select v-model="filters.category" class="select" style="max-width: 150px">
-        <option value="">全部分类</option>
-        <option v-for="c in categoryOptions" :key="c" :value="c">{{ c }}</option>
-      </select>
-      <select v-model="filters.status" class="select" style="max-width: 130px">
-        <option value="">全部状态</option>
-        <option value="draft">草稿</option>
-        <option value="reviewing">待审</option>
-        <option value="published">正式版</option>
-        <option value="deprecated">已弃用</option>
-        <option value="archived">已归档</option>
-        <option value="rejected">已驳回</option>
-        <option value="returned">已打回</option>
-      </select>
-      <select v-model="filters.sort" class="select" style="max-width: 130px">
-        <option value="updated">最近更新</option>
-        <option value="name">名称</option>
-        <option value="usage">使用最多</option>
-        <option value="rating">评分最高</option>
-      </select>
-      <button class="btn" @click="Object.assign(filters, { q: '', type: '', category: '', status: '', sort: 'updated' })">重置</button>
-      <span class="muted" style="font-size: 12px">共 {{ filteredCaps.length }} 项</span>
     </div>
 
-    <div class="panel mt-16">
+    <div class="panel table-panel">
       <div v-if="caps.length === 0" class="empty">
-        还没有能力。去<a href="/" style="color: var(--primary)">能力市场</a>逛逛，或点击右上角「+ 新建能力」。
+        还没有能力。去<a href="/" style="color: var(--primary)">发现</a>逛逛，或点击「发布能力」。
       </div>
       <div v-else-if="filteredCaps.length === 0" class="empty">没有符合筛选条件的能力</div>
-      <table v-else class="table">
+      <table v-else class="skill-table">
         <thead>
-          <tr><th>能力</th><th>来源</th><th>类型</th><th>版本</th><th>状态</th><th>使用量</th><th>更新时间</th><th>操作</th></tr>
+          <tr>
+            <th style="width: 36%">能力</th>
+            <th>状态</th>
+            <th>可见范围</th>
+            <th>来源</th>
+            <th>更新时间</th>
+            <th style="width: 160px">操作</th>
+          </tr>
         </thead>
         <tbody>
-          <tr v-for="cap in filteredCaps" :key="cap.id">
-            <td><router-link :to="`/capabilities/${cap.id}`">{{ cap.name }}</router-link></td>
+          <tr v-for="cap in pagedCaps" :key="cap.id">
             <td>
-              <span v-if="cap.owned" class="badge badge-primary">我创建的</span>
-              <span v-if="cap.added" class="badge">从市场加入</span>
+              <div class="skill-cell">
+                <div class="skill-icon" :style="{ background: typeColor(cap.type) }">{{ typeInitial(cap.type) }}</div>
+                <div class="skill-meta">
+                  <div class="skill-name-row">
+                    <router-link class="skill-name" :to="`/capabilities/${cap.id}`">{{ cap.name }}</router-link>
+                    <span class="ver-tag">v{{ cap.version }}</span>
+                    <span v-if="cap.has_draft" class="badge badge-warning">草稿 v{{ cap.draft_version }}</span>
+                  </div>
+                  <div class="skill-desc muted">
+                    {{ cap.description || TYPE_LABELS[cap.type] }}
+                    <span v-if="shelfLabel(cap.type)"> · {{ shelfLabel(cap.type) }}</span>
+                  </div>
+                </div>
+              </div>
             </td>
-            <td>{{ TYPE_LABELS[cap.type] }}</td>
-            <td>v{{ cap.version }}</td>
             <td><StatusBadge :status="cap.status" /></td>
-            <td>{{ cap.usage_count }}</td>
-            <td class="muted">{{ formatDate(cap.updated_at) }}</td>
             <td>
-              <div class="flex" style="gap: 6px; flex-wrap: wrap">
-                <router-link :to="`/capabilities/${cap.id}`" class="btn btn-sm">详情</router-link>
-                <button v-if="['published', 'deprecated'].includes(cap.status)" class="btn btn-sm btn-primary" @click="debugCap = cap">
-                  调用 / 调试
-                </button>
+              <span class="vis-pill">{{ visibilityLabel(cap) }}</span>
+            </td>
+            <td>
+              <span class="src-text">{{ sourceLabel(cap) }}</span>
+            </td>
+            <td class="muted time">{{ formatDate(cap.updated_at) }}</td>
+            <td>
+              <div class="ops">
+                <router-link :to="`/capabilities/${cap.id}`" class="op-link">详情</router-link>
+                <button
+                  v-if="['published', 'deprecated'].includes(cap.status)"
+                  class="op-link"
+                  type="button"
+                  @click="debugCap = cap"
+                >试用</button>
                 <template v-if="cap.has_draft">
-                  <span class="badge badge-warning">草稿 v{{ cap.draft_version }}</span>
-                  <button class="btn btn-sm btn-success" @click="submitDraft(cap)">提交草稿审核</button>
-                  <router-link v-if="cap.type === 'skill'" :to="`/skills/${encodeURIComponent(cap.name)}/edit`" class="btn btn-sm">编辑草稿</router-link>
-                  <router-link v-else-if="cap.type === 'agent'" :to="`/agents/${encodeURIComponent(cap.name)}/edit`" class="btn btn-sm">编辑草稿</router-link>
-                  <router-link v-else-if="cap.type === 'tool'" :to="`/tools/${encodeURIComponent(cap.name)}/edit`" class="btn btn-sm">编辑草稿</router-link>
-                  <router-link v-else-if="cap.type === 'mcp'" :to="`/mcp/${encodeURIComponent(cap.name)}/edit`" class="btn btn-sm">编辑草稿</router-link>
-                  <router-link v-else-if="cap.type === 'workflow'" :to="`/workflows/${cap.draft_id}/edit`" class="btn btn-sm">可视化编辑</router-link>
-                  <router-link :to="`/capabilities/${cap.draft_id}`" class="btn btn-sm">查看草稿</router-link>
+                  <button class="op-link success" type="button" @click="submitDraft(cap)">提交审核</button>
+                  <router-link
+                    v-if="cap.type === 'workflow'"
+                    :to="`/workflows/${cap.draft_id}/edit`"
+                    class="op-link"
+                  >编辑</router-link>
+                  <router-link
+                    v-else-if="cap.type === 'skill'"
+                    :to="`/skills/${encodeURIComponent(cap.name)}/edit`"
+                    class="op-link"
+                  >编辑</router-link>
+                  <router-link
+                    v-else-if="cap.type === 'agent'"
+                    :to="`/agents/${encodeURIComponent(cap.name)}/edit`"
+                    class="op-link"
+                  >编辑</router-link>
+                  <router-link
+                    v-else-if="cap.type === 'tool'"
+                    :to="`/tools/${encodeURIComponent(cap.name)}/edit`"
+                    class="op-link"
+                  >编辑</router-link>
+                  <router-link
+                    v-else-if="cap.type === 'mcp'"
+                    :to="`/mcp/${encodeURIComponent(cap.name)}/edit`"
+                    class="op-link"
+                  >编辑</router-link>
                 </template>
                 <template v-else-if="cap.owned && ['draft', 'returned', 'rejected'].includes(cap.status)">
-                  <button class="btn btn-sm btn-success" @click="submit(cap)">提交审核</button>
-                  <router-link :to="`/capabilities/${cap.id}`" class="btn btn-sm">编辑类型</router-link>
-                  <router-link v-if="cap.type === 'skill'" :to="`/skills/${encodeURIComponent(cap.name)}/edit`" class="btn btn-sm">编辑草稿</router-link>
-                  <router-link v-else-if="cap.type === 'agent'" :to="`/agents/${encodeURIComponent(cap.name)}/edit`" class="btn btn-sm">编辑草稿</router-link>
-                  <router-link v-else-if="cap.type === 'tool'" :to="`/tools/${encodeURIComponent(cap.name)}/edit`" class="btn btn-sm">编辑草稿</router-link>
-                  <router-link v-else-if="cap.type === 'mcp'" :to="`/mcp/${encodeURIComponent(cap.name)}/edit`" class="btn btn-sm">编辑草稿</router-link>
-                  <router-link v-if="cap.type === 'workflow'" :to="`/workflows/${cap.id}/edit`" class="btn btn-sm">可视化编辑</router-link>
-                  <button class="btn btn-sm btn-danger" @click="removeDraft(cap)">删除</button>
+                  <button class="op-link success" type="button" @click="submit(cap)">提交审核</button>
+                  <router-link
+                    v-if="cap.type === 'workflow'"
+                    :to="`/workflows/${cap.id}/edit`"
+                    class="op-link"
+                  >编辑</router-link>
+                  <router-link
+                    v-else-if="cap.type === 'skill'"
+                    :to="`/skills/${encodeURIComponent(cap.name)}/edit`"
+                    class="op-link"
+                  >编辑</router-link>
+                  <router-link
+                    v-else-if="cap.type === 'agent'"
+                    :to="`/agents/${encodeURIComponent(cap.name)}/edit`"
+                    class="op-link"
+                  >编辑</router-link>
+                  <router-link
+                    v-else-if="cap.type === 'tool'"
+                    :to="`/tools/${encodeURIComponent(cap.name)}/edit`"
+                    class="op-link"
+                  >编辑</router-link>
+                  <router-link
+                    v-else-if="cap.type === 'mcp'"
+                    :to="`/mcp/${encodeURIComponent(cap.name)}/edit`"
+                    class="op-link"
+                  >编辑</router-link>
+                  <button class="op-link danger" type="button" @click="askRemoveDraft(cap)">删除</button>
                 </template>
                 <template v-else-if="cap.owned && cap.status === 'reviewing'">
-                  <button class="btn btn-sm" @click="withdraw(cap)">撤回审核</button>
-                  <button class="btn btn-sm btn-danger" @click="removeDraft(cap)">删除</button>
+                  <button class="op-link" type="button" @click="withdraw(cap)">撤回</button>
+                  <button class="op-link danger" type="button" @click="askRemoveDraft(cap)">删除</button>
                 </template>
-                <button v-if="cap.added && !cap.owned" class="btn btn-sm" @click="removeFromMy(cap)">移除</button>
+                <button
+                  v-if="cap.added && !cap.owned"
+                  class="op-link danger"
+                  type="button"
+                  @click="askRemoveFromMy(cap)"
+                >移除</button>
               </div>
             </td>
           </tr>
         </tbody>
       </table>
+
+      <div v-if="filteredCaps.length > 0" class="pager">
+        <span class="muted">共 {{ filteredCaps.length }} 条</span>
+        <div class="pager-nav">
+          <button class="btn btn-sm" type="button" :disabled="page <= 1" @click="goPage(page - 1)">上一页</button>
+          <span class="page-n">{{ page }}</span>
+          <button class="btn btn-sm" type="button" :disabled="page >= totalPages" @click="goPage(page + 1)">下一页</button>
+        </div>
+        <select v-model.number="pageSize" class="select page-size">
+          <option :value="10">10 条/页</option>
+          <option :value="20">20 条/页</option>
+          <option :value="50">50 条/页</option>
+        </select>
+      </div>
     </div>
 
-    <CreateCapabilityModal :show="showCreate" @close="showCreate = false" @created="onCreated" />
+    <div v-if="confirmAction" class="confirm-mask" @click.self="confirmAction = null">
+      <div class="confirm-card">
+        <div class="confirm-title">
+          <span class="confirm-warn">!</span>
+          {{ confirmAction.title }}
+        </div>
+        <p class="confirm-body muted">{{ confirmAction.body }}</p>
+        <div class="confirm-actions">
+          <button class="btn" type="button" @click="confirmAction = null">取消</button>
+          <button
+            class="btn"
+            :class="confirmAction.danger ? 'btn-danger' : 'btn-primary'"
+            type="button"
+            @click="confirmOk"
+          >{{ confirmAction.okText }}</button>
+        </div>
+      </div>
+    </div>
+
+    <CreateCapabilityModal
+      :show="showCreate"
+      :initial-shelf="initialShelf"
+      @close="showCreate = false"
+      @created="onCreated"
+    />
     <DebugCapabilityModal :show="!!debugCap" :cap="debugCap" @close="debugCap = null" />
   </div>
 </template>
 
 <style scoped>
-.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
-.tab {
-  background: none; border: none; color: var(--muted); padding: 10px 16px; cursor: pointer;
-  border-bottom: 2px solid transparent; font-size: 14px;
+.page-head {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 16px; margin-bottom: 18px;
 }
-.tab.active { color: var(--primary); border-bottom-color: var(--primary); }
-.tab-count {
-  display: inline-flex; min-width: 18px; height: 18px; border-radius: 9px; align-items: center;
-  justify-content: center; background: var(--panel-2); color: var(--muted); font-size: 11px; margin-left: 4px;
+.page-title { margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -0.02em; }
+.page-desc { margin: 6px 0 0; font-size: 13px; }
+.main-tabs {
+  display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 14px;
 }
-.tab.active .tab-count { background: rgba(79,140,255,.15); color: var(--primary); }
-.field { display: flex; flex-direction: column; gap: 6px; }
-.field label { font-size: 13px; color: var(--muted); }
+.main-tab {
+  background: none; border: none; color: var(--muted);
+  padding: 10px 16px; cursor: pointer; font-size: 14px;
+  border-bottom: 2px solid transparent; display: inline-flex; align-items: center; gap: 6px;
+}
+.main-tab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
+.main-tab .count {
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+  background: var(--panel-2); color: var(--muted); font-size: 11px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.main-tab.active .count { background: var(--primary-soft); color: var(--primary); }
+
+.filter-bar {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 12px; margin-bottom: 14px;
+}
+.source-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.source-chip {
+  background: #fff; border: 1px solid var(--border); color: var(--muted);
+  padding: 6px 12px; border-radius: 999px; cursor: pointer; font-size: 13px;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.source-chip:hover { border-color: var(--primary); color: var(--text); }
+.source-chip.active {
+  background: var(--primary-soft); border-color: #c9d8ff; color: var(--primary); font-weight: 600;
+}
+.chip-n { font-variant-numeric: tabular-nums; opacity: 0.85; }
+.search-input { max-width: 240px; }
+
+.table-panel { padding: 0; overflow: hidden; }
+.skill-table { width: 100%; border-collapse: collapse; }
+.skill-table th {
+  text-align: left; padding: 12px 16px; font-size: 12px; font-weight: 500;
+  color: var(--muted); background: #fafbfc; border-bottom: 1px solid var(--border);
+}
+.skill-table td {
+  padding: 14px 16px; border-bottom: 1px solid var(--border); vertical-align: middle;
+  font-size: 13px;
+}
+.skill-table tr:hover td { background: #fafbfc; }
+.skill-table tr:last-child td { border-bottom: none; }
+
+.skill-cell { display: flex; gap: 12px; align-items: flex-start; min-width: 0; }
+.skill-icon {
+  width: 40px; height: 40px; border-radius: 10px; flex: none;
+  color: #fff; font-weight: 700; font-size: 16px;
+  display: flex; align-items: center; justify-content: center;
+}
+.skill-meta { min-width: 0; }
+.skill-name-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.skill-name { color: var(--text); font-weight: 650; font-size: 14px; }
+.skill-name:hover { color: var(--primary); }
+.ver-tag {
+  font-size: 11px; color: var(--muted); background: var(--panel-2);
+  border: 1px solid var(--border); border-radius: 6px; padding: 1px 6px;
+}
+.skill-desc {
+  margin-top: 4px; font-size: 12px; line-height: 1.45;
+  display: -webkit-box; -webkit-line-clamp: 1; line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden;
+}
+.vis-pill {
+  display: inline-flex; padding: 2px 8px; border-radius: 999px;
+  background: var(--panel-2); border: 1px solid var(--border); font-size: 12px; color: var(--text);
+}
+.src-text { color: var(--text); }
+.time { white-space: nowrap; font-size: 12px; }
+.ops { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.op-link {
+  background: none; border: none; padding: 0; cursor: pointer;
+  color: var(--primary); font-size: 13px; text-decoration: none;
+}
+.op-link:hover { text-decoration: underline; }
+.op-link.danger { color: var(--danger); }
+.op-link.success { color: var(--success); }
+
+.pager {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 12px 16px; border-top: 1px solid var(--border);
+}
+.pager-nav { display: flex; align-items: center; gap: 8px; }
+.page-n {
+  min-width: 28px; height: 28px; border-radius: 8px;
+  background: var(--primary); color: #fff;
+  display: inline-flex; align-items: center; justify-content: center; font-size: 13px;
+}
+.page-size { max-width: 110px; }
+
+.confirm-mask {
+  position: fixed; inset: 0; background: var(--overlay);
+  display: flex; align-items: center; justify-content: center; z-index: 80; padding: 16px;
+}
+.confirm-card {
+  width: min(400px, 100%); background: #fff; border-radius: 14px;
+  padding: 20px; box-shadow: var(--shadow-lg); border: 1px solid var(--border);
+}
+.confirm-title {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 16px; font-weight: 650;
+}
+.confirm-warn {
+  width: 22px; height: 22px; border-radius: 50%;
+  background: rgba(245, 165, 36, 0.15); color: #b7791f;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 700;
+}
+.confirm-body { margin: 12px 0 0; font-size: 13px; line-height: 1.55; }
+.confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.mb-16 { margin-bottom: 16px; }
+
+@media (max-width: 900px) {
+  .skill-table th:nth-child(3),
+  .skill-table td:nth-child(3),
+  .skill-table th:nth-child(4),
+  .skill-table td:nth-child(4) { display: none; }
+}
 </style>

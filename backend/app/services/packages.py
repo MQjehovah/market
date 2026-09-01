@@ -20,12 +20,12 @@ REQUIRED_FILES: dict[str, list[str]] = {
 }
 
 OPTIONAL_FILES: dict[str, list[str]] = {
-    "agent": ["TEAM.md", "tools.json", "knowledge/", "skills/", "examples/"],
+    "agent": ["TEAM.md", "tools.json", "knowledge/", "skills/", "examples/", "agents/", "dependencies.json"],
     "tool": ["security.json", "tests/", "examples/", "docs/", "implementation/__init__.py"],
-    "skill": ["templates/", "assets/", "dependencies.json", "examples/"],
+    "skill": ["templates/", "assets/", "dependencies.json", "examples/", "scripts/", "references/"],
     "mcp": ["docker-compose.yml", "docs/"],
     "workflow": ["README.md", "examples/"],
-    "plugin": ["agents/", "skills/", "tools/", "mcp.json", ".cursor-plugin/"],
+    "plugin": ["agents/", "skills/", "tools/", "mcp.json", ".cursor-plugin/", "mcp/"],
 }
 
 # Allow Unicode letters (incl. CJK), digits, underscore, hyphen, dot
@@ -33,6 +33,42 @@ NAME_RE = re.compile(r"^[\w.\-]+$", re.UNICODE)
 
 _IGNORED_ROOTS = {"__macosx", ".ds_store"}
 _IGNORED_FILES = {".ds_store", "thumbs.db"}
+
+# Prefer root README; then docs/; case-insensitive basename match
+_README_CANDIDATES = (
+    "README.md",
+    "readme.md",
+    "Readme.md",
+    "docs/README.md",
+    "docs/readme.md",
+)
+
+
+def extract_readme_text(content: bytes, *, max_chars: int = 200_000) -> str:
+    """Extract README markdown from a capability zip, if present."""
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(content))
+    except zipfile.BadZipFile:
+        return ""
+    files = zip_file_map(zf)
+    if not files:
+        return ""
+    # Exact preferred paths first
+    for cand in _README_CANDIDATES:
+        raw = files.get(cand)
+        if raw is not None:
+            text = zf.read(raw).decode("utf-8", errors="replace").strip()
+            return text[:max_chars] if text else ""
+    # Any *readme*.md at package root (depth 1)
+    root_readmes = sorted(
+        (logical, raw)
+        for logical, raw in files.items()
+        if "/" not in logical and logical.lower().endswith(".md") and "readme" in logical.lower()
+    )
+    if root_readmes:
+        text = zf.read(root_readmes[0][1]).decode("utf-8", errors="replace").strip()
+        return text[:max_chars] if text else ""
+    return ""
 
 
 def _norm_zip_name(name: str) -> str:
@@ -132,17 +168,22 @@ def _check_name(name: str, label: str) -> None:
 
 
 def _warn_hardcoded_env(env: Any, label: str) -> list[str]:
-    """Return warnings for env values that look like hardcoded secrets."""
+    """Return warnings for values that look like hardcoded secrets (密钥应出制品)。"""
     warnings: list[str] = []
     if not isinstance(env, dict):
         return warnings
+    secretish = ("key", "token", "secret", "password", "passwd", "authorization", "api_key")
     for key, val in env.items():
         if not isinstance(val, str):
             continue
         if val.startswith("${") or val.startswith("{"):
             continue
-        if len(val) >= 8:
-            warnings.append(f"{label}.env.{key} \u53ef\u80fd\u662f\u786c\u7f16\u7801\u654f\u611f\u503c\uff0c\u5efa\u8bae\u4f7f\u7528 ${{VAR}} \u5360\u4f4d")
+        key_l = str(key).lower()
+        looks_secret = any(s in key_l for s in secretish)
+        if looks_secret or len(val) >= 8:
+            warnings.append(
+                f"{label}.{key} 可能是硬编码敏感值，制品内请使用 ${{VAR}} / ${{VAR:default}} 占位"
+            )
     return warnings
 
 
@@ -155,28 +196,29 @@ def validate_skill_meta(meta: dict[str, Any], label: str = "skill.json", *, requ
     if require_version and not has_version:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            f"{label} \u7f3a\u5c11 identity.version\uff08\u6216\u9876\u5c42 version\uff09",
+            f"{label} 缺少 identity.version（或顶层 version）",
         )
     return name
 
 
 def validate_mcp_connection(connection: dict[str, Any], label: str = "connection.json") -> list[str]:
-    """共享 MCP connection 校验；返回 warnings。"""
+    """共享 MCP connection 校验；返回 warnings（含 env / headers 密钥占位检查）。"""
     if not isinstance(connection, dict):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{label} \u5fc5\u987b\u662f JSON \u5bf9\u8c61")
-    warnings = _warn_hardcoded_env(connection.get("env"), label)
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{label} 必须是 JSON 对象")
+    warnings = _warn_hardcoded_env(connection.get("env"), f"{label}.env")
+    warnings.extend(_warn_hardcoded_env(connection.get("headers"), f"{label}.headers"))
     transport = connection.get("transport") or connection.get("type")
     if transport in ("stdio", None) and not connection.get("command") and not connection.get("url") and not connection.get("server"):
         if connection.get("url") or connection.get("server"):
             return warnings
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            f"{label} \u9700\u5305\u542b command\u3001url \u6216 server\uff08gateway\uff09\u4e4b\u4e00",
+            f"{label} 需包含 command、url 或 server（gateway）之一",
         )
     if transport in ("http", "sse", "streamable_http", "streamable-http") and not connection.get("url"):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            f"{label} transport={transport} \u65f6\u9700\u8981 url",
+            f"{label} transport={transport} 时需要 url",
         )
     return warnings
 
@@ -364,3 +406,132 @@ def validate_package(capability_type: str, content: bytes) -> dict[str, Any]:
     elif capability_type == "agent":
         details["warnings"] = _validate_agent_embedded(zf, files, meta)
     return details
+
+
+_TEXT_EXTENSIONS = {
+    ".md",
+    ".markdown",
+    ".txt",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".xml",
+    ".html",
+    ".htm",
+    ".css",
+    ".scss",
+    ".js",
+    ".jsx",
+    ".ts",
+    ".tsx",
+    ".py",
+    ".sh",
+    ".bash",
+    ".zsh",
+    ".ps1",
+    ".bat",
+    ".cmd",
+    ".sql",
+    ".env",
+    ".ini",
+    ".cfg",
+    ".conf",
+    ".gitignore",
+    ".dockerignore",
+    ".editorconfig",
+    ".csv",
+    ".tsv",
+    ".log",
+    ".rst",
+    ".svg",
+}
+_TEXT_BASENAMES = {
+    "dockerfile",
+    "makefile",
+    "license",
+    "licence",
+    "authors",
+    "changelog",
+    "gemfile",
+    "procfile",
+}
+_MAX_PREVIEW_BYTES = 512_000
+
+
+def _is_text_path(path: str) -> bool:
+    name = path.rsplit("/", 1)[-1]
+    lower = name.lower()
+    if lower in _TEXT_BASENAMES:
+        return True
+    if "." not in name:
+        return False
+    ext = "." + lower.rsplit(".", 1)[-1]
+    return ext in _TEXT_EXTENSIONS
+
+
+def _safe_logical_path(path: str) -> str:
+    raw = (path or "").replace("\\", "/").strip()
+    if not raw or raw.startswith("/") or ".." in raw.split("/"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "非法文件路径")
+    return raw.lstrip("./")
+
+
+def list_package_entries(content: bytes) -> list[dict[str, Any]]:
+    """List logical files in a capability zip (flat, sorted)."""
+    with zipfile.ZipFile(io.BytesIO(content)) as zf:
+        files = zip_file_map(zf)
+        out: list[dict[str, Any]] = []
+        for logical, raw_name in sorted(files.items()):
+            info = zf.getinfo(raw_name)
+            out.append(
+                {
+                    "path": logical,
+                    "size": int(info.file_size),
+                    "text": _is_text_path(logical),
+                }
+            )
+        return out
+
+
+def read_package_entry(content: bytes, path: str, *, max_bytes: int = _MAX_PREVIEW_BYTES) -> dict[str, Any]:
+    """Read one logical file for preview."""
+    logical = _safe_logical_path(path)
+    with zipfile.ZipFile(io.BytesIO(content)) as zf:
+        files = zip_file_map(zf)
+        if logical not in files:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"包内不存在文件：{logical}")
+        raw_name = files[logical]
+        info = zf.getinfo(raw_name)
+        size = int(info.file_size)
+        data = zf.read(raw_name)
+        truncated = False
+        if len(data) > max_bytes:
+            data = data[:max_bytes]
+            truncated = True
+        is_text = _is_text_path(logical)
+        if is_text:
+            # Reject obvious binary even for "text" extensions
+            if b"\x00" in data[:4096]:
+                is_text = False
+        result: dict[str, Any] = {
+            "path": logical,
+            "size": size,
+            "truncated": truncated,
+            "binary": not is_text,
+            "content": "",
+            "encoding": "",
+        }
+        if not is_text:
+            return result
+        for enc in ("utf-8", "utf-8-sig", "gb18030", "latin-1"):
+            try:
+                result["content"] = data.decode(enc)
+                result["encoding"] = enc
+                break
+            except UnicodeDecodeError:
+                continue
+        else:
+            result["binary"] = True
+            result["content"] = ""
+        return result

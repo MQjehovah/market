@@ -6,7 +6,7 @@ import AppHeader from './components/AppHeader.vue'
   <div class="app-shell">
     <AppHeader />
     <main class="app-main" :class="{ 'app-main-full': $route.meta.full }">
-      <router-view />
+      <router-view :key="$route.path + JSON.stringify($route.query)" />
     </main>
   </div>
 </template>

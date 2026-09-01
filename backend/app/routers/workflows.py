@@ -56,6 +56,8 @@ async def create_workflow(data: WorkflowCreate, db: DbSession, user: CurrentUser
             status.HTTP_409_CONFLICT, f"工作流 {data.name} 已存在版本 {data.version}"
         )
     pkg = _workflow_zip(data.workflow)
+    from app.services.packages import extract_readme_text
+
     cap = Capability(
         name=data.name,
         description=data.description,
@@ -69,6 +71,7 @@ async def create_workflow(data: WorkflowCreate, db: DbSession, user: CurrentUser
         status="draft",
         author_id=user.id,
         organization=user.organization,
+        readme_md=extract_readme_text(pkg),
     )
     db.add(cap)
     await db.flush()
@@ -130,6 +133,8 @@ async def update_workflow(cap_id: str, data: WorkflowUpdate, db: DbSession, user
             status.HTTP_409_CONFLICT, "仅草稿或被打回/驳回的工作流可以编辑"
         )
     pkg = _workflow_zip(data.workflow)
+    from app.services.packages import extract_readme_text
+
     filename = f"{cap.name}-{cap.version}-draft.zip"
     info = get_storage().save(cap.id, filename, io.BytesIO(pkg))
     db.add(
@@ -139,6 +144,7 @@ async def update_workflow(cap_id: str, data: WorkflowUpdate, db: DbSession, user
             **info,
         )
     )
+    cap.readme_md = extract_readme_text(pkg)
     cap.updated_at = datetime.utcnow()
     await db.commit()
     await db.refresh(cap)

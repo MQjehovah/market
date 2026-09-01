@@ -124,7 +124,7 @@ async def test_tool_edit_read_and_save_new_version(client, publisher_headers, ad
 
 @pytest.mark.asyncio
 async def test_tool_edit_requires_owner(client, publisher_headers, admin_headers, user_headers):
-    name = "owner-tool"
+    name = "owner-tool-edit-guard"
     await _publish_tool(client, publisher_headers, admin_headers, name)
 
     r = await client.put(

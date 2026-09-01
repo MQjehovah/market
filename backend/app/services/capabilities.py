@@ -39,6 +39,9 @@ STATUS_FLOW: dict[str, set[str]] = {
 
 EDITABLE_STATUSES = {"draft", "returned", "rejected"}
 DELETABLE_STATUSES = {"draft", "returned", "rejected", "reviewing"}
+UPLOADABLE_STATUSES = EDITABLE_STATUSES | {"reviewing"}
+# workflow 内容在画布维护，提交审核不强制 zip
+PACKAGE_REQUIRED_TYPES = {"agent", "tool", "skill", "mcp", "plugin"}
 
 
 def parse_semver(version: str) -> tuple[int, int, int]:
@@ -57,11 +60,24 @@ def next_version(version: str, change_type: str) -> str:
     return f"{major}.{minor}.{patch + 1}"
 
 
+async def highest_version(
+    db: AsyncSession, name: str, type_: str | None = None
+) -> str | None:
+    """同名（可选同 type）能力中已有的最高语义化版本号。"""
+    stmt = select(Capability.version).where(Capability.name == name)
+    if type_ is not None:
+        stmt = stmt.where(Capability.type == type_)
+    versions = list(await db.scalars(stmt))
+    if not versions:
+        return None
+    return max(versions, key=parse_semver)
+
+
 def is_latest(cap: Capability, versions: list[Capability]) -> bool:
-    same_name = [v for v in versions if v.name == cap.name]
-    if not same_name:
+    same = [v for v in versions if v.name == cap.name and v.type == cap.type]
+    if not same:
         return True
-    return cap == max(same_name, key=lambda c: parse_semver(c.version))
+    return cap == max(same, key=lambda c: parse_semver(c.version))
 
 
 def to_capability_out(
@@ -82,6 +98,10 @@ def to_capability_out(
         "visibility": cap.visibility,
         "access_policy": cap.access_policy or "open",
         "allowed_users": list(cap.allowed_users or []),
+        "install_policy": getattr(cap, "install_policy", None) or "optional",
+        "changelog": getattr(cap, "changelog", None) or "",
+        "readme_md": getattr(cap, "readme_md", None) or "",
+        "validation_report": getattr(cap, "validation_report", None) or {},
         "author_id": cap.author_id,
         "organization": cap.organization or "",
         "input_schema": cap.input_schema or {},
@@ -152,6 +172,7 @@ async def create_capability(
         visibility=data.visibility,
         access_policy=data.access_policy,
         allowed_users=list(data.allowed_users or []),
+        install_policy=data.install_policy or "optional",
         author_id=user.id,
         organization=user.organization,
         status="draft",
@@ -230,6 +251,8 @@ async def update_capability(
         cap.access_policy = data.access_policy
     if data.allowed_users is not None:
         cap.allowed_users = [u.strip() for u in data.allowed_users if u.strip()]
+    if data.install_policy is not None:
+        cap.install_policy = data.install_policy
     await db.commit()
     await db.refresh(cap)
     return cap
@@ -290,6 +313,17 @@ async def delete_capability(db: AsyncSession, cap: Capability) -> None:
 
 
 async def submit_for_review(db: AsyncSession, cap: Capability) -> Capability:
+    if cap.type in PACKAGE_REQUIRED_TYPES:
+        has_artifact = await db.scalar(
+            select(CapabilityArtifact.id)
+            .where(CapabilityArtifact.capability_id == cap.id)
+            .limit(1)
+        )
+        if has_artifact is None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "请先上传能力包后再提交审核",
+            )
     _transition(cap, "reviewing")
     db.add(Review(capability_id=cap.id, reviewer_id=cap.author_id, action="submitted", comment="提交审核"))
     await db.commit()
@@ -413,7 +447,12 @@ def _transition(cap: Capability, target: str) -> None:
 
 
 async def create_new_version(
-    db: AsyncSession, user: User, cap: Capability, new_version: str
+    db: AsyncSession,
+    user: User,
+    cap: Capability,
+    new_version: str,
+    *,
+    changelog: str = "",
 ) -> Capability:
     exists = await db.scalar(
         select(Capability.id).where(
@@ -427,11 +466,13 @@ async def create_new_version(
         description=cap.description,
         type=cap.type,
         version=new_version,
+        changelog=changelog or "",
         category=cap.category,
         tags=list(cap.tags or []),
         visibility=cap.visibility,
         access_policy=cap.access_policy,
         allowed_users=list(cap.allowed_users or []),
+        install_policy=getattr(cap, "install_policy", None) or "optional",
         author_id=user.id,
         organization=cap.organization,
         status="draft",

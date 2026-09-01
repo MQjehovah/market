@@ -2,6 +2,7 @@
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.pool import StaticPool
 
 from app.config import get_settings
 
@@ -16,6 +17,9 @@ DATABASE_URL = settings.resolved_database_url()
 engine_kwargs: dict = {"echo": settings.debug}
 if DATABASE_URL.startswith("sqlite"):
     engine_kwargs["connect_args"] = {"check_same_thread": False}
+    # :memory: 每个连接默认是独立库；StaticPool 保证同进程内共用一张内存库
+    if ":memory:" in DATABASE_URL:
+        engine_kwargs["poolclass"] = StaticPool
 
 engine = create_async_engine(DATABASE_URL, **engine_kwargs)
 SessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -55,6 +59,22 @@ async def _auto_migrate(conn) -> None:
         if "allowed_users" not in cols:
             sync_conn.exec_driver_sql(
                 "ALTER TABLE capabilities ADD COLUMN allowed_users JSON DEFAULT '[]'"
+            )
+        if "install_policy" not in cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE capabilities ADD COLUMN install_policy VARCHAR(20) DEFAULT 'optional'"
+            )
+        if "changelog" not in cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE capabilities ADD COLUMN changelog TEXT DEFAULT ''"
+            )
+        if "validation_report" not in cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE capabilities ADD COLUMN validation_report JSON DEFAULT '{}'"
+            )
+        if "readme_md" not in cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE capabilities ADD COLUMN readme_md TEXT DEFAULT ''"
             )
 
     await conn.run_sync(_do)

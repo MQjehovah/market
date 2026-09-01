@@ -1,6 +1,19 @@
 """核心流程测试：认证 / 发布审核 / 权限矩阵 / 搜索 / 执行引擎 / 评分订阅。"""
 
+import io
+import json
+import zipfile
+
 import pytest
+
+
+def _tool_zip(name: str, version: str = "1.0.0") -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("tool.json", json.dumps({"name": name, "description": "e2e", "version": version}))
+        zf.writestr("schema.json", json.dumps({"type": "object", "properties": {}}))
+        zf.writestr("implementation/tool.py", "def run(params):\n    return {}\n")
+    return buf.getvalue()
 
 
 @pytest.mark.asyncio
@@ -8,11 +21,17 @@ async def test_public_browse_returns_published(client):
     r = await client.get("/api/capabilities")
     assert r.status_code == 200
     items = r.json()["items"]
-    assert len(items) >= 4
+    # 默认货架：安装包 + 配方（不含积木）
+    assert len(items) >= 1
     assert all(item["status"] == "published" for item in items)
     types = {item["type"] for item in items}
-    # 默认浏览隐藏 plugin-component；至少应有独立上架的 agent/tool/skill/mcp
-    assert {"agent", "tool", "skill", "mcp"} <= types
+    assert types <= {"plugin", "agent", "workflow"}
+    assert "agent" in types
+
+    r_all = await client.get("/api/capabilities?include_bricks=true")
+    assert r_all.status_code == 200
+    all_types = {item["type"] for item in r_all.json()["items"]}
+    assert {"agent", "tool", "skill", "mcp"} <= all_types
 
 
 @pytest.mark.asyncio
@@ -53,6 +72,13 @@ async def test_publish_submit_review_publish_flow(client, publisher_headers, adm
     assert r.status_code == 201, r.text
     cap_id = r.json()["id"]
     assert r.json()["status"] == "draft"
+
+    r = await client.post(
+        f"/api/publish/capabilities/{cap_id}/artifact",
+        headers=publisher_headers,
+        files={"file": ("pkg.zip", _tool_zip(name), "application/zip")},
+    )
+    assert r.status_code == 200, r.text
 
     r = await client.post(f"/api/publish/capabilities/{cap_id}/submit", headers=publisher_headers)
     assert r.status_code == 200
@@ -103,6 +129,11 @@ async def test_search_and_filter(client):
     r = await client.get("/api/capabilities", params={"type": "mcp"})
     assert r.status_code == 200
     assert all(item["type"] == "mcp" for item in r.json()["items"])
+
+    r = await client.get("/api/capabilities", params={"shelf": "brick"})
+    assert r.status_code == 200
+    assert all(item["type"] in ("skill", "mcp", "tool") for item in r.json()["items"])
+    assert any(item["type"] == "tool" for item in r.json()["items"])
 
 
 @pytest.mark.asyncio

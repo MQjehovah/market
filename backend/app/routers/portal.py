@@ -13,14 +13,22 @@ from app.schemas import (
     AccessPolicyUpdate,
     CapabilityOut,
     CapabilityPage,
+    InstallPolicyUpdate,
     MessageOut,
     NotificationOut,
+    PackageFileContentOut,
+    PackageTreeOut,
     RatingCreate,
     RatingOut,
     SubscribeRequest,
 )
 from app.services.capabilities import get_visible_capabilities, parse_semver, record_rating
 from app.services.capabilities import to_capability_out
+from app.services.taxonomy import (
+    DEFAULT_BROWSE_KINDS,
+    kinds_for_shelf,
+    taxonomy_payload,
+)
 from app.storage import get_storage
 
 router = APIRouter(prefix="/api", tags=["portal"])
@@ -47,34 +55,54 @@ def _visibility_where(user: User | None):
     return or_(*clauses)
 
 
+@router.get("/meta/taxonomy")
+async def taxonomy():
+    """货架 / kind / 双编排 / 消费矩阵 / 审核清单（控制面语义）。"""
+    return taxonomy_payload()
+
+
 @router.get("/capabilities", response_model=CapabilityPage)
 async def browse_capabilities(
     db: DbSession,
     user: OptionalUser,
     q: str = "",
     type: str = "",
+    shelf: str = "",
     category: str = "",
     status: str = "",
     visibility: str = "",
     skill: str = "",
     mcp: str = "",
     include_components: bool = False,
+    include_bricks: bool = False,
     sort: str = "latest",
     page: int = Query(1, ge=1),
     page_size: int = Query(24, ge=1, le=100),
 ):
     """浏览市场：默认只展示已发布能力，且每个逻辑能力只保留最新版本。
 
+    默认货架为安装包+配方（plugin/agent/workflow）。积木（skill/mcp/tool）需：
+    - shelf=brick，或
+    - type=某积木 kind，或
+    - include_bricks=true。
+
     skill / mcp：按 Agent 内嵌能力名筛选（匹配 input_schema.embedded_*）。
-    include_components：为 false 时隐藏全部 plugin 拆出子能力（含已发布）；
-    仅通过 plugin 详情进入子组件，避免与独立 skill/mcp 列表重复。
+    include_components：为 false 时隐藏全部 plugin 拆出子能力（含已发布）。
     """
     conditions: list = []
     visibility_where = _visibility_where(user)
     if visibility_where is not None:
         conditions.append(visibility_where)
+
+    shelf_kinds = kinds_for_shelf(shelf) if shelf else None
     if type:
         conditions.append(Capability.type == type)
+    elif shelf_kinds is not None:
+        conditions.append(Capability.type.in_(shelf_kinds))
+    elif not include_bricks and not skill and not mcp and not q.strip():
+        # 默认货架：安装包+配方；有关键词搜索时放开全部 kind，避免搜不到积木
+        conditions.append(Capability.type.in_(list(DEFAULT_BROWSE_KINDS)))
+
     if category:
         conditions.append(Capability.category == category)
     # 列表默认只显示已发布；显式指定状态时按指定状态过滤（如管理侧排查用）
@@ -271,6 +299,17 @@ async def capability_detail(cap_id: str, db: DbSession, user: OptionalUser):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
     same_name = [c for c in visible if c.name == cap.name]
     out = _to_out(cap, same_name)
+    if not (out.readme_md or "").strip():
+        from app.services.packages import extract_readme_text
+        from app.storage import get_storage
+
+        arts = list(cap.artifacts or [])
+        if arts:
+            try:
+                blob = get_storage().open(arts[-1].uri).read()
+                out.readme_md = extract_readme_text(blob)
+            except Exception:
+                pass
     if cap.type == "agent":
         schema = out.input_schema or {}
         if schema.get("embedded_skills") is not None or schema.get("embedded_mcp") is not None:
@@ -296,6 +335,60 @@ async def capability_versions(cap_id: str, db: DbSession, user: OptionalUser):
     versions = [c for c in visible if c.name == cap.name]
     versions.sort(key=lambda c: parse_semver(c.version), reverse=True)
     return [_to_out(c, versions) for c in versions]
+
+
+def _latest_artifact(cap: Capability):
+    arts = list(cap.artifacts or [])
+    if not arts:
+        return None
+    return arts[-1]
+
+
+def _load_artifact_bytes(cap: Capability) -> tuple[bytes, object]:
+    artifact = _latest_artifact(cap)
+    if artifact is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "尚未上传能力包")
+    try:
+        blob = get_storage().open(artifact.uri).read()
+    except Exception as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "能力包文件不可用") from exc
+    return blob, artifact
+
+
+@router.get("/capabilities/{cap_id}/package/tree", response_model=PackageTreeOut)
+async def capability_package_tree(cap_id: str, db: DbSession, user: OptionalUser):
+    """预览能力包内文件列表（可见范围内）。"""
+    from app.services.packages import list_package_entries
+
+    visible = await get_visible_capabilities(db, user)
+    cap = next((c for c in visible if c.id == cap_id), None)
+    if cap is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
+    blob, artifact = _load_artifact_bytes(cap)
+    files = list_package_entries(blob)
+    return PackageTreeOut(
+        files=files,
+        artifact_filename=getattr(artifact, "filename", "") or "",
+        artifact_size=int(getattr(artifact, "size_bytes", 0) or 0),
+    )
+
+
+@router.get("/capabilities/{cap_id}/package/file", response_model=PackageFileContentOut)
+async def capability_package_file(
+    cap_id: str,
+    db: DbSession,
+    user: OptionalUser,
+    path: str = Query(..., min_length=1, max_length=512, description="包内相对路径"),
+):
+    """预览能力包内单个文件内容。"""
+    from app.services.packages import read_package_entry
+
+    visible = await get_visible_capabilities(db, user)
+    cap = next((c for c in visible if c.id == cap_id), None)
+    if cap is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
+    blob, _artifact = _load_artifact_bytes(cap)
+    return PackageFileContentOut(**read_package_entry(blob, path))
 
 
 @router.get("/capabilities/{cap_id}/ratings", response_model=list[RatingOut])
@@ -357,6 +450,27 @@ async def update_access_policy(
         raise HTTPException(status.HTTP_409_CONFLICT, f"当前状态（{cap.status}）不允许修改调用权限")
     cap.access_policy = data.access_policy
     cap.allowed_users = [u.strip() for u in data.allowed_users if u.strip()]
+    await db.commit()
+    await db.refresh(cap)
+    return _to_out(cap)
+
+
+@router.post("/capabilities/{cap_id}/install-policy", response_model=CapabilityOut)
+async def update_install_policy(
+    cap_id: str, data: InstallPolicyUpdate, db: DbSession, user: CurrentUser
+):
+    """安装策略（对标 Team Marketplace）：optional / default_on / required。"""
+    cap = await db.get(Capability, cap_id)
+    if cap is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
+    if user.role != "admin" and cap.author_id != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "只有作者或管理员可以设置安装策略")
+    if cap.type not in ("plugin", "mcp", "agent"):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "安装策略适用于 Plugin / MCP / Agent（配方与安装单元）",
+        )
+    cap.install_policy = data.install_policy
     await db.commit()
     await db.refresh(cap)
     return _to_out(cap)

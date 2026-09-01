@@ -16,6 +16,27 @@ def _tool_zip(name: str) -> bytes:
     return buf.getvalue()
 
 
+def _skill_zip(name: str) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(
+            "skill.json",
+            json.dumps({"name": name, "description": "x", "version": "0.1.0", "category": "测试"}),
+        )
+        zf.writestr("SKILL.md", f"# {name}\n")
+    return buf.getvalue()
+
+
+async def _upload_package(client, headers, cap_id: str, type_: str, name: str) -> None:
+    blob = _tool_zip(name) if type_ == "tool" else _skill_zip(name)
+    r = await client.post(
+        f"/api/publish/capabilities/{cap_id}/artifact",
+        headers=headers,
+        files={"file": ("pkg.zip", blob, "application/zip")},
+    )
+    assert r.status_code == 200, r.text
+
+
 async def _create(client, headers, name: str, type_: str = "agent") -> str:
     r = await client.post(
         "/api/publish/capabilities",
@@ -69,6 +90,7 @@ async def test_draft_can_change_type_and_recreate_after_delete(client, publisher
 async def test_reviewing_can_withdraw_or_delete(client, publisher_headers):
     name = "待审可撤回"
     cap_id = await _create(client, publisher_headers, name, "skill")
+    await _upload_package(client, publisher_headers, cap_id, "skill", name)
     r = await client.post(f"/api/publish/capabilities/{cap_id}/submit", headers=publisher_headers)
     assert r.status_code == 200
     assert r.json()["status"] == "reviewing"
@@ -92,6 +114,7 @@ async def test_reviewing_can_withdraw_or_delete(client, publisher_headers):
     assert r.status_code == 200
     assert r.json()["type"] == "tool"
 
+    await _upload_package(client, publisher_headers, cap_id, "tool", name)
     r = await client.post(f"/api/publish/capabilities/{cap_id}/submit", headers=publisher_headers)
     assert r.status_code == 200
     r = await client.delete(f"/api/publish/capabilities/{cap_id}", headers=publisher_headers)
@@ -109,12 +132,15 @@ async def test_reviewing_can_withdraw_or_delete(client, publisher_headers):
 async def test_cannot_change_type_when_other_version_exists(client, publisher_headers, admin_headers):
     name = "多版本锁类型"
     cap_id = await _create(client, publisher_headers, name, "tool")
-    await client.post(f"/api/publish/capabilities/{cap_id}/submit", headers=publisher_headers)
-    await client.post(
+    await _upload_package(client, publisher_headers, cap_id, "tool", name)
+    r = await client.post(f"/api/publish/capabilities/{cap_id}/submit", headers=publisher_headers)
+    assert r.status_code == 200
+    r = await client.post(
         f"/api/admin/capabilities/{cap_id}/review",
         headers=admin_headers,
         json={"action": "approve"},
     )
+    assert r.status_code == 200, r.text
     r = await client.post(
         f"/api/publish/capabilities/{cap_id}/versions",
         headers=publisher_headers,

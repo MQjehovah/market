@@ -81,6 +81,7 @@ class CapabilityBase(BaseModel):
     visibility: Literal["private", "team", "internal", "public"] = "internal"
     access_policy: Literal["open", "admin_only", "restricted"] = "open"
     allowed_users: list[str] = Field(default_factory=list, description="restricted 时的白名单用户名")
+    install_policy: Literal["optional", "default_on", "required"] = "optional"
 
     @field_validator("version")
     @classmethod
@@ -109,15 +110,23 @@ class CapabilityUpdate(BaseModel):
     visibility: Literal["private", "team", "internal", "public"] | None = None
     access_policy: Literal["open", "admin_only", "restricted"] | None = None
     allowed_users: list[str] | None = None
+    install_policy: Literal["optional", "default_on", "required"] | None = None
+
+
+class InstallPolicyUpdate(BaseModel):
+    install_policy: Literal["optional", "default_on", "required"]
 
 
 class VersionCreate(BaseModel):
-    new_version: str = Field(max_length=50)
+    new_version: str | None = Field(default=None, max_length=50)
     change_type: Literal["major", "minor", "patch"] = "patch"
+    changelog: str = Field(default="", max_length=5000)
 
     @field_validator("new_version")
     @classmethod
-    def validate_semver(cls, v: str) -> str:
+    def validate_semver(cls, v: str | None) -> str | None:
+        if v is None or v == "":
+            return None
         parts = v.split(".")
         if len(parts) != 3 or not all(p.isdigit() for p in parts):
             raise ValueError("版本号必须符合语义化版本 MAJOR.MINOR.PATCH")
@@ -169,7 +178,10 @@ class CapabilityOut(CapabilityBase):
     author_id: str
     author_name: str = ""
     organization: str
+    changelog: str = ""
+    readme_md: str = ""
     input_schema: dict[str, Any] = Field(default_factory=dict)
+    validation_report: dict[str, Any] = Field(default_factory=dict)
     usage_count: int
     rating_sum: float
     rating_count: int
@@ -310,7 +322,7 @@ class WorkflowCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str = Field(default="", max_length=20000)
     version: str = Field(default="0.1.0", max_length=50)
-    category: str = Field(default="工作流", max_length=100)
+    category: str = Field(default="能力编排", max_length=100)
     tags: list[str] = Field(default_factory=list)
     visibility: Literal["private", "team", "internal", "public"] = "internal"
     access_policy: Literal["open", "admin_only", "restricted"] = "open"
@@ -469,6 +481,27 @@ class MCPGatewayTestOut(BaseModel):
 
 class MessageOut(BaseModel):
     message: str
+
+
+class PackageFileEntry(BaseModel):
+    path: str
+    size: int
+    text: bool = True
+
+
+class PackageTreeOut(BaseModel):
+    files: list[PackageFileEntry] = Field(default_factory=list)
+    artifact_filename: str = ""
+    artifact_size: int = 0
+
+
+class PackageFileContentOut(BaseModel):
+    path: str
+    size: int
+    truncated: bool = False
+    binary: bool = False
+    content: str = ""
+    encoding: str = ""
 
 
 class MyCapabilityAdd(BaseModel):

@@ -186,6 +186,7 @@ async def test_delete_user_transfers_capabilities(client, admin_headers):
     )
     assert r.status_code == 201
     cap_id = r.json()["id"]
+    # 提交审核前需上传能力包；本用例只关心删除用户后作者转移，草稿即可
     await client.post(f"/api/publish/capabilities/{cap_id}/submit", headers=user_tok)
     await client.post(
         f"/api/admin/capabilities/{cap_id}/review",

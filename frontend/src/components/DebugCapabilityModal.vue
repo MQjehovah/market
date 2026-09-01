@@ -7,7 +7,7 @@ import { TYPE_LABELS } from '../utils/format'
 const props = defineProps({
   show: { type: Boolean, default: false },
   cap: { type: Object, default: null },
-  title: { type: String, default: '调用 / 调试' }
+  title: { type: String, default: '云端试用' }
 })
 const emit = defineEmits(['close'])
 const router = useRouter()
@@ -256,7 +256,7 @@ function stepBadge(name) {
         <div>
           <h3 style="margin: 0">{{ title }}：{{ cap.name }}</h3>
           <div class="muted" style="font-size: 12px; margin-top: 4px">
-            {{ TYPE_LABELS[cap.type] }} · v{{ cap.version }}
+            {{ TYPE_LABELS[cap.type] }} · v{{ cap.version }} · 试用（非生产主路径）
             <span v-if="cap.description" style="margin-left: 8px">{{ cap.description }}</span>
           </div>
         </div>
@@ -422,7 +422,7 @@ function stepBadge(name) {
 
 <style scoped>
 .modal-mask {
-  position: fixed; inset: 0; background: rgba(5, 8, 16, 0.72); z-index: 100;
+  position: fixed; inset: 0; background: var(--overlay, rgba(15, 23, 42, 0.45)); z-index: 100;
   display: flex; align-items: center; justify-content: center; padding: 20px;
 }
 .modal {

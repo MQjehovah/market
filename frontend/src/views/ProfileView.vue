@@ -2,7 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { api } from '../api'
 import { authState } from '../stores/auth'
-import { TYPE_LABELS, formatDate } from '../utils/format'
+import { TYPE_LABELS, formatDate , roleLabel } from '../utils/format'
 
 const stats = ref(null)
 const notifications = ref([])

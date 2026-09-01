@@ -40,6 +40,8 @@ const flowNodes = ref([])
 const flowEdges = ref([])
 const selectedNodeId = ref('')
 const capCache = reactive({})
+const capLoading = reactive({})
+const capLoadError = reactive({})
 const capSearch = ref('')
 const paramsText = ref('{}')
 const paramsError = ref('')
@@ -101,6 +103,7 @@ watch(
     if (selectedNode.value) {
       paramsText.value = JSON.stringify(selectedNode.value.data.node.params || {}, null, 2)
       paramsError.value = ''
+      ensureCaps(selectedNode.value.type)
     }
   }
 )
@@ -246,12 +249,19 @@ function deleteSelectedNode() {
 }
 
 async function ensureCaps(type) {
-  if (capCache[type] !== undefined) return
+  if (capCache[type] !== undefined || capLoading[type]) return
+  capLoading[type] = true
+  capLoadError[type] = ''
   try {
-    const data = await api.get(`/capabilities?type=${type}&page_size=100&sort=usage`)
+    const data = await api.get(
+      `/capabilities?type=${encodeURIComponent(type)}&page_size=100&sort=usage&include_components=true`
+    )
     capCache[type] = data.items || []
-  } catch {
+  } catch (e) {
     capCache[type] = []
+    capLoadError[type] = e.message || '加载失败'
+  } finally {
+    capLoading[type] = false
   }
 }
 
@@ -508,8 +518,15 @@ function stateLabel(state) {
                 <span>{{ cap.name }}</span>
                 <span class="muted">v{{ cap.version }} · {{ cap.usage_count }}次</span>
               </button>
-              <div v-if="filteredCaps.length === 0" class="muted cap-empty">
-                暂无已发布的{{ TYPE_LABELS[selectedNode.type] }}能力
+              <div v-if="capLoading[selectedNode.type]" class="muted cap-empty">正在加载已发布能力…</div>
+              <div v-else-if="capLoadError[selectedNode.type]" class="alert alert-error cap-empty">
+                {{ capLoadError[selectedNode.type] }}（请确认已登录且后端在运行）
+              </div>
+              <div v-else-if="filteredCaps.length === 0" class="muted cap-empty">
+                暂无已发布的 {{ TYPE_LABELS[selectedNode.type] }}。
+                请先在「我的能力」发布对应积木/配方并审核通过，或到
+                <router-link to="/">能力目录</router-link>
+                确认是否有 {{ TYPE_LABELS[selectedNode.type] }} 已上架。
               </div>
             </div>
           </div>
@@ -772,7 +789,7 @@ function stateLabel(state) {
 }
 .cap-item:last-child { border-bottom: none; }
 .cap-item:hover { background: var(--panel-2); }
-.cap-item.active { background: rgba(79, 140, 255, 0.12); color: #9cc2ff; }
+.cap-item.active { background: rgba(79, 140, 255, 0.12); color: #2451c7; }
 .cap-item:disabled { cursor: default; opacity: 0.75; }
 .cap-empty { padding: 10px; font-size: 12px; }
 .var-chips { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -781,7 +798,7 @@ function stateLabel(state) {
   border-radius: 999px;
   border: 1px solid var(--border);
   background: var(--panel-2);
-  color: #9cc2ff;
+  color: #2451c7;
   font-size: 11px;
   cursor: pointer;
   font-family: monospace;
@@ -810,7 +827,7 @@ function stateLabel(state) {
   max-height: 160px;
 }
 .modal-mask {
-  position: fixed; inset: 0; background: rgba(5, 8, 16, 0.72); z-index: 100;
+  position: fixed; inset: 0; background: var(--overlay, rgba(15, 23, 42, 0.45)); z-index: 100;
   display: flex; align-items: center; justify-content: center; padding: 20px;
 }
 .modal { width: 720px; max-width: 100%; max-height: 90vh; overflow: auto; }

@@ -19,10 +19,12 @@ from app.schemas import (
 from app.services.capabilities import (
     DELETABLE_STATUSES,
     EDITABLE_STATUSES,
+    UPLOADABLE_STATUSES,
     create_capability,
     create_new_version,
     delete_capability,
     get_visible_capabilities,
+    highest_version,
     next_version,
     submit_for_review,
     to_capability_out,
@@ -56,12 +58,9 @@ async def my_capabilities(db: DbSession, user: CurrentUser):
         )
     ).all()
     versions = list(caps)
-    out = []
-    for cap in caps:
-        o = to_capability_out(cap, versions=versions, author_name=user.username)
-        o.latest = cap == max(versions, key=lambda c: (int(c.version.split(".")[0]), int(c.version.split(".")[1]), int(c.version.split(".")[2])))
-        out.append(o)
-    return out
+    return [
+        to_capability_out(cap, versions=versions, author_name=user.username) for cap in caps
+    ]
 
 
 @router.post("/capabilities", response_model=CapabilityOut, status_code=status.HTTP_201_CREATED)
@@ -118,7 +117,10 @@ async def new_version(cap_id: str, data: VersionCreate, db: DbSession, user: Cur
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
     _require_owner(cap, user)
-    new_cap = await create_new_version(db, user, cap, data.new_version)
+    version = data.new_version or next_version(cap.version, data.change_type)
+    new_cap = await create_new_version(
+        db, user, cap, version, changelog=data.changelog or ""
+    )
     return to_capability_out(new_cap, author_name=user.username)
 
 
@@ -129,11 +131,14 @@ async def suggest_version(cap_id: str, db: DbSession, user: CurrentUser):
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
     _require_owner(cap, user)
+    # 相对「同名同类型已有最高版本」建议，避免已有草稿时仍建议冲突号
+    base = await highest_version(db, cap.name, cap.type) or cap.version
     return {
         "current": cap.version,
-        "major": next_version(cap.version, "major"),
-        "minor": next_version(cap.version, "minor"),
-        "patch": next_version(cap.version, "patch"),
+        "base": base,
+        "major": next_version(base, "major"),
+        "minor": next_version(base, "minor"),
+        "patch": next_version(base, "patch"),
     }
 
 
@@ -144,8 +149,29 @@ async def upload_artifact(cap_id: str, db: DbSession, user: CurrentUser, file: U
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
     _require_owner(cap, user)
+    if cap.status not in UPLOADABLE_STATUSES:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "仅草稿、打回、驳回或待审状态可上传能力包；已发布请先创建新版本",
+        )
     content = await file.read()
     content, details = prepare_package(cap.type, content)
+    from app.services.packages import extract_readme_text
+
+    cap.readme_md = extract_readme_text(content)
+    files_map = details.get("files") or {}
+    cap.validation_report = {
+        "ok": not bool(details.get("errors")),
+        "warnings": list(details.get("warnings") or []),
+        "errors": list(details.get("errors") or []),
+        "files": sorted(files_map.keys()) if isinstance(files_map, dict) else list(files_map),
+        "meta": {k: details.get(k) for k in ("meta", "connection", "schema") if k in details and not isinstance(details.get(k), (bytes, bytearray))},
+    }
+    # strip heavy blobs from meta
+    meta = cap.validation_report.get("meta") or {}
+    for k, v in list(meta.items()):
+        if isinstance(v, dict):
+            meta[k] = {kk: vv for kk, vv in v.items() if not isinstance(vv, (bytes, bytearray))}
     if cap.type == "tool" and details.get("schema"):
         cap.input_schema = details["schema"]
     if cap.type == "agent":
