@@ -7,7 +7,7 @@
 **员工发现安装**（目录精选/热门 → 加入我的能力 → `cap install`）· **开发者发布**（上传/校验 → 提交审核）· **管理员治理**（人工审核、可见性、上下架）。  
 控制面在本仓库；对话内唤起技能仍由零号员工等执行面完成。
 
-对标思路：Backstage Catalog（实体分 kind）+ 私有制品库（SemVer）+ Agent Registry / MCP Gateway（治理与入口）+ Cursor Team Marketplace（安装策略）+ 飞书 SkillHub（企业技能分发/治理闭环）。
+对标思路：Backstage Catalog（实体分 kind）+ 私有制品库（SemVer）+ Agent Registry / MCP Gateway（治理与入口）+ 飞书 SkillHub（企业技能分发/治理闭环）。
 
 ## 三货架（type = kind；逛店 Tab ≠ 货架一一对应）
 
@@ -107,8 +107,7 @@ MCP 注意：市场包必须是 `mcp.json` + `connection.json` + `tools.json` + 
 | MCP HTTP 网关 | `/api/mcp-gateway/{name}` | Dify 等；平台能力非商品 kind |
 | 加入我的能力 | `/api/my/capabilities` | 调用授权前提之一 |
 
-授权：`RUNTIME_ACCESS_ROLES` ∪ 作者 ∪ 已加入者 ∪ `access_policy`（open / admin_only / restricted）。  
-安装策略：`install_policy` = optional / default_on / required（Plugin / MCP / Agent）。
+授权：`RUNTIME_ACCESS_ROLES` ∪ 作者 ∪ 已加入者 ∪ `access_policy`（open / admin_only / restricted）。
 
 ## 生命周期与审核
 

@@ -14,7 +14,6 @@ import {
   ORCH_LABELS,
   CONSUME_WAYS,
   REVIEW_CHECKLIST,
-  INSTALL_POLICY_LABELS,
   OWNER_PROGRESS_STEPS,
   shelfLabel,
   formatDate,
@@ -54,8 +53,6 @@ const copyNotice = ref('')
 const accessPolicy = ref('open')
 const allowedUsers = ref('')
 const accessSaved = ref('')
-const installPolicy = ref('optional')
-const installSaved = ref('')
 
 const openSection = ref({ overview: true, usage: true, developer: false, governance: false })
 const reviewChecks = ref([])
@@ -121,9 +118,6 @@ const progressIndex = computed(() =>
 const onlineEditPath = computed(() => (cap.value ? editRouteFor(cap.value) : null))
 const preferOnlineEdit = computed(
   () => Boolean(onlineEditPath.value && (isOwner.value || isAdmin.value) && canOnlineEdit(cap.value?.type))
-)
-const showInstallPolicy = computed(() =>
-  ['plugin', 'mcp', 'agent'].includes(cap.value?.type) && (isOwner.value || isAdmin.value)
 )
 const pluginComponents = computed(() => {
   const schema = cap.value?.input_schema || {}
@@ -261,7 +255,6 @@ async function load() {
     cap.value = await api.get(`/capabilities/${props.id}`)
     accessPolicy.value = cap.value.access_policy || 'open'
     allowedUsers.value = (cap.value.allowed_users || []).join(', ')
-    installPolicy.value = cap.value.install_policy || 'optional'
     versions.value = await api.get(`/capabilities/${props.id}/versions`)
     ratings.value = await api.get(`/capabilities/${props.id}/ratings`)
   } catch (e) {
@@ -323,19 +316,6 @@ async function saveAccess() {
       allowed_users: allowedUsers.value.split(/[,，]/).map((s) => s.trim()).filter(Boolean)
     })
     accessSaved.value = '调用权限已更新'
-    await load()
-  } catch (e) {
-    error.value = e.message
-  }
-}
-
-async function saveInstallPolicy() {
-  installSaved.value = ''
-  try {
-    await api.post(`/capabilities/${props.id}/install-policy`, {
-      install_policy: installPolicy.value
-    })
-    installSaved.value = '安装策略已更新'
     await load()
   } catch (e) {
     error.value = e.message
@@ -644,9 +624,6 @@ onMounted(() => {
           <span>作者 {{ cap.author_name || '-' }}</span>
           <span>·</span>
           <span>更新于 {{ formatDate(cap.updated_at) }}</span>
-          <span v-if="cap.install_policy && ['plugin', 'mcp', 'agent'].includes(cap.type)">
-            · {{ INSTALL_POLICY_LABELS[cap.install_policy] || cap.install_policy }}
-          </span>
         </div>
         <div class="detail-kpis">
           <div class="kpi"><strong>{{ formatStat(cap.usage_count) }}</strong><span>使用</span></div>
@@ -1069,27 +1046,6 @@ onMounted(() => {
                 placeholder="白名单用户名（逗号分隔）"
               />
               <button class="btn btn-primary" type="button" @click="saveAccess">保存</button>
-            </div>
-          </div>
-
-          <div v-if="cap.install_policy && ['plugin', 'mcp', 'agent'].includes(cap.type) && !showInstallPolicy" class="panel">
-            <h3>安装策略</h3>
-            <div class="muted" style="font-size: 13px">{{ INSTALL_POLICY_LABELS[cap.install_policy] || cap.install_policy }}</div>
-          </div>
-
-          <div v-if="showInstallPolicy" class="panel">
-            <div class="flex-between flex-wrap">
-              <h3>安装策略</h3>
-              <span v-if="installSaved" class="muted" style="font-size: 12px">{{ installSaved }}</span>
-            </div>
-            <div class="muted" style="font-size: 13px">对标 Cursor Team Marketplace：可选 / 默认加入 / 强制。</div>
-            <div class="flex mt-16" style="gap: 10px; flex-wrap: wrap">
-              <select v-model="installPolicy" class="select" style="max-width: 280px">
-                <option value="optional">可选</option>
-                <option value="default_on">默认加入（可退）</option>
-                <option value="required">强制</option>
-              </select>
-              <button class="btn btn-primary" type="button" @click="saveInstallPolicy">保存</button>
             </div>
           </div>
 

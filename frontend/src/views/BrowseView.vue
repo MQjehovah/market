@@ -175,8 +175,7 @@ async function loadDiscovery() {
       .filter((c) => {
         if (seen.has(c.id)) return false
         seen.add(c.id)
-        const policy = c.install_policy || 'optional'
-        return ['default_on', 'required'].includes(policy) || (Number(c.avg_rating) || 0) >= 4
+        return (Number(c.avg_rating) || 0) >= 4
       })
       .slice(0, 6)
     if (featuredCaps.value.length < 3) {

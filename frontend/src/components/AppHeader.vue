@@ -103,7 +103,7 @@ watch(isAdmin, loadAdminBadge)
         <span class="brand-logo">AI</span>
         <span class="brand-text">
           <strong>能力目录</strong>
-          <small>企业内部 SkillHub</small>
+          <small>企业内部能力目录</small>
         </span>
       </router-link>
     </div>

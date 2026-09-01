@@ -119,7 +119,7 @@ export const SCENARIO_HINTS = {
   tool: ['作为能力编排（Workflow）节点执行', '云端沙箱调试函数逻辑', '被 Agent 配方间接引用'],
   agent: ['面向业务场景的助手人设与依赖锁定', '带 TEAM.md 时做多角色协作流水线', '通过 A2A / 市场 MCP 被其他 Agent 调用'],
   workflow: ['把已上架能力串成固定 DAG', '云端批处理 / 自动化流水线', '与 TEAM.md 团队流水线分工并行'],
-  plugin: ['一次分发 skills + mcp（+ 可选 agents）', '给 Cursor / 零号员工做场景安装包', '组织内默认/强制安装的能力合集']
+  plugin: ['一次分发 skills + mcp（+ 可选 agents）', '给 Cursor / 零号员工做场景安装包', '把相关能力打成可一键安装的合集']
 }
 
 /** 示例用法（命令或提示级，非对话内唤起） */
@@ -171,12 +171,6 @@ export const REVIEW_CHECKLIST = [
   'Plugin 子组件命名不冲突；component 默认不单独上架浏览',
   '可见性与许可证符合组织策略（private/team/internal/public）'
 ]
-
-export const INSTALL_POLICY_LABELS = {
-  optional: '可选',
-  default_on: '默认加入（可退）',
-  required: '强制'
-}
 
 export const STATUS_LABELS = {
   draft: '草稿',

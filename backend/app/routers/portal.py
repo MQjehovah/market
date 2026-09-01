@@ -476,7 +476,7 @@ async def update_access_policy(
 async def update_install_policy(
     cap_id: str, data: InstallPolicyUpdate, db: DbSession, user: CurrentUser
 ):
-    """安装策略（对标 Team Marketplace）：optional / default_on / required。"""
+    """安装策略：optional / default_on / required。"""
     cap = await db.get(Capability, cap_id)
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")

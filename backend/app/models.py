@@ -72,7 +72,7 @@ class Capability(Base):
     # open（所有登录用户可加入并调用）| admin_only（仅管理员/作者）| restricted（白名单用户名）
     allowed_users: Mapped[list] = mapped_column(JSON, default=list)
     install_policy: Mapped[str] = mapped_column(String(20), default="optional")
-    # optional | default_on | required（对标 Team Marketplace 安装策略）
+    # optional | default_on | required
     validation_report: Mapped[dict] = mapped_column(JSON, default=dict)
     # 最近一次上传包的结构校验摘要：{ok, warnings, errors?, files}
     usage_count: Mapped[int] = mapped_column(Integer, default=0)

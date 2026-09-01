@@ -34,7 +34,6 @@ const form = reactive({
   tags: '',
   visibility: 'internal',
   access_policy: 'open',
-  install_policy: 'optional',
   allowedUsers: '',
   workflowJson: '{\n  "nodes": [],\n  "edges": []\n}'
 })
@@ -44,7 +43,6 @@ const busy = ref(false)
 const shelfList = computed(() => Object.values(SHELVES))
 const kindsInShelf = computed(() => SHELVES[form.shelf]?.kinds || [])
 const kindHint = computed(() => KIND_HINTS[form.type] || null)
-const showInstallPolicy = computed(() => ['plugin', 'agent', 'mcp'].includes(form.type))
 const footHint = computed(() => {
   if (form.type === 'workflow') return '创建后进入编排画布；无需上传 zip'
   if (canOnlineEdit(form.type)) return '创建后进入在线编辑；保存会生成能力包，也可稍后手动上传 zip'
@@ -138,8 +136,7 @@ async function create() {
       tags,
       visibility: form.visibility,
       access_policy: form.access_policy,
-      allowed_users: allowedUsers,
-      install_policy: showInstallPolicy.value ? form.install_policy : 'optional'
+      allowed_users: allowedUsers
     }
     if (form.type === 'workflow') {
       let workflow
@@ -300,14 +297,6 @@ async function create() {
           <div v-if="form.access_policy === 'restricted'" class="field">
             <label>白名单用户名（逗号分隔）</label>
             <input v-model="form.allowedUsers" class="input" placeholder="zhangsan, lisi" />
-          </div>
-          <div v-else-if="showInstallPolicy" class="field">
-            <label>安装策略</label>
-            <select v-model="form.install_policy" class="select">
-              <option value="optional">可选（Default Off）</option>
-              <option value="default_on">默认加入（可退）</option>
-              <option value="required">强制（Required）</option>
-            </select>
           </div>
         </div>
 
