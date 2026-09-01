@@ -22,16 +22,12 @@ const userLabel = computed(
 const isDiscoverActive = computed(
   () => route.path === '/' || route.path.startsWith('/capabilities/')
 )
-const isMyArea = computed(() => {
+const isMyActive = computed(() => {
   if (route.path === '/my') return true
   return ['/agents/', '/skills/', '/tools/', '/mcp/', '/workflows/'].some((p) =>
     route.path.startsWith(p)
   )
 })
-const isPublishActive = computed(
-  () => route.path === '/my' && String(route.query.publish || '') === '1'
-)
-const isMyAssetsActive = computed(() => isMyArea.value && !isPublishActive.value)
 const adminSection = computed(() =>
   route.path.startsWith('/admin/') ? String(route.params.section || '') : ''
 )
@@ -40,10 +36,6 @@ const reviewingCount = computed(() => adminState.reviewingCount)
 
 function goDiscover() {
   router.push({ path: '/' })
-}
-
-function goPublish() {
-  router.push({ path: '/my', query: { publish: '1' } })
 }
 
 function goProfile() {
@@ -129,18 +121,10 @@ watch(isAdmin, loadAdminBadge)
             class="nav-item"
             active-class="nav-rr"
             exact-active-class="nav-rr"
-            :class="{ active: isMyAssetsActive }"
+            :class="{ active: isMyActive }"
           >
             我的能力
           </router-link>
-          <button
-            type="button"
-            class="nav-item"
-            :class="{ active: isPublishActive }"
-            @click="goPublish"
-          >
-            发布能力
-          </button>
         </template>
         <router-link v-else to="/login" class="nav-item">登录后管理</router-link>
       </div>
