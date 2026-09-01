@@ -25,7 +25,9 @@ import {
   EXAMPLE_PROMPTS,
   installCommandFor,
   isLocalInstallKind,
-  ownerProgressIndex
+  ownerProgressIndex,
+  editRouteFor,
+  canOnlineEdit
 } from '../utils/format'
 import StatusBadge from '../components/StatusBadge.vue'
 import PackagePreview from '../components/PackagePreview.vue'
@@ -115,6 +117,10 @@ const showTemplateDownload = computed(
 )
 const progressIndex = computed(() =>
   ownerProgressIndex(cap.value, { joined: myIds.value.has(props.id) })
+)
+const onlineEditPath = computed(() => (cap.value ? editRouteFor(cap.value) : null))
+const preferOnlineEdit = computed(
+  () => Boolean(onlineEditPath.value && (isOwner.value || isAdmin.value) && canOnlineEdit(cap.value?.type))
 )
 const showInstallPolicy = computed(() =>
   ['plugin', 'mcp', 'agent'].includes(cap.value?.type) && (isOwner.value || isAdmin.value)
@@ -925,7 +931,12 @@ onMounted(() => {
             <div v-if="isOwner" class="mt-24">
               <h3>版本管理</h3>
               <div class="muted" style="font-size: 12px; margin-bottom: 8px">
-                <template v-if="['published', 'deprecated'].includes(cap.status)">已发布内容请先创建新版本草稿，再上传能力包并提交审核。</template>
+                <template v-if="['published', 'deprecated'].includes(cap.status)">
+                  已发布内容请先创建新版本草稿；可用在线编辑完善，或上传能力包后提交审核。
+                </template>
+                <template v-else-if="preferOnlineEdit">
+                  草稿可用在线编辑完善（保存会生成能力包），或手动上传 zip 后提交审核。
+                </template>
                 <template v-else>草稿需上传能力包后再提交审核。</template>
               </div>
               <div class="flex" style="gap: 8px; flex-wrap: wrap; align-items: center">
@@ -1009,9 +1020,15 @@ onMounted(() => {
             </div>
           </div>
 
-          <div v-if="canSubmit || canWithdraw || canDelete || isAdmin || isPublisher" class="panel">
+          <div v-if="canSubmit || canWithdraw || canDelete || preferOnlineEdit || isAdmin || isPublisher" class="panel">
             <h3>操作</h3>
             <div class="flex flex-wrap" style="gap: 8px">
+              <router-link
+                v-if="preferOnlineEdit"
+                :to="onlineEditPath"
+                class="btn"
+                :class="canEdit ? 'btn-primary' : ''"
+              >{{ canEdit ? '在线编辑' : (cap.type === 'workflow' ? '查看编排' : '在线编辑') }}</router-link>
               <button
                 v-if="canSubmit"
                 class="btn btn-success"
@@ -1020,23 +1037,15 @@ onMounted(() => {
               >提交审核</button>
               <button
                 v-else-if="needsPackageFirst"
-                class="btn btn-primary"
+                class="btn"
+                :class="preferOnlineEdit ? '' : 'btn-primary'"
                 type="button"
                 @click="focusPackage"
-              >去上传能力包</button>
+              >{{ preferOnlineEdit ? '上传 zip' : '去上传能力包' }}</button>
               <button v-if="canWithdraw" class="btn" type="button" @click="withdrawReview">撤回审核</button>
               <button v-if="canDelete" class="btn btn-danger" type="button" @click="removeCap">删除</button>
               <button v-if="isAdmin && cap.status === 'published'" class="btn btn-danger" type="button" @click="doAction(`/admin/capabilities/${props.id}/deprecate`)">下架（弃用）</button>
               <button v-if="isAdmin && ['published', 'deprecated', 'rejected', 'returned'].includes(cap.status)" class="btn btn-danger" type="button" @click="doAction(`/admin/capabilities/${props.id}/archive`)">归档</button>
-              <router-link
-                v-if="cap.type === 'workflow' && (canEdit || isAdmin || (authState.token && ['published', 'deprecated'].includes(cap.status)))"
-                :to="`/workflows/${props.id}/edit`"
-                class="btn"
-              >{{ canEdit ? '编辑编排' : '查看编排' }}</router-link>
-              <router-link v-if="cap.type === 'agent' && (isAdmin || isPublisher)" :to="`/agents/${encodeURIComponent(cap.name)}/edit`" class="btn">编辑助手</router-link>
-              <router-link v-if="cap.type === 'skill' && (isOwner || isAdmin || isPublisher)" :to="`/skills/${encodeURIComponent(cap.name)}/edit`" class="btn">编辑技能</router-link>
-              <router-link v-if="cap.type === 'tool' && (isOwner || isAdmin || isPublisher)" :to="`/tools/${encodeURIComponent(cap.name)}/edit`" class="btn">编辑工具</router-link>
-              <router-link v-if="cap.type === 'mcp' && (isOwner || isAdmin || isPublisher)" :to="`/mcp/${encodeURIComponent(cap.name)}/edit`" class="btn">编辑 MCP</router-link>
             </div>
           </div>
 
@@ -1087,6 +1096,9 @@ onMounted(() => {
           <div id="package-panel" class="panel">
             <h3>{{ cap.name }} 内容</h3>
             <div v-if="isWorkflow" class="muted" style="font-size: 13px; margin-bottom: 10px">Workflow 内容在画布中维护，无需上传 zip。</div>
+            <div v-else-if="preferOnlineEdit" class="muted" style="font-size: 13px; margin-bottom: 10px">
+              推荐在线编辑；保存会生成/更新能力包。也可手动上传 zip。
+            </div>
             <div v-if="(cap.artifacts || []).length === 0" class="muted">尚未上传能力包</div>
             <template v-else>
               <ul class="package-tree">
@@ -1164,12 +1176,26 @@ onMounted(() => {
           </template>
           <template v-else>
             <p class="aside-hint muted" style="margin-top: 0">
-              <template v-if="needsPackageFirst">先上传能力包，再提交审核。可先下载空模板。</template>
+              <template v-if="preferOnlineEdit && needsPackageFirst">
+                先在线编辑完善内容（保存会生成能力包），再提交审核；也可手动上传 zip。
+              </template>
+              <template v-else-if="needsPackageFirst">先上传能力包，再提交审核。可先下载空模板。</template>
               <template v-else-if="cap.status === 'reviewing'">已提交，等待管理员审核。</template>
               <template v-else>完善内容后提交审核；上架后才能加入与本地安装。</template>
             </p>
             <div class="aside-cta mt-16">
-              <button v-if="needsPackageFirst" class="btn btn-block btn-primary btn-lg" type="button" @click="focusPackage">去上传能力包</button>
+              <router-link
+                v-if="preferOnlineEdit && canEdit"
+                :to="onlineEditPath"
+                class="btn btn-block btn-primary btn-lg"
+              >在线编辑</router-link>
+              <button
+                v-if="needsPackageFirst"
+                class="btn btn-block"
+                :class="preferOnlineEdit ? '' : 'btn-primary btn-lg'"
+                type="button"
+                @click="focusPackage"
+              >{{ preferOnlineEdit ? '上传 zip' : '去上传能力包' }}</button>
               <button
                 v-else-if="canSubmit"
                 class="btn btn-block btn-success btn-lg"

@@ -12,7 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from app.models import Capability, CapabilityArtifact, User
 from app.schemas import SkillEditSave
-from app.services.capabilities import next_version, parse_semver
+from app.services.capabilities import editable_content_source, next_version, parse_semver
 from app.storage import get_storage
 
 
@@ -85,7 +85,7 @@ async def get_editable(
     cap = draft or (max(published, key=lambda c: parse_semver(c.version)) if published else None)
     if cap is None:
         cap = max(versions, key=lambda c: parse_semver(c.version))
-    files = _read_zip(cap) or {}
+    files = _read_zip(editable_content_source(cap, published)) or {}
     skill_md = files.get("SKILL.md", b"").decode("utf-8", errors="replace")
     base_version = (
         max(published, key=lambda c: parse_semver(c.version)).version if published else ""

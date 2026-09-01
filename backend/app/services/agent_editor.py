@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 from app.models import Capability, CapabilityArtifact, User
 from app.schemas import AgentEditSave
 from app.services.capabilities import (
+    editable_content_source,
     get_visible_capabilities,
     next_version,
     parse_semver,
@@ -130,7 +131,7 @@ async def get_editable(
     cap = draft or (max(published, key=lambda c: parse_semver(c.version)) if published else None)
     if cap is None:
         cap = max(versions, key=lambda c: parse_semver(c.version))
-    prompt, deps = read_prompt_deps(cap)
+    prompt, deps = read_prompt_deps(editable_content_source(cap, published))
     base_version = max(published, key=lambda c: parse_semver(c.version)).version if published else ""
     return cap, prompt, deps, base_version
 
@@ -151,6 +152,8 @@ async def save_version(
             raise HTTPException(status.HTTP_403_FORBIDDEN, "无权限编辑该草稿")
         cap = draft
         prompt = data.prompt or read_prompt_deps(cap)[0]
+        if not str(prompt).strip() and base is not None:
+            prompt = read_prompt_deps(base)[0]
     else:
         if base is None:
             raise HTTPException(

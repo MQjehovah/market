@@ -2,7 +2,6 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../api'
-import { authState } from '../stores/auth'
 import StatusBadge from '../components/StatusBadge.vue'
 
 const route = useRoute()
@@ -11,10 +10,10 @@ const loading = ref(false)
 const error = ref('')
 const notice = ref('')
 const saved = ref(null)
+const baseVersion = ref('')
 const catalog = ref({ tool: [], skill: [], mcp: [] })
 
 const TYPE_LABELS = { tool: '工具', skill: '技能', mcp: 'MCP' }
-const isPublisher = computed(() => ['admin', 'publisher'].includes(authState.user?.role))
 
 const form = reactive({
   prompt: '',
@@ -48,6 +47,7 @@ async function load() {
   try {
     const body = await api.get(`/agents/${encodeURIComponent(agentName.value)}/edit`)
     saved.value = body.capability
+    baseVersion.value = body.base_version || ''
     form.prompt = body.prompt
     form.description = body.capability.description || ''
     form.category = body.capability.category || ''
@@ -79,6 +79,7 @@ async function save() {
   try {
     const body = await api.put(`/agents/${encodeURIComponent(agentName.value)}/edit`, payload)
     saved.value = body.capability
+    baseVersion.value = body.base_version || ''
     form.prompt = body.prompt
     form.deps = (body.dependencies || []).map((d) => ({ ...d }))
     if (!form.deps.length) form.deps = [newDepRow()]
@@ -132,11 +133,11 @@ onMounted(() => {
       <div class="flex-between flex-wrap">
         <div>
           <div class="flex" style="gap: 10px">
-            <h2>编辑 Agent：{{ agentName }}</h2>
+            <h2>编辑助手：{{ agentName }}</h2>
             <StatusBadge :status="saved?.status" />
           </div>
           <div class="muted" style="font-size: 13px">
-            当前编辑版本 v{{ saved?.version }} · 最新已发布 v{{ saved?.latest ? saved?.version : '—' }}
+            当前编辑版本 v{{ saved?.version }} · 最新已发布 v{{ baseVersion || '—' }}
           </div>
         </div>
         <div class="flex" style="gap: 10px">

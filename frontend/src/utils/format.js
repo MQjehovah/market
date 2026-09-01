@@ -241,13 +241,13 @@ export const PUBLISH_INTENTS = [
   {
     key: 'recipe',
     label: '发助手',
-    blurb: '助手（可含 TEAM.md）或能力编排。依赖的技能/连接器需先上架，或改发安装包内嵌。',
+    blurb: '助手（可含 TEAM.md）或能力编排。网页在线编辑即可；依赖的技能/连接器需先上架，或改发安装包内嵌。',
     defaultType: 'agent'
   },
   {
     key: 'brick',
     label: '发组件',
-    blurb: '技能 / 连接器 / 编排函数。可复用零件，给助手与安装包引用。',
+    blurb: '技能 / 连接器 / 编排函数。可网页在线编辑；可复用零件，给助手与安装包引用。',
     defaultType: 'skill'
   }
 ]
@@ -255,7 +255,7 @@ export const PUBLISH_INTENTS = [
 /** 所有者发布进度（详情 / 我的） */
 export const OWNER_PROGRESS_STEPS = [
   { key: 'created', label: '创建' },
-  { key: 'package', label: '上传包' },
+  { key: 'package', label: '完善内容' },
   { key: 'submit', label: '提交审核' },
   { key: 'reviewing', label: '审核中' },
   { key: 'published', label: '已上架' },
@@ -285,6 +285,9 @@ export function ownerProgressIndex(cap, { joined = false } = {}) {
   return 0
 }
 
+/** 支持网页在线编辑的类型（保存可生成/更新能力包） */
+export const ONLINE_EDITABLE_KINDS = ['skill', 'mcp', 'tool', 'agent', 'workflow']
+
 /** 非 zip 主路径的 kind（内容在编辑器/定义里） */
 export const ZIP_OPTIONAL_KINDS = ['workflow']
 
@@ -292,12 +295,38 @@ export function needsZipUpload(kind) {
   return !ZIP_OPTIONAL_KINDS.includes(kind)
 }
 
-/** 创建草稿后的最佳下一步路由 */
+export function canOnlineEdit(kind) {
+  return ONLINE_EDITABLE_KINDS.includes(kind)
+}
+
+/** 在线编辑路由；plugin 无编辑页返回 null */
+export function editRouteFor(cap) {
+  if (!cap?.name && !cap?.id) return null
+  const name = encodeURIComponent(cap.name || '')
+  switch (cap.type) {
+    case 'workflow':
+      return `/workflows/${cap.has_draft && cap.draft_id ? cap.draft_id : cap.id}/edit`
+    case 'skill':
+      return `/skills/${name}/edit`
+    case 'mcp':
+      return `/mcp/${name}/edit`
+    case 'tool':
+      return `/tools/${name}/edit`
+    case 'agent':
+      return `/agents/${name}/edit`
+    default:
+      return null
+  }
+}
+
+/** 创建草稿后的最佳下一步：有在线编辑则进编辑页，否则去上传包 */
 export function nextRouteAfterCreate(cap) {
   if (!cap?.id) return '/my'
   if (cap.type === 'workflow') {
     return { path: `/workflows/${cap.id}/edit` }
   }
+  const edit = editRouteFor(cap)
+  if (edit) return edit
   return { path: `/capabilities/${cap.id}`, query: { focus: 'package' } }
 }
 

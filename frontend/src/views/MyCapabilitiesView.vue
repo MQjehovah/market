@@ -2,13 +2,14 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
-import { authState } from '../stores/auth'
 import {
   TYPE_LABELS,
   VISIBILITY_LABELS,
   formatDate,
   shelfLabel,
-  ownedTodoBucket
+  ownedTodoBucket,
+  editRouteFor,
+  canOnlineEdit
 } from '../utils/format'
 import StatusBadge from '../components/StatusBadge.vue'
 import CreateCapabilityModal from '../components/CreateCapabilityModal.vue'
@@ -29,8 +30,6 @@ const filters = reactive({ q: '' })
 const page = ref(1)
 const pageSize = ref(20)
 const confirmAction = ref(null)
-
-const isPublisher = computed(() => ['admin', 'publisher'].includes(authState.user?.role))
 
 const TYPE_COLORS = {
   plugin: '#2f6bff',
@@ -128,8 +127,8 @@ function goUploadPackage(cap) {
   router.push({ path: `/capabilities/${packageTargetId(cap)}`, query: { focus: 'package' } })
 }
 
-function canShowAgentEdit(cap) {
-  return cap.type === 'agent' && isPublisher.value
+function editPath(cap) {
+  return editRouteFor(cap)
 }
 
 async function load() {
@@ -155,10 +154,10 @@ function setSourceFilter(key) {
 
 function onCreated(cap) {
   showCreate.value = false
-  if (cap.type === 'workflow') {
-    notice.value = `「${cap.name}」草稿已创建，正在打开画布`
+  if (canOnlineEdit(cap.type)) {
+    notice.value = `「${cap.name}」草稿已创建，正在打开在线编辑`
   } else {
-    notice.value = `「${cap.name}」草稿已创建，请在详情页上传能力包并提交审核`
+    notice.value = `「${cap.name}」草稿已创建，请上传能力包并提交审核`
   }
   mainTab.value = 'owned'
   load()
@@ -268,8 +267,7 @@ onMounted(() => {
       <div>
         <h1 class="page-title">我的能力</h1>
         <p class="page-desc muted">
-          ① 发安装包 → ② 上传 zip 并提交审核 → ③ 上架后加入，再用 cap install 装到本地。
-          加入≠安装。
+          技能/助手等可在线编辑；安装包以上传 zip 为主。上架后加入，再用 cap install 装到本地。加入≠安装。
         </p>
       </div>
       <button class="btn btn-primary" type="button" @click="openCreate()">发布能力</button>
@@ -314,9 +312,9 @@ onMounted(() => {
       <div v-if="caps.length === 0" class="empty">
         还没有能力。小白推荐路径：
         <ol style="text-align: left; display: inline-block; margin: 12px 0; padding-left: 20px">
-          <li>点「发布能力」→ 选「发安装包」</li>
-          <li>下载空模板 / 上传 zip → 提交审核</li>
-          <li>上架后加入，本地执行 <code>cap install … --type plugin</code></li>
+          <li>点「发布能力」→ 选「发安装包」或「发助手 / 发组件」</li>
+          <li>助手与组件：在线编辑（保存生成包）→ 提交审核；安装包：上传 zip → 提交审核</li>
+          <li>上架后加入，本地执行 <code>cap install …</code></li>
         </ol>
         <div>
           <button class="btn btn-primary" type="button" @click="openCreate('install')">发安装包</button>
@@ -371,82 +369,34 @@ onMounted(() => {
                   @click="debugCap = cap"
                 >试用</button>
                 <template v-if="cap.has_draft">
+                  <router-link v-if="editPath(cap)" :to="editPath(cap)" class="op-link">在线编辑</router-link>
                   <button
                     v-if="ownedTodoBucket(cap) === 'missing_package'"
                     class="op-link"
                     type="button"
                     @click="goUploadPackage(cap)"
-                  >去上传能力包</button>
+                  >{{ canOnlineEdit(cap.type) ? '上传 zip' : '去上传能力包' }}</button>
                   <button
                     v-else
                     class="op-link success"
                     type="button"
                     @click="submitDraft(cap)"
                   >提交审核</button>
-                  <router-link
-                    v-if="cap.type === 'workflow'"
-                    :to="`/workflows/${cap.draft_id}/edit`"
-                    class="op-link"
-                  >编辑</router-link>
-                  <router-link
-                    v-else-if="cap.type === 'skill'"
-                    :to="`/skills/${encodeURIComponent(cap.name)}/edit`"
-                    class="op-link"
-                  >编辑</router-link>
-                  <router-link
-                    v-else-if="canShowAgentEdit(cap)"
-                    :to="`/agents/${encodeURIComponent(cap.name)}/edit`"
-                    class="op-link"
-                  >编辑</router-link>
-                  <router-link
-                    v-else-if="cap.type === 'tool'"
-                    :to="`/tools/${encodeURIComponent(cap.name)}/edit`"
-                    class="op-link"
-                  >编辑</router-link>
-                  <router-link
-                    v-else-if="cap.type === 'mcp'"
-                    :to="`/mcp/${encodeURIComponent(cap.name)}/edit`"
-                    class="op-link"
-                  >编辑</router-link>
                 </template>
                 <template v-else-if="cap.owned && ['draft', 'returned', 'rejected'].includes(cap.status)">
+                  <router-link v-if="editPath(cap)" :to="editPath(cap)" class="op-link">在线编辑</router-link>
                   <button
                     v-if="ownedTodoBucket(cap) === 'missing_package'"
                     class="op-link"
                     type="button"
                     @click="goUploadPackage(cap)"
-                  >去上传能力包</button>
+                  >{{ canOnlineEdit(cap.type) ? '上传 zip' : '去上传能力包' }}</button>
                   <button
                     v-else
                     class="op-link success"
                     type="button"
                     @click="submit(cap)"
                   >提交审核</button>
-                  <router-link
-                    v-if="cap.type === 'workflow'"
-                    :to="`/workflows/${cap.id}/edit`"
-                    class="op-link"
-                  >编辑</router-link>
-                  <router-link
-                    v-else-if="cap.type === 'skill'"
-                    :to="`/skills/${encodeURIComponent(cap.name)}/edit`"
-                    class="op-link"
-                  >编辑</router-link>
-                  <router-link
-                    v-else-if="canShowAgentEdit(cap)"
-                    :to="`/agents/${encodeURIComponent(cap.name)}/edit`"
-                    class="op-link"
-                  >编辑</router-link>
-                  <router-link
-                    v-else-if="cap.type === 'tool'"
-                    :to="`/tools/${encodeURIComponent(cap.name)}/edit`"
-                    class="op-link"
-                  >编辑</router-link>
-                  <router-link
-                    v-else-if="cap.type === 'mcp'"
-                    :to="`/mcp/${encodeURIComponent(cap.name)}/edit`"
-                    class="op-link"
-                  >编辑</router-link>
                   <button class="op-link danger" type="button" @click="askRemoveDraft(cap)">删除</button>
                 </template>
                 <template v-else-if="cap.owned && cap.status === 'reviewing'">

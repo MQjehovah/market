@@ -80,6 +80,16 @@ def is_latest(cap: Capability, versions: list[Capability]) -> bool:
     return cap == max(same, key=lambda c: parse_semver(c.version))
 
 
+def editable_content_source(cap: Capability, published: list[Capability]) -> Capability:
+    """在线编辑内容来源：当前行已有能力包则用它；新版本空草稿则继承最新已发布包。"""
+    if cap.artifacts:
+        return cap
+    with_pkg = [c for c in published if c.artifacts]
+    if not with_pkg:
+        return cap
+    return max(with_pkg, key=lambda c: parse_semver(c.version))
+
+
 def to_capability_out(
     cap: Capability,
     versions: list[Capability] | None = None,

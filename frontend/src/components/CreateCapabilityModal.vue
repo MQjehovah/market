@@ -11,6 +11,7 @@ import {
   SHELVES,
   TYPE_CATEGORIES,
   TYPE_LABELS,
+  canOnlineEdit,
   needsZipUpload,
   nextRouteAfterCreate
 } from '../utils/format'
@@ -45,10 +46,18 @@ const kindsInShelf = computed(() => SHELVES[form.shelf]?.kinds || [])
 const kindHint = computed(() => KIND_HINTS[form.type] || null)
 const showInstallPolicy = computed(() => ['plugin', 'agent', 'mcp'].includes(form.type))
 const footHint = computed(() => {
-  if (form.type === 'workflow') return '创建后进入 Workflow 画布；无需上传 zip'
+  if (form.type === 'workflow') return '创建后进入编排画布；无需上传 zip'
+  if (canOnlineEdit(form.type)) return '创建后进入在线编辑；保存会生成能力包，也可稍后手动上传 zip'
   if (form.type === 'plugin') return '创建后请在详情页上传 plugin zip；审核通过后可一键加入'
   if (needsZipUpload(form.type)) return '创建后为草稿，详情页上传能力包并提交审核'
   return '创建后为草稿，完善内容后提交审核'
+})
+
+const createButtonLabel = computed(() => {
+  if (busy.value) return '创建中…'
+  if (form.type === 'workflow') return '创建并打开画布'
+  if (canOnlineEdit(form.type)) return '创建并在线编辑'
+  return '创建草稿'
 })
 
 watch(
@@ -340,7 +349,7 @@ async function create() {
           <div class="flex" style="gap: 10px">
             <button class="btn" type="button" @click="emit('close')">取消</button>
             <button class="btn btn-primary" type="button" :disabled="busy" @click="create">
-              {{ busy ? '创建中…' : form.type === 'workflow' ? '创建并打开画布' : '创建草稿' }}
+              {{ createButtonLabel }}
             </button>
           </div>
         </div>

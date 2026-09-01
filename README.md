@@ -89,9 +89,9 @@ cd frontend && npm install && npm run dev
 5. 管理员在治理后台通过  
 6. 发现页 **加入**（仅授权；加入≠安装）→ 复制 `cap install name@version --type plugin` 装到零号员工  
 
-MCP 注意：市场包必须是 `mcp.json` + `connection.json` + `tools.json` + `security.json`；不能直接上传 agent 仓里的 `mcp-server.json`。
+进阶：技能 / 连接器 / 编排函数 / 助手创建后会进入**在线编辑**（保存即生成能力包），再提交审核；也可先上架组件再发助手并在依赖里引用（依赖须已上架）。安装包仍以上传 zip 为主。
 
-进阶：也可先上架技能/连接器，再发助手并在依赖里引用；依赖须已上架。
+MCP 注意：市场包必须是 `mcp.json` + `connection.json` + `tools.json` + `security.json`；不能直接上传 agent 仓里的 `mcp-server.json`。
 
 ## 消费矩阵
 

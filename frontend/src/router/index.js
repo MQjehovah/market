@@ -44,10 +44,10 @@ const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/', component: BrowseView, meta: { title: '能力目录' } },
-    { path: '/agents/:name/edit', component: AgentEditView, meta: { title: '编辑 Agent', publisher: true } },
+    { path: '/agents/:name/edit', component: AgentEditView, meta: { title: '编辑助手', auth: true } },
     { path: '/skills/:name/edit', component: SkillEditView, meta: { title: '编辑技能', auth: true } },
-    { path: '/tools/:name/edit', component: ToolEditView, meta: { title: '编辑工具', auth: true } },
-    { path: '/mcp/:name/edit', component: McpEditView, meta: { title: '编辑 MCP', auth: true } },
+    { path: '/tools/:name/edit', component: ToolEditView, meta: { title: '编辑编排函数', auth: true } },
+    { path: '/mcp/:name/edit', component: McpEditView, meta: { title: '编辑连接器', auth: true } },
     { path: '/workflows/new', component: WorkflowEditorView, meta: { title: '新建能力编排', auth: true, full: true } },
     { path: '/workflows/:id/edit', component: WorkflowEditorView, props: true, meta: { title: '能力编排', auth: true, full: true } },
     { path: '/login', component: LoginView, meta: { title: '登录' } },
