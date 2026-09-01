@@ -174,8 +174,8 @@ export const REVIEW_CHECKLIST = [
 
 export const STATUS_LABELS = {
   draft: '草稿',
-  reviewing: '待审',
-  published: '正式版',
+  reviewing: '审核中',
+  published: '已上架',
   deprecated: '已弃用',
   archived: '已归档',
   rejected: '已驳回',
@@ -212,16 +212,45 @@ export const PACKAGE_HINTS = {
   agent: 'agent.json + PROMPT.md（可含 TEAM.md 团队流水线、skills/、mcp/；内嵌与市场同名 skill/mcp 自动关联）',
   tool: 'tool.json + schema.json + implementation/tool.py（供能力编排节点；非宿主 src/tools）',
   skill: 'skill.json + SKILL.md',
-  mcp: 'mcp.json + connection.json + tools.json + security.json',
+  mcp: 'mcp.json + connection.json + tools.json + security.json（可含 implementation/*.py）',
   workflow: 'workflow.json（nodes/edges 引用已上架能力；与 TEAM.md 平行，不进 Agent 目录）',
   plugin: 'plugin.json 或 .cursor-plugin/plugin.json + skills/ + mcp.json（拆包子能力；浏览默认隐藏子项）'
 }
 
 /** 角色展示 */
 export const ROLE_LABELS = {
-  admin: 'admin',
-  publisher: 'publisher',
-  user: 'user'
+  admin: '管理员',
+  publisher: '发布者',
+  user: '普通用户'
+}
+
+/** 安装策略（加入「我的能力」行为） */
+export const INSTALL_POLICY_LABELS = {
+  optional: '可选加入',
+  default_on: '默认加入',
+  required: '必装'
+}
+
+/** 加入≠安装：统一文案，避免 Browse / My / Detail 各写一套 */
+export const JOIN_VS_INSTALL_HINT =
+  '「加入」只完成授权收录（加入≠安装）；生产请用 cap install 装到零号员工 / IDE。'
+
+export const TYPE_LETTER = {
+  agent: 'A',
+  tool: 'T',
+  skill: 'S',
+  mcp: 'M',
+  workflow: 'W',
+  plugin: 'P'
+}
+
+export const TYPE_COLORS = {
+  agent: '#2f6bff',
+  tool: '#12b76a',
+  skill: '#f5a524',
+  mcp: '#7c3aed',
+  workflow: '#0ea5e9',
+  plugin: '#e5484d'
 }
 
 /** 发布三意图：小白默认 Path B = 发安装包优先 */

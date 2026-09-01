@@ -5,6 +5,7 @@ import { api } from '../api'
 import { authState } from '../stores/auth'
 import {
   DEFAULT_BROWSE_KINDS,
+  JOIN_VS_INSTALL_HINT,
   MORE_BROWSE_KINDS,
   SHELVES,
   TYPE_CATEGORIES,
@@ -97,7 +98,7 @@ const pageContext = computed(() => {
   return {
     eyebrow: '企业内部能力目录',
     title: '发现当下值得使用的能力',
-    desc: '优先看技能与安装包；加入后用 cap install 装到零号员工 / IDE（加入≠安装）。'
+    desc: JOIN_VS_INSTALL_HINT
   }
 })
 
@@ -203,6 +204,10 @@ async function load() {
     hotCaps.value = []
     ratedCaps.value = []
     featuredCaps.value = []
+  } catch (e) {
+    caps.value = []
+    total.value = 0
+    notice.value = e.message || '加载目录失败'
   } finally {
     loading.value = false
   }
@@ -211,7 +216,7 @@ async function load() {
 async function loadMy() {
   if (!authState.token) return
   try {
-    const items = await api.get('/my/capabilities')
+    const items = await api.get('/my/capabilities?scope=added')
     myIds.value = new Set(items.map((c) => c.id))
   } catch {
     myIds.value = new Set()

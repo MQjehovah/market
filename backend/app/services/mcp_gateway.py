@@ -22,15 +22,13 @@ import logging
 import os
 import re
 import shutil
-import subprocess
+import sys
 import tempfile
 import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Awaitable, Callable
-from uuid import uuid4
 
-import anyio
 import httpx
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.sse import sse_client
@@ -49,8 +47,24 @@ logger = logging.getLogger("market.mcp_gateway")
 ENV_PLACEHOLDER = re.compile(r"\$\{([^}]+)\}")
 CONNECT_TIMEOUT = 30
 CALL_TIMEOUT = 120
+_GENERIC_PYTHON = {"python", "python3", "py"}
 
 ConfigLoader = Callable[[str], Awaitable[dict[str, Any] | None]]
+
+
+def format_connect_error(exc: BaseException, stderr: str = "") -> str:
+    """展开 ExceptionGroup，并附上 stdio 子进程 stderr（常见缺依赖场景）。"""
+    if isinstance(exc, BaseExceptionGroup):
+        parts = [format_connect_error(e) for e in exc.exceptions]
+        msg = "; ".join(p for p in parts if p) or str(exc)
+    else:
+        msg = str(exc).strip() or type(exc).__name__
+    err = (stderr or "").strip()
+    if err:
+        # 只保留末尾，避免把整段日志塞进 API 响应
+        tail = err[-1200:]
+        msg = f"{msg}\n--- stderr ---\n{tail}"
+    return msg[:2000]
 
 
 def read_package_files(cap) -> dict[str, bytes]:
@@ -63,8 +77,44 @@ def read_package_files(cap) -> dict[str, bytes]:
         content = get_storage().open(cap.artifacts[-1].uri).read()
         with zipfile.ZipFile(io.BytesIO(content)) as zf:
             return {name: zf.read(name) for name in zf.namelist() if not name.endswith("/")}
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("读取能力包失败 cap=%s: %s", getattr(cap, "name", "?"), exc)
         return {}
+
+
+def extract_implementation(tmpdir: Path, package_files: dict[str, bytes]) -> bool:
+    """把 implementation/** 解到临时目录，保留相对目录结构。返回是否解出文件。"""
+    extracted = False
+    for fname, data in package_files.items():
+        if not fname.startswith("implementation/") or fname.endswith("/"):
+            continue
+        rel = fname[len("implementation/") :]
+        if not rel or ".." in Path(rel).parts:
+            continue
+        dest = tmpdir / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+        extracted = True
+    return extracted
+
+
+def rewrite_stdio_script_arg(tmpdir: Path, arg: str) -> str:
+    """相对脚本路径 → 临时目录：优先 implementation 相对路径，再 basename / 唯一匹配。"""
+    if arg.startswith(("-", "--")) or Path(arg).is_absolute():
+        return arg
+    if Path(arg).suffix not in (".py", ".js", ".mjs"):
+        return arg
+    if arg.startswith("implementation/"):
+        cand = tmpdir / arg[len("implementation/") :]
+        if cand.is_file():
+            return str(cand)
+    by_name = tmpdir / Path(arg).name
+    if by_name.is_file():
+        return str(by_name)
+    matches = [p for p in tmpdir.rglob(Path(arg).name) if p.is_file()]
+    if len(matches) == 1:
+        return str(matches[0])
+    return arg
 
 
 def resolve_placeholders(value: Any) -> Any:
@@ -133,43 +183,51 @@ async def connect_upstream(
     """按配置连接上游 MCP server，返回已初始化的 ClientSession。"""
     transport = (config.get("transport") or "stdio").lower()
     cleanup: list[Path] = []
+    errlog = None
 
     try:
         if transport == "stdio":
             command = config.get("command") or "python"
+            # 能力包里常见 "python"；用当前解释器，保证与平台同环境依赖一致
+            if str(command).strip().lower() in _GENERIC_PYTHON:
+                command = sys.executable
             args = list(config.get("args") or [])
             env = resolve_placeholders(config.get("env") or {})
-            cwd: str | None = None
+            cwd: str | None = config.get("cwd") or None
             if package_files:
                 tmpdir = Path(tempfile.mkdtemp(prefix=f"mcp-gw-{sanitize(config['name'])}-"))
                 cleanup.append(tmpdir)
-                for fname, data in package_files.items():
-                    if fname.startswith("implementation/") and fname.endswith(".py"):
-                        (tmpdir / Path(fname).name).write_bytes(data)
-                        cwd = str(tmpdir)
-                        args = [
-                            str(tmpdir / Path(a).name)
-                            if not a.startswith(("-", "--"))
-                            and Path(a).suffix in (".py", ".js", ".mjs")
-                            and not Path(a).is_absolute()
-                            else a
-                            for a in args
-                        ]
-                        break
+                if extract_implementation(tmpdir, package_files):
+                    cwd = str(tmpdir)
+                    args = [rewrite_stdio_script_arg(tmpdir, a) for a in args]
             merged_env = dict(os.environ)
             merged_env["PYTHONUNBUFFERED"] = "1"
             merged_env.update(env)
             params = StdioServerParameters(command=command, args=args, env=merged_env, cwd=cwd)
+            # 真实文件描述符：anyio/subprocess 不能把 stderr 接到 StringIO
+            errlog = tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace")
 
-            async with asyncio.timeout(CONNECT_TIMEOUT):
-                stdio = stdio_client(params, errlog=subprocess.DEVNULL)
-                read, write = await stdio.__aenter__()
+            def _stderr_text() -> str:
                 try:
-                    async with ClientSession(read, write) as session:
-                        await session.initialize()
-                        yield session
-                finally:
-                    await stdio.__aexit__(None, None, None)
+                    errlog.seek(0)
+                    return errlog.read()
+                except Exception:  # noqa: BLE001
+                    return ""
+
+            try:
+                async with asyncio.timeout(CONNECT_TIMEOUT):
+                    stdio = stdio_client(params, errlog=errlog)
+                    read, write = await stdio.__aenter__()
+                    try:
+                        async with ClientSession(read, write) as session:
+                            await session.initialize()
+                            yield session
+                    finally:
+                        await stdio.__aexit__(*sys.exc_info())
+            except (asyncio.CancelledError, GeneratorExit):
+                raise
+            except BaseException as exc:
+                raise RuntimeError(format_connect_error(exc, _stderr_text())) from None
 
         elif transport in ("http", "streamable_http"):
             url = config.get("url") or ""
@@ -206,6 +264,11 @@ async def connect_upstream(
         else:
             raise RuntimeError(f"未知传输类型 {transport}")
     finally:
+        if errlog is not None:
+            try:
+                errlog.close()
+            except Exception:  # noqa: BLE001
+                pass
         for path in cleanup:
             shutil.rmtree(path, ignore_errors=True)
 
@@ -371,10 +434,15 @@ class GatewayRegistry:
 
 
 async def check_token(config: dict[str, Any], scope) -> bool:
-    """网关端点鉴权：X-Gateway-Token 或 Authorization: Bearer。留空令牌 = 内部免鉴权。"""
+    """网关端点鉴权：X-Gateway-Token 或 Authorization: Bearer。
+
+    留空令牌：默认内部免鉴权；若 settings.mcp_gateway_require_token=True 则拒绝。
+    """
+    from app.config import get_settings
+
     expected = config.get("api_token") or ""
     if not expected:
-        return True
+        return not get_settings().mcp_gateway_require_token
     request = Request(scope, None)  # type: ignore[arg-type]
     provided = request.headers.get("x-gateway-token", "")
     if not provided:

@@ -14,26 +14,21 @@ from sqlalchemy.orm import selectinload
 
 from app.models import Capability, CapabilityArtifact, User
 from app.schemas import ToolEditSave
-from app.services.capabilities import editable_content_source, next_version, parse_semver
+from app.services.capabilities import (
+    draft_policy_kwargs,
+    merge_edit_package_files,
+    next_version,
+    package_base_for_save,
+    parse_semver,
+    read_capability_files,
+    text_file,
+)
 from app.services.packages import validate_tool_schema
 from app.storage import get_storage
 
 _CORE = {"tool.json", "schema.json", "implementation/tool.py"}
-
-
-def _read_zip(cap: Capability) -> dict[str, bytes] | None:
-    if not cap.artifacts:
-        return None
-    try:
-        content = get_storage().open(cap.artifacts[-1].uri).read()
-        with zipfile.ZipFile(io.BytesIO(content)) as zf:
-            return {
-                name: zf.read(name)
-                for name in zf.namelist()
-                if not name.endswith("/")
-            }
-    except Exception:  # noqa: BLE001
-        return None
+_CORE_TEXT = frozenset({"schema.json", "implementation/tool.py"})
+_DEFAULT_IMPL = "def run(params):\n    return {'ok': True}\n"
 
 
 def _loads(raw: bytes | None, default: Any = None) -> Any:
@@ -92,14 +87,17 @@ async def get_editable(
     cap = draft or (max(published, key=lambda c: parse_semver(c.version)) if published else None)
     if cap is None:
         cap = max(versions, key=lambda c: parse_semver(c.version))
-    files = _read_zip(editable_content_source(cap, published)) or {}
+    files = merge_edit_package_files(cap, published, core_text_files=_CORE_TEXT)
     schema = _loads(files.get("schema.json"), {})
     if not isinstance(schema, dict):
         schema = {}
-    # Prefer denormalized input_schema when package schema missing
     if not schema and isinstance(cap.input_schema, dict) and cap.input_schema.get("properties"):
         schema = dict(cap.input_schema)
-    impl = files.get("implementation/tool.py", b"").decode("utf-8", errors="replace")
+    if not schema:
+        source = package_base_for_save(draft, published) or cap
+        if isinstance(source.input_schema, dict) and source.input_schema:
+            schema = dict(source.input_schema)
+    impl = text_file(files, "implementation/tool.py")
     base_version = (
         max(published, key=lambda c: parse_semver(c.version)).version if published else ""
     )
@@ -118,13 +116,12 @@ def build_tool_package(
     tags: list[str],
 ) -> bytes:
     files: dict[str, bytes] = {}
-    base_files = _read_zip(base) if base is not None else None
-    if base_files:
-        for fname, content in base_files.items():
-            if fname in _CORE:
-                continue
-            files[fname] = content
-    meta = _loads((base_files or {}).get("tool.json"), {}) or {}
+    base_files = read_capability_files(base) if base is not None else {}
+    for fname, content in base_files.items():
+        if fname in _CORE:
+            continue
+        files[fname] = content
+    meta = _loads(base_files.get("tool.json"), {}) or {}
     files["tool.json"] = json.dumps(
         {
             "name": name,
@@ -138,9 +135,7 @@ def build_tool_package(
     ).encode("utf-8")
     files["schema.json"] = json.dumps(schema, ensure_ascii=False, indent=2).encode("utf-8")
     code = implementation if implementation.strip() else (
-        (base_files or {}).get("implementation/tool.py", b"def run(params):\n    return {'ok': True}\n").decode(
-            "utf-8", errors="replace"
-        )
+        text_file(base_files, "implementation/tool.py", _DEFAULT_IMPL) or _DEFAULT_IMPL
     )
     files["implementation/tool.py"] = code.encode("utf-8")
     buf = io.BytesIO()
@@ -159,8 +154,21 @@ async def save_version(
     draft = next((c for c in versions if c.status in ("draft", "returned", "rejected")), None)
     published = [c for c in versions if c.status in ("published", "deprecated")]
     base = max(published, key=lambda c: parse_semver(c.version)) if published else None
+    inherit = merge_edit_package_files(
+        draft or base or versions[0], published, core_text_files=_CORE_TEXT
+    )
+    inherit_schema = _loads(inherit.get("schema.json"), {}) or {}
+    if not isinstance(inherit_schema, dict):
+        inherit_schema = {}
+    inherit_impl = text_file(inherit, "implementation/tool.py", _DEFAULT_IMPL)
 
-    schema = validate_tool_schema(data.tool_schema or {}, "schema.json")
+    schema_in = data.tool_schema or {}
+    if not isinstance(schema_in, dict) or (not schema_in and inherit_schema):
+        schema_in = inherit_schema or schema_in
+    schema = validate_tool_schema(schema_in, "schema.json")
+    implementation = (
+        data.implementation if str(data.implementation or "").strip() else inherit_impl
+    )
 
     if draft is not None:
         if user.role != "admin" and draft.author_id != user.id:
@@ -194,11 +202,10 @@ async def save_version(
             category=data.category or base.category,
             tags=data.tags if data.tags is not None else list(base.tags or []),
             visibility=base.visibility,
-            access_policy=base.access_policy,
-            allowed_users=list(base.allowed_users or []),
             status="draft",
             author_id=user.id,
             organization=user.organization,
+            **draft_policy_kwargs(base),
         )
         db.add(cap)
         await db.flush()
@@ -211,12 +218,12 @@ async def save_version(
         cap.tags = list(data.tags)
 
     pkg = build_tool_package(
-        base=base or draft,
+        base=package_base_for_save(draft, published) or base,
         name=cap.name,
         description=cap.description or "",
         version=cap.version,
         schema=schema,
-        implementation=data.implementation,
+        implementation=implementation,
         category=cap.category or "",
         tags=list(cap.tags or []),
     )
@@ -228,8 +235,4 @@ async def save_version(
         )
     )
     await db.commit()
-    impl = data.implementation or ""
-    if not impl.strip():
-        with zipfile.ZipFile(io.BytesIO(pkg)) as zf:
-            impl = zf.read("implementation/tool.py").decode("utf-8", errors="replace")
-    return cap, schema, impl, _file_list_from_zip(pkg)
+    return cap, schema, implementation, _file_list_from_zip(pkg)

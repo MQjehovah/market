@@ -482,11 +482,6 @@ async def update_install_policy(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
     if user.role != "admin" and cap.author_id != user.id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "只有作者或管理员可以设置安装策略")
-    if cap.type not in ("plugin", "mcp", "agent"):
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "安装策略适用于 Plugin / MCP / Agent（配方与安装单元）",
-        )
     cap.install_policy = data.install_policy
     await db.commit()
     await db.refresh(cap)

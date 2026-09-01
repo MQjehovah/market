@@ -5,6 +5,8 @@ import { api } from '../api'
 import {
   TYPE_LABELS,
   VISIBILITY_LABELS,
+  JOIN_VS_INSTALL_HINT,
+  INSTALL_POLICY_LABELS,
   formatDate,
   shelfLabel,
   ownedTodoBucket,
@@ -14,12 +16,14 @@ import {
 import StatusBadge from '../components/StatusBadge.vue'
 import CreateCapabilityModal from '../components/CreateCapabilityModal.vue'
 import DebugCapabilityModal from '../components/DebugCapabilityModal.vue'
+import ConfirmActionModal from '../components/ConfirmActionModal.vue'
 
 const route = useRoute()
 const router = useRouter()
 /** mainTab: owned | added — 对齐截图「审核 / 已上架」双页签，对应「我创建的 / 已加入」 */
 const mainTab = ref('owned')
 const caps = ref([])
+const loading = ref(false)
 const error = ref('')
 const notice = ref('')
 const showCreate = ref(false)
@@ -42,7 +46,7 @@ const TYPE_COLORS = {
 
 const scopedCaps = computed(() => {
   if (mainTab.value === 'owned') return caps.value.filter((c) => c.owned)
-  return caps.value.filter((c) => c.added && !c.owned)
+  return caps.value.filter((c) => c.added)
 })
 
 const sourceChips = computed(() => {
@@ -98,7 +102,7 @@ const pagedCaps = computed(() => {
 
 const tabCounts = computed(() => ({
   owned: caps.value.filter((c) => c.owned).length,
-  added: caps.value.filter((c) => c.added && !c.owned).length
+  added: caps.value.filter((c) => c.added).length
 }))
 
 function typeColor(type) {
@@ -133,10 +137,13 @@ function editPath(cap) {
 
 async function load() {
   error.value = ''
+  loading.value = true
   try {
     caps.value = await api.get('/my/capabilities?scope=all')
   } catch (e) {
     error.value = e.message
+  } finally {
+    loading.value = false
   }
 }
 
@@ -205,6 +212,10 @@ function askRemoveDraft(cap) {
 }
 
 function askRemoveFromMy(cap) {
+  if (cap.removable === false || cap.install_policy === 'required') {
+    error.value = `「${cap.name}」为必装能力，不能移除`
+    return
+  }
   confirmAction.value = {
     kind: 'remove',
     title: '确定移除？',
@@ -267,7 +278,7 @@ onMounted(() => {
       <div>
         <h1 class="page-title">我的能力</h1>
         <p class="page-desc muted">
-          技能/助手等可在线编辑；安装包以上传 zip 为主。上架后加入，再用 cap install 装到本地。加入≠安装。
+          技能/助手等可在线编辑；安装包以上传 zip 为主。{{ JOIN_VS_INSTALL_HINT }}
         </p>
       </div>
       <button class="btn btn-primary" type="button" @click="openCreate()">发布能力</button>
@@ -309,7 +320,8 @@ onMounted(() => {
     </div>
 
     <div class="panel table-panel">
-      <div v-if="caps.length === 0" class="empty">
+      <div v-if="loading" class="empty">加载中…</div>
+      <div v-else-if="caps.length === 0" class="empty">
         还没有能力。小白推荐路径：
         <ol style="text-align: left; display: inline-block; margin: 12px 0; padding-left: 20px">
           <li>点「发布能力」→ 选「发安装包」或「发助手 / 发组件」</li>
@@ -404,11 +416,17 @@ onMounted(() => {
                   <button class="op-link danger" type="button" @click="askRemoveDraft(cap)">删除</button>
                 </template>
                 <button
-                  v-if="cap.added && !cap.owned"
+                  v-if="cap.added && cap.removable !== false && cap.install_policy !== 'required'"
                   class="op-link danger"
                   type="button"
                   @click="askRemoveFromMy(cap)"
                 >移除</button>
+                <span
+                  v-else-if="cap.added"
+                  class="muted"
+                  style="font-size: 12px"
+                  :title="INSTALL_POLICY_LABELS[cap.install_policy] || ''"
+                >必装</span>
               </div>
             </td>
           </tr>
@@ -430,24 +448,15 @@ onMounted(() => {
       </div>
     </div>
 
-    <div v-if="confirmAction" class="confirm-mask" @click.self="confirmAction = null">
-      <div class="confirm-card">
-        <div class="confirm-title">
-          <span class="confirm-warn">!</span>
-          {{ confirmAction.title }}
-        </div>
-        <p class="confirm-body muted">{{ confirmAction.body }}</p>
-        <div class="confirm-actions">
-          <button class="btn" type="button" @click="confirmAction = null">取消</button>
-          <button
-            class="btn"
-            :class="confirmAction.danger ? 'btn-danger' : 'btn-primary'"
-            type="button"
-            @click="confirmOk"
-          >{{ confirmAction.okText }}</button>
-        </div>
-      </div>
-    </div>
+    <ConfirmActionModal
+      :show="!!confirmAction"
+      :title="confirmAction?.title || ''"
+      :body="confirmAction?.body || ''"
+      :ok-text="confirmAction?.okText || '确定'"
+      :danger="!!confirmAction?.danger"
+      @ok="confirmOk"
+      @cancel="confirmAction = null"
+    />
 
     <CreateCapabilityModal
       :show="showCreate"

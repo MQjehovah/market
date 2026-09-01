@@ -15,6 +15,8 @@ import {
   CONSUME_WAYS,
   REVIEW_CHECKLIST,
   OWNER_PROGRESS_STEPS,
+  JOIN_VS_INSTALL_HINT,
+  INSTALL_POLICY_LABELS,
   shelfLabel,
   formatDate,
   stars,
@@ -51,6 +53,7 @@ const myIds = ref(new Set())
 const myNotice = ref('')
 const copyNotice = ref('')
 const accessPolicy = ref('open')
+const installPolicy = ref('optional')
 const allowedUsers = ref('')
 const accessSaved = ref('')
 
@@ -254,6 +257,7 @@ async function load() {
   try {
     cap.value = await api.get(`/capabilities/${props.id}`)
     accessPolicy.value = cap.value.access_policy || 'open'
+    installPolicy.value = cap.value.install_policy || 'optional'
     allowedUsers.value = (cap.value.allowed_users || []).join(', ')
     versions.value = await api.get(`/capabilities/${props.id}/versions`)
     ratings.value = await api.get(`/capabilities/${props.id}/ratings`)
@@ -265,7 +269,7 @@ async function load() {
 async function loadMy() {
   if (!authState.token) return
   try {
-    const items = await api.get('/my/capabilities')
+    const items = await api.get('/my/capabilities?scope=added')
     myIds.value = new Set(items.map((c) => c.id))
   } catch {
     myIds.value = new Set()
@@ -276,6 +280,10 @@ async function toggleMy() {
   myNotice.value = ''
   try {
     if (myIds.value.has(props.id)) {
+      if ((cap.value?.install_policy || 'optional') === 'required') {
+        myNotice.value = '必装能力不可移除'
+        return
+      }
       const r = await api.delete(`/my/capabilities/${props.id}`)
       const next = new Set(myIds.value)
       next.delete(props.id)
@@ -315,7 +323,10 @@ async function saveAccess() {
       access_policy: accessPolicy.value,
       allowed_users: allowedUsers.value.split(/[,，]/).map((s) => s.trim()).filter(Boolean)
     })
-    accessSaved.value = '调用权限已更新'
+    await api.post(`/capabilities/${props.id}/install-policy`, {
+      install_policy: installPolicy.value
+    })
+    accessSaved.value = '调用权限与安装策略已更新'
     await load()
   } catch (e) {
     error.value = e.message
@@ -1028,10 +1039,10 @@ onMounted(() => {
 
           <div v-if="(isOwner || isAdmin) && ['published', 'deprecated'].includes(cap.status)" class="panel">
             <div class="flex-between flex-wrap">
-              <h3>调用权限</h3>
+              <h3>调用权限与安装策略</h3>
               <span v-if="accessSaved" class="muted" style="font-size: 12px">{{ accessSaved }}</span>
             </div>
-            <div class="muted" style="font-size: 13px">运行配置，不占版本。</div>
+            <div class="muted" style="font-size: 13px">运行配置，不占版本。安装策略影响「我的能力」加入/移除。</div>
             <div class="flex mt-16" style="gap: 10px; flex-wrap: wrap">
               <select v-model="accessPolicy" class="select" style="max-width: 300px">
                 <option value="open">开放：所有登录用户可加入并调用</option>
@@ -1045,6 +1056,11 @@ onMounted(() => {
                 style="max-width: 260px"
                 placeholder="白名单用户名（逗号分隔）"
               />
+              <select v-model="installPolicy" class="select" style="max-width: 220px">
+                <option value="optional">{{ INSTALL_POLICY_LABELS.optional }}</option>
+                <option value="default_on">{{ INSTALL_POLICY_LABELS.default_on }}</option>
+                <option value="required">{{ INSTALL_POLICY_LABELS.required }}</option>
+              </select>
               <button class="btn btn-primary" type="button" @click="saveAccess">保存</button>
             </div>
           </div>
@@ -1108,9 +1124,16 @@ onMounted(() => {
                 class="btn btn-block btn-lg"
                 :class="myIds.has(cap.id) ? '' : 'btn-primary'"
                 type="button"
+                :disabled="myIds.has(cap.id) && (cap.install_policy || 'optional') === 'required'"
                 @click="toggleMy"
               >
-                {{ myIds.has(cap.id) ? (isPlugin ? '移出安装包' : '已加入') : (isPlugin ? '加入 · 安装包' : '加入') }}
+                {{
+                  myIds.has(cap.id)
+                    ? ((cap.install_policy || 'optional') === 'required'
+                      ? '必装 · 已加入'
+                      : (isPlugin ? '移出安装包' : '已加入'))
+                    : (isPlugin ? '加入 · 安装包' : '加入')
+                }}
               </button>
               <button
                 class="btn btn-block"
@@ -1123,7 +1146,7 @@ onMounted(() => {
             </div>
             <p class="aside-hint muted">
               <template v-if="canLocalInstall">
-                「加入」只完成授权收录（加入≠安装）；生产请复制上方命令在零号员工 / IDE 执行。
+                {{ JOIN_VS_INSTALL_HINT }}
               </template>
               <template v-else>
                 本类型不支持本地 cap install。「加入」仅授权；请用上方云端接口或在能力编排中引用。

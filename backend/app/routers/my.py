@@ -8,6 +8,7 @@ from app.auth import CurrentUser, DbSession
 from app.models import Capability, UserCapability
 from app.schemas import MessageOut, MyCapabilityAdd
 from app.services.capabilities import parse_semver, to_capability_out
+from app.services.install_policy import ensure_default_on_joins, is_required_policy
 
 router = APIRouter(prefix="/api/my", tags=["my"])
 
@@ -19,6 +20,7 @@ def _out(cap: Capability, *, added: bool, owned: bool) -> dict:
     data["added"] = added
     data["owned"] = owned
     data["has_artifact"] = bool(getattr(cap, "artifacts", None))
+    data["removable"] = not is_required_policy(cap)
     return data
 
 
@@ -32,7 +34,9 @@ async def my_capabilities(
     附带 draft_* 信息供编辑入口使用（编辑仍可操作草稿）。
 
     include_components：默认 false，隐藏 plugin 拆出的子能力（仍可在 plugin 详情查看）。
+    访问列表时会同步加入 install_policy=default_on 的已发布能力。
     """
+    await ensure_default_on_joins(db, user)
     rows = (
         await db.scalars(
             select(UserCapability)
@@ -176,6 +180,11 @@ async def remove_capability(capability_id: str, db: DbSession, user: CurrentUser
         return MessageOut(message="该能力不在你的能力中")
 
     cap = await db.get(Capability, capability_id)
+    if is_required_policy(cap):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"「{cap.name}」为必装能力（install_policy=required），不能从我的能力中移除",
+        )
     ids = [capability_id]
     if cap is not None and cap.type == "plugin":
         from app.services.plugins import plugin_component_ids

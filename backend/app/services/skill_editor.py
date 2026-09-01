@@ -12,23 +12,16 @@ from sqlalchemy.orm import selectinload
 
 from app.models import Capability, CapabilityArtifact, User
 from app.schemas import SkillEditSave
-from app.services.capabilities import editable_content_source, next_version, parse_semver
+from app.services.capabilities import (
+    draft_policy_kwargs,
+    merge_edit_package_files,
+    next_version,
+    package_base_for_save,
+    parse_semver,
+    read_capability_files,
+    text_file,
+)
 from app.storage import get_storage
-
-
-def _read_zip(cap: Capability) -> dict[str, bytes] | None:
-    if not cap.artifacts:
-        return None
-    try:
-        content = get_storage().open(cap.artifacts[-1].uri).read()
-        with zipfile.ZipFile(io.BytesIO(content)) as zf:
-            return {
-                name: zf.read(name)
-                for name in zf.namelist()
-                if not name.endswith("/")
-            }
-    except Exception:  # noqa: BLE001
-        return None
 
 
 def _meta(files: dict[str, bytes] | None) -> dict[str, Any]:
@@ -85,8 +78,10 @@ async def get_editable(
     cap = draft or (max(published, key=lambda c: parse_semver(c.version)) if published else None)
     if cap is None:
         cap = max(versions, key=lambda c: parse_semver(c.version))
-    files = _read_zip(editable_content_source(cap, published)) or {}
-    skill_md = files.get("SKILL.md", b"").decode("utf-8", errors="replace")
+    files = merge_edit_package_files(
+        cap, published, core_text_files=frozenset({"SKILL.md"})
+    )
+    skill_md = text_file(files, "SKILL.md")
     base_version = (
         max(published, key=lambda c: parse_semver(c.version)).version if published else ""
     )
@@ -105,13 +100,13 @@ def build_skill_package(
 ) -> bytes:
     """重建技能包：保留 references/scripts/assets 等附属文件，替换 SKILL.md 与 skill.json。"""
     files: dict[str, bytes] = {}
-    if base is not None:
-        for fname, content in (_read_zip(base) or {}).items():
-            if fname in ("skill.json", "SKILL.md"):
-                continue
-            files[fname] = content
+    base_files = read_capability_files(base) if base is not None else {}
+    for fname, content in base_files.items():
+        if fname in ("skill.json", "SKILL.md"):
+            continue
+        files[fname] = content
     files["SKILL.md"] = skill_md.encode("utf-8")
-    meta = _meta(_read_zip(base))
+    meta = _meta(base_files)
     files["skill.json"] = json.dumps(
         {
             "name": name,
@@ -139,12 +134,16 @@ async def save_version(
     draft = next((c for c in versions if c.status in ("draft", "returned", "rejected")), None)
     published = [c for c in versions if c.status in ("published", "deprecated")]
     base = max(published, key=lambda c: parse_semver(c.version)) if published else None
+    inherit = merge_edit_package_files(
+        draft or base or versions[0], published, core_text_files=frozenset({"SKILL.md"})
+    )
+    inherit_md = text_file(inherit, "SKILL.md")
 
     if draft is not None:
         if user.role != "admin" and draft.author_id != user.id:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "无权限编辑该草稿")
         cap = draft
-        skill_md = data.skill_md
+        skill_md = data.skill_md if str(data.skill_md or "").strip() else inherit_md
     else:
         if base is None:
             raise HTTPException(
@@ -176,10 +175,11 @@ async def save_version(
             status="draft",
             author_id=user.id,
             organization=user.organization,
+            **draft_policy_kwargs(base),
         )
         db.add(cap)
         await db.flush()
-        skill_md = data.skill_md
+        skill_md = data.skill_md if str(data.skill_md or "").strip() else inherit_md
 
     if data.description:
         cap.description = data.description
@@ -189,7 +189,7 @@ async def save_version(
         cap.tags = list(data.tags)
 
     pkg = build_skill_package(
-        base=base,
+        base=package_base_for_save(draft, published) or base,
         name=cap.name,
         description=cap.description or "",
         version=cap.version,

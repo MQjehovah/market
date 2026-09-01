@@ -407,10 +407,16 @@ class ToolEditSave(BaseModel):
     new_version: str = Field(default="", max_length=50, description="留空则基于最新版本 patch+1")
 
 
+class McpImplementationFile(BaseModel):
+    path: str = Field(max_length=255, description="相对路径，须为 implementation/*.py")
+    content: str = Field(default="", max_length=500000)
+
+
 class McpEditOut(BaseModel):
     capability: CapabilityOut
     connection: dict[str, Any] = Field(default_factory=dict)
     tools_json: Any = None
+    implementations: list[McpImplementationFile] = Field(default_factory=list)
     files: list[dict[str, Any]] = Field(default_factory=list)
     base_version: str = ""
 
@@ -418,6 +424,10 @@ class McpEditOut(BaseModel):
 class McpEditSave(BaseModel):
     connection: dict[str, Any] = Field(default_factory=dict)
     tools_json: Any = None
+    implementations: list[McpImplementationFile] | None = Field(
+        default=None,
+        description="为 null 时保留原 implementation/*.py；传入列表则整体替换",
+    )
     description: str = Field(default="", max_length=20000)
     category: str = Field(default="", max_length=100)
     tags: list[str] = Field(default_factory=list)

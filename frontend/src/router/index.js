@@ -71,11 +71,11 @@ router.beforeEach((to) => {
       return { path: '/login', query: { redirect: to.fullPath } }
     }
   }
+  if (authState.token && (to.path === '/login' || to.path === '/register')) {
+    return typeof to.query.redirect === 'string' ? to.query.redirect : '/'
+  }
   if (to.meta.auth && !authState.token) {
     return { path: '/login', query: { redirect: to.fullPath } }
-  }
-  if (to.meta.publisher && authState.user && !['admin', 'publisher'].includes(authState.user.role)) {
-    return '/'
   }
   if (to.meta.admin && authState.user && authState.user.role !== 'admin') {
     return '/'

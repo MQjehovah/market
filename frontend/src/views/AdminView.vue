@@ -15,6 +15,8 @@ import {
 import StatusBadge from '../components/StatusBadge.vue'
 import DebugCapabilityModal from '../components/DebugCapabilityModal.vue'
 import PackagePreview from '../components/PackagePreview.vue'
+import AdminTrialPanel from '../components/AdminTrialPanel.vue'
+import ConfirmActionModal from '../components/ConfirmActionModal.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -389,10 +391,22 @@ async function saveEditUser() {
   }
 }
 
+const confirmAction = ref(null)
+
 async function removeUser(u) {
   error.value = ''
   userNotice.value = ''
-  if (!confirm(`确认删除用户「${u.username}」？\n该用户发布的能力将自动转移给当前管理员。此操作不可恢复。`)) return
+  confirmAction.value = {
+    kind: 'remove-user',
+    title: '确认删除用户？',
+    body: `删除「${u.username}」后，其发布的能力将转移给当前管理员。此操作不可恢复。`,
+    okText: '删除',
+    danger: true,
+    payload: u
+  }
+}
+
+async function doRemoveUser(u) {
   try {
     const r = await api.delete(`/admin/users/${u.id}`)
     userNotice.value = r.message
@@ -496,7 +510,17 @@ async function saveGateway() {
 
 async function removeGateway(s) {
   gatewayNotice.value = ''
-  if (!confirm(`确认删除网关服务「${s.name}」？外部调用端点将立即失效。`)) return
+  confirmAction.value = {
+    kind: 'remove-gateway',
+    title: '确认删除网关？',
+    body: `删除「${s.name}」后，外部调用端点将立即失效。`,
+    okText: '删除',
+    danger: true,
+    payload: s
+  }
+}
+
+async function doRemoveGateway(s) {
   try {
     const r = await api.delete(`/admin/mcp-gateway/servers/${s.id}`)
     gatewayNotice.value = r.message
@@ -504,6 +528,14 @@ async function removeGateway(s) {
   } catch (e) {
     error.value = e.message
   }
+}
+
+async function confirmActionOk() {
+  const action = confirmAction.value
+  confirmAction.value = null
+  if (!action) return
+  if (action.kind === 'remove-user') await doRemoveUser(action.payload)
+  if (action.kind === 'remove-gateway') await doRemoveGateway(action.payload)
 }
 
 async function testGateway(s) {
@@ -517,11 +549,15 @@ async function testGateway(s) {
 }
 
 function gatewayUrl(s) {
-  return `${location.origin}/api/mcp-gateway/${s.name}/stream`
+  return `${window.location.origin}/api/mcp-gateway/${s.name}/stream`
 }
 
 function gatewaySseUrl(s) {
-  return `${location.origin}/api/mcp-gateway/${s.name}/sse`
+  return `${window.location.origin}/api/mcp-gateway/${s.name}/sse`
+}
+
+function gatewayPreviewUrl(name) {
+  return `${window.location.origin}/api/mcp-gateway/${name || '…'}/stream`
 }
 
 function copyText(text) {
@@ -573,32 +609,21 @@ watch(
           </div>
           <button
             v-if="section === 'review' && stats"
-            class="btn btn-sm"
+            class="btn"
             type="button"
             @click="showStatsDetail = !showStatsDetail"
           >{{ showStatsDetail ? '收起统计' : '统计明细' }}</button>
-          <div class="trial-wrap">
-            <button class="btn btn-sm" type="button" :class="{ 'btn-primary': showTrial }" @click="showTrial = !showTrial">
-              云端试用
-            </button>
-            <div v-if="showTrial" class="trial-pop panel">
-              <div class="muted" style="font-size: 12px; margin-bottom: 10px">
-                试用已发布资产（会计入用量）。生产请走 cap install / 本地引擎 / MCP。
-              </div>
-              <select v-model="debugType" class="select" @change="selectDebugType(debugType)">
-                <option v-for="t in ['tool', 'agent', 'skill', 'mcp', 'workflow', 'plugin']" :key="t" :value="t">{{ TYPE_LABELS[t] }}</option>
-              </select>
-              <select v-model="debugName" class="select" style="margin-top: 8px">
-                <option value="">选择已发布的能力…</option>
-                <option v-for="c in debugCaps" :key="c.id" :value="c.name">{{ c.name }}（v{{ c.version }}）</option>
-              </select>
-              <button class="btn btn-primary btn-block mt-12" :disabled="!debugName" @click="openDebug">打开试用</button>
-            </div>
-          </div>
+          <AdminTrialPanel
+            v-model:show="showTrial"
+            v-model:debug-type="debugType"
+            v-model:debug-name="debugName"
+            :debug-caps="debugCaps"
+            @open="openDebug"
+            @dismiss="showTrial = false"
+            @update:debug-type="selectDebugType"
+          />
         </div>
       </div>
-
-      <div v-if="showTrial" class="trial-dismiss" @click="showTrial = false"></div>
 
       <div v-if="notice" class="alert alert-success mb-12">{{ notice }}</div>
       <div v-if="error" class="alert alert-error mb-12">{{ error }}</div>
@@ -943,6 +968,15 @@ watch(
         </div>
       </section>
 
+    <ConfirmActionModal
+      :show="!!confirmAction"
+      :title="confirmAction?.title || ''"
+      :body="confirmAction?.body || ''"
+      :ok-text="confirmAction?.okText || '确定'"
+      :danger="!!confirmAction?.danger"
+      @ok="confirmActionOk"
+      @cancel="confirmAction = null"
+    />
     <DebugCapabilityModal :show="!!debugCap" :cap="debugCap" title="云端试用" @close="debugCap = null" />
 
     <div v-if="confirmReview" class="confirm-mask" @click.self="confirmReview = null">
@@ -1101,7 +1135,7 @@ watch(
         <div v-if="error" class="alert alert-error mt-12">{{ error }}</div>
         <div class="modal-foot">
           <span class="muted" style="font-size: 12px">
-            外部连接：{{ location.origin }}/api/mcp-gateway/{{ gatewayForm.name || '…' }}/stream
+            外部连接：{{ gatewayPreviewUrl(gatewayForm.name) }}
           </span>
           <div class="flex" style="gap: 10px">
             <button class="btn" @click="showGatewayModal = false">取消</button>

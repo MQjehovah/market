@@ -1,9 +1,10 @@
-"""MCP 在线编辑：读取 / 保存 connection.json（保存即新版本草稿）。"""
+"""MCP 在线编辑：读取 / 保存 connection.json 与 implementation/*.py（保存即新版本草稿）。"""
 
 from __future__ import annotations
 
 import io
 import json
+import re
 import zipfile
 from typing import Any
 
@@ -13,27 +14,39 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models import Capability, CapabilityArtifact, User
-from app.schemas import McpEditSave
-from app.services.capabilities import editable_content_source, next_version, parse_semver
+from app.schemas import McpEditSave, McpImplementationFile
+from app.services.capabilities import (
+    draft_policy_kwargs,
+    merge_edit_package_files,
+    next_version,
+    package_base_for_save,
+    parse_semver,
+    read_capability_files,
+)
+
 from app.services.packages import validate_mcp_connection
 from app.storage import get_storage
 
 _CORE = {"mcp.json", "connection.json", "tools.json"}
+_CORE_TEXT = frozenset({"connection.json", "implementation/*.py"})
+_IMPL_RE = re.compile(r"^implementation/[\w.\-]+(?:/[\w.\-]+)*\.py$")
+_DEFAULT_SERVER = "implementation/server.py"
+_DEFAULT_SERVER_STUB = (
+    '"""MCP stdio server 入口。网关会把 implementation/*.py 解到临时目录后按 connection.args 启动。"""\n'
+    "\n"
+    "\n"
+    "def main() -> None:\n"
+    '    raise SystemExit("请实现 MCP server")\n'
+    "\n"
+    "\n"
+    'if __name__ == "__main__":\n'
+    "    main()\n"
+)
 
 
 def _read_zip(cap: Capability) -> dict[str, bytes] | None:
-    if not cap.artifacts:
-        return None
-    try:
-        content = get_storage().open(cap.artifacts[-1].uri).read()
-        with zipfile.ZipFile(io.BytesIO(content)) as zf:
-            return {
-                name: zf.read(name)
-                for name in zf.namelist()
-                if not name.endswith("/")
-            }
-    except Exception:  # noqa: BLE001
-        return None
+    files = read_capability_files(cap)
+    return files or None
 
 
 def _loads(raw: bytes | None, default: Any = None) -> Any:
@@ -45,11 +58,15 @@ def _loads(raw: bytes | None, default: Any = None) -> Any:
         return default
 
 
+def _is_impl(path: str) -> bool:
+    return path.startswith("implementation/") and path.endswith(".py")
+
+
 def _file_list(files: dict[str, bytes]) -> list[dict[str, Any]]:
     return [
         {"path": name, "size": len(data)}
         for name, data in files.items()
-        if name not in _CORE
+        if name not in _CORE and not _is_impl(name)
     ]
 
 
@@ -58,8 +75,45 @@ def _file_list_from_zip(pkg: bytes) -> list[dict[str, Any]]:
         return [
             {"path": name, "size": zf.getinfo(name).file_size}
             for name in zf.namelist()
-            if not name.endswith("/") and name not in _CORE
+            if not name.endswith("/") and name not in _CORE and not _is_impl(name)
         ]
+
+
+def _read_implementations(files: dict[str, bytes]) -> list[McpImplementationFile]:
+    rows = [
+        McpImplementationFile(
+            path=name,
+            content=data.decode("utf-8", errors="replace"),
+        )
+        for name, data in files.items()
+        if _is_impl(name)
+    ]
+    rows.sort(key=lambda r: (0 if r.path == _DEFAULT_SERVER else 1, r.path))
+    return rows
+
+
+def _normalize_implementations(
+    items: list[McpImplementationFile] | None,
+) -> list[McpImplementationFile] | None:
+    if items is None:
+        return None
+    seen: set[str] = set()
+    out: list[McpImplementationFile] = []
+    for item in items:
+        path = (item.path or "").replace("\\", "/").lstrip("/")
+        if not _IMPL_RE.match(path):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"非法 implementation 路径：{item.path}（须为 implementation/*.py）",
+            )
+        if path in seen:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"重复的 implementation 路径：{path}",
+            )
+        seen.add(path)
+        out.append(McpImplementationFile(path=path, content=item.content or ""))
+    return out
 
 
 def _input_schema_from_connection(
@@ -92,7 +146,9 @@ async def _mcp_versions(db: AsyncSession, name: str) -> list[Capability]:
 
 async def get_editable(
     db: AsyncSession, user: User | None, name: str
-) -> tuple[Capability, dict[str, Any], Any, list[dict[str, Any]], str]:
+) -> tuple[
+    Capability, dict[str, Any], Any, list[McpImplementationFile], list[dict[str, Any]], str
+]:
     versions = await _mcp_versions(db, name)
     if not versions:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"MCP {name} 不存在")
@@ -109,7 +165,7 @@ async def get_editable(
     cap = draft or (max(published, key=lambda c: parse_semver(c.version)) if published else None)
     if cap is None:
         cap = max(versions, key=lambda c: parse_semver(c.version))
-    files = _read_zip(editable_content_source(cap, published)) or {}
+    files = merge_edit_package_files(cap, published, core_text_files=_CORE_TEXT)
     connection = _loads(files.get("connection.json"), {})
     if not isinstance(connection, dict):
         connection = {}
@@ -125,10 +181,15 @@ async def get_editable(
             if schema.get("required_env"):
                 connection["env"] = {k: "" for k in schema["required_env"]}
     tools = _loads(files.get("tools.json"), None)
+    implementations = _read_implementations(files)
+    if not implementations:
+        implementations = [
+            McpImplementationFile(path=_DEFAULT_SERVER, content=_DEFAULT_SERVER_STUB)
+        ]
     base_version = (
         max(published, key=lambda c: parse_semver(c.version)).version if published else ""
     )
-    return cap, connection, tools, _file_list(files), base_version
+    return cap, connection, tools, implementations, _file_list(files), base_version
 
 
 def build_mcp_package(
@@ -141,15 +202,17 @@ def build_mcp_package(
     tools_json: Any,
     category: str,
     tags: list[str],
+    implementations: list[McpImplementationFile] | None = None,
 ) -> bytes:
     files: dict[str, bytes] = {}
-    base_files = _read_zip(base) if base is not None else None
-    if base_files:
-        for fname, content in base_files.items():
-            if fname in _CORE:
-                continue
-            files[fname] = content
-    meta = _loads((base_files or {}).get("mcp.json"), {}) or {}
+    base_files = read_capability_files(base) if base is not None else {}
+    for fname, content in base_files.items():
+        if fname in _CORE:
+            continue
+        if implementations is not None and _is_impl(fname):
+            continue
+        files[fname] = content
+    meta = _loads(base_files.get("mcp.json"), {}) or {}
     files["mcp.json"] = json.dumps(
         {
             "name": name,
@@ -164,8 +227,13 @@ def build_mcp_package(
     files["connection.json"] = json.dumps(connection, ensure_ascii=False, indent=2).encode("utf-8")
     if tools_json is not None:
         files["tools.json"] = json.dumps(tools_json, ensure_ascii=False, indent=2).encode("utf-8")
-    elif base_files and "tools.json" in base_files:
+    elif "tools.json" in base_files:
         files["tools.json"] = base_files["tools.json"]
+    if implementations is not None:
+        for item in implementations:
+            files[item.path] = item.content.encode("utf-8")
+    if "security.json" not in files:
+        files["security.json"] = b"{}\n"
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for fname, content in files.items():
@@ -175,16 +243,42 @@ def build_mcp_package(
 
 async def save_version(
     db: AsyncSession, user: User, name: str, data: McpEditSave
-) -> tuple[Capability, dict[str, Any], Any, list[dict[str, Any]]]:
+) -> tuple[Capability, dict[str, Any], Any, list[McpImplementationFile], list[dict[str, Any]]]:
     versions = await _mcp_versions(db, name)
     if not versions:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"MCP {name} 不存在")
     draft = next((c for c in versions if c.status in ("draft", "returned", "rejected")), None)
     published = [c for c in versions if c.status in ("published", "deprecated")]
     base = max(published, key=lambda c: parse_semver(c.version)) if published else None
+    inherit = merge_edit_package_files(
+        draft or base or versions[0], published, core_text_files=_CORE_TEXT
+    )
+    inherit_conn = _loads(inherit.get("connection.json"), {}) or {}
+    if not isinstance(inherit_conn, dict):
+        inherit_conn = {}
+    inherit_impls = {f.path: f for f in _read_implementations(inherit)}
 
     connection = dict(data.connection or {})
+    if not (
+        connection.get("transport")
+        or connection.get("command")
+        or connection.get("url")
+        or connection.get("server")
+    ):
+        connection = dict(inherit_conn or connection)
     validate_mcp_connection(connection, "connection.json")
+
+    implementations = _normalize_implementations(data.implementations)
+    if implementations is not None:
+        filled: list[McpImplementationFile] = []
+        for item in implementations:
+            content = item.content
+            if not str(content or "").strip() and item.path in inherit_impls:
+                content = inherit_impls[item.path].content
+            filled.append(McpImplementationFile(path=item.path, content=content or ""))
+        if not filled and inherit_impls:
+            filled = list(inherit_impls.values())
+        implementations = filled
 
     if draft is not None:
         if user.role != "admin" and draft.author_id != user.id:
@@ -218,11 +312,10 @@ async def save_version(
             category=data.category or base.category,
             tags=data.tags if data.tags is not None else list(base.tags or []),
             visibility=base.visibility,
-            access_policy=base.access_policy,
-            allowed_users=list(base.allowed_users or []),
             status="draft",
             author_id=user.id,
             organization=user.organization,
+            **draft_policy_kwargs(base),
         )
         db.add(cap)
         await db.flush()
@@ -235,7 +328,7 @@ async def save_version(
         cap.tags = list(data.tags)
 
     pkg = build_mcp_package(
-        base=base or draft,
+        base=package_base_for_save(draft, published) or base,
         name=cap.name,
         description=cap.description or "",
         version=cap.version,
@@ -243,6 +336,7 @@ async def save_version(
         tools_json=data.tools_json,
         category=cap.category or "",
         tags=list(cap.tags or []),
+        implementations=implementations,
     )
     cap.input_schema = _input_schema_from_connection(
         cap.name, cap.version, cap.description or "", connection
@@ -259,4 +353,16 @@ async def save_version(
         with zipfile.ZipFile(io.BytesIO(pkg)) as zf:
             if "tools.json" in zf.namelist():
                 tools = json.loads(zf.read("tools.json").decode("utf-8"))
-    return cap, connection, tools, _file_list_from_zip(pkg)
+    with zipfile.ZipFile(io.BytesIO(pkg)) as zf:
+        pkg_files = {
+            name: zf.read(name)
+            for name in zf.namelist()
+            if not name.endswith("/")
+        }
+    return (
+        cap,
+        connection,
+        tools,
+        _read_implementations(pkg_files),
+        _file_list_from_zip(pkg),
+    )

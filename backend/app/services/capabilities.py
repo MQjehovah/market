@@ -1,6 +1,10 @@
 """能力生命周期：草稿 → 提交审核 → 审核中 → 通过(发布)/驳回/打回 → 弃用 → 归档。"""
 
+import io
+import json
+import logging
 import re
+import zipfile
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -88,6 +92,104 @@ def editable_content_source(cap: Capability, published: list[Capability]) -> Cap
     if not with_pkg:
         return cap
     return max(with_pkg, key=lambda c: parse_semver(c.version))
+
+
+def read_capability_files(cap: Capability | None) -> dict[str, bytes]:
+    """读取能力包内文件；无包或失败时返回空 dict（失败会打日志）。"""
+    if cap is None or not cap.artifacts:
+        return {}
+    try:
+        content = get_storage().open(cap.artifacts[-1].uri).read()
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            return {
+                name: zf.read(name)
+                for name in zf.namelist()
+                if not name.endswith("/")
+            }
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("market.capabilities").warning(
+            "读取能力包失败 name=%s uri=%s: %s",
+            getattr(cap, "name", "?"),
+            cap.artifacts[-1].uri if cap.artifacts else "",
+            exc,
+        )
+        return {}
+
+
+def latest_published_with_package(published: list[Capability]) -> Capability | None:
+    with_pkg = [c for c in published if c.artifacts]
+    if not with_pkg:
+        return None
+    return max(with_pkg, key=lambda c: parse_semver(c.version))
+
+
+def package_base_for_save(
+    draft: Capability | None, published: list[Capability]
+) -> Capability | None:
+    """保存时附属文件底稿：优先用当前草稿包，否则用最新已发布包。"""
+    if draft is not None and draft.artifacts:
+        return draft
+    return latest_published_with_package(published)
+
+
+def _is_blank_core(path: str, content: bytes, core_text_files: frozenset[str]) -> bool:
+    matched = path in core_text_files
+    if not matched and "implementation/*.py" in core_text_files:
+        matched = path.startswith("implementation/") and path.endswith(".py")
+    if not matched:
+        return False
+    try:
+        text = content.decode("utf-8", errors="replace").strip()
+    except Exception:  # noqa: BLE001
+        return False
+    if not text:
+        return True
+    # 空 JSON 对象/数组视为未填写，不覆盖已发布底稿
+    if path.endswith(".json"):
+        try:
+            val = json.loads(text)
+        except Exception:  # noqa: BLE001
+            return False
+        if val in ({}, [], None):
+            return True
+    return False
+
+
+def merge_edit_package_files(
+    cap: Capability,
+    published: list[Capability],
+    *,
+    core_text_files: frozenset[str] = frozenset(),
+) -> dict[str, bytes]:
+    """编辑态文件：最新已发布包打底，当前草稿覆盖；草稿中空的核心文本不覆盖底稿。"""
+    files: dict[str, bytes] = {}
+    base = latest_published_with_package(published)
+    if base is not None:
+        files.update(read_capability_files(base))
+    if cap.artifacts and (base is None or cap.id != base.id):
+        for path, content in read_capability_files(cap).items():
+            if _is_blank_core(path, content, core_text_files):
+                continue
+            files[path] = content
+    elif not files:
+        files.update(read_capability_files(cap))
+    return files
+
+
+def text_file(files: dict[str, bytes], path: str, default: str = "") -> str:
+    raw = files.get(path)
+    if raw is None:
+        return default
+    return raw.decode("utf-8", errors="replace")
+
+
+def draft_policy_kwargs(base: Capability) -> dict:
+    """新版本草稿从已发布行继承访问/安装策略。"""
+    return {
+        "access_policy": getattr(base, "access_policy", None) or "open",
+        "allowed_users": list(getattr(base, "allowed_users", None) or []),
+        "install_policy": getattr(base, "install_policy", None) or "optional",
+    }
 
 
 def to_capability_out(

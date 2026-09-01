@@ -2,7 +2,7 @@
 import { computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from './api'
-import { authState, setAuth } from './stores/auth'
+import { authState, setAuth, clearAuth } from './stores/auth'
 import AppHeader from './components/AppHeader.vue'
 
 const route = useRoute()
@@ -11,7 +11,9 @@ onMounted(() => {
   if (!authState.token) return
   api.get('/auth/me').then((user) => {
     if (user) setAuth(authState.token, user)
-  }).catch(() => {})
+  }).catch(() => {
+    clearAuth()
+  })
 })
 const viewKey = computed(() => {
   if (route.path.startsWith('/admin')) return 'admin'

@@ -17,11 +17,16 @@ const server = ref('')
 const envText = ref('{}')
 const headersText = ref('{}')
 const toolsText = ref('')
+const implementations = ref([])
+const activeImpl = ref(0)
+const newImplName = ref('')
 const description = ref('')
 const tags = ref('')
 const error = ref('')
 const notice = ref('')
 const saving = ref(false)
+
+const activeFile = computed(() => implementations.value[activeImpl.value] || null)
 
 const jsonFieldError = computed(() => {
   for (const [label, text] of [
@@ -78,6 +83,58 @@ function buildConnection() {
   return conn
 }
 
+function applyImplementations(list) {
+  implementations.value = (list || []).map((f) => ({
+    path: f.path,
+    content: f.content || ''
+  }))
+  if (!implementations.value.length) {
+    implementations.value = [
+      {
+        path: 'implementation/server.py',
+        content:
+          '"""MCP stdio server 入口。网关会把 implementation/*.py 解到临时目录后按 connection.args 启动。"""\n\n\ndef main() -> None:\n    raise SystemExit("请实现 MCP server")\n\n\nif __name__ == "__main__":\n    main()\n'
+      }
+    ]
+  }
+  activeImpl.value = 0
+}
+
+function selectImpl(i) {
+  activeImpl.value = i
+}
+
+function addImpl() {
+  error.value = ''
+  let namePart = (newImplName.value || '').trim().replace(/\\/g, '/')
+  if (!namePart) namePart = 'server.py'
+  if (!namePart.endsWith('.py')) namePart += '.py'
+  namePart = namePart.replace(/^implementation\//, '')
+  const path = `implementation/${namePart}`
+  if (!/^implementation\/[\w.\-]+(?:\/[\w.\-]+)*\.py$/.test(path)) {
+    error.value = '文件名只能包含字母、数字、下划线、短横线与点'
+    return
+  }
+  if (implementations.value.some((f) => f.path === path)) {
+    error.value = `已存在 ${path}`
+    return
+  }
+  implementations.value.push({ path, content: '' })
+  activeImpl.value = implementations.value.length - 1
+  newImplName.value = ''
+}
+
+function removeImpl(i) {
+  if (implementations.value.length <= 1) {
+    error.value = '至少保留一个 implementation/*.py'
+    return
+  }
+  implementations.value.splice(i, 1)
+  if (activeImpl.value >= implementations.value.length) {
+    activeImpl.value = implementations.value.length - 1
+  }
+}
+
 async function load() {
   error.value = ''
   try {
@@ -85,6 +142,7 @@ async function load() {
     applyConnection(data.value.connection || {})
     toolsText.value =
       data.value.tools_json == null ? '' : JSON.stringify(data.value.tools_json, null, 2)
+    applyImplementations(data.value.implementations)
     description.value = data.value.capability?.description || ''
     tags.value = (data.value.capability?.tags || []).join(', ')
   } catch (e) {
@@ -103,6 +161,10 @@ async function save() {
   try {
     const payload = {
       connection: buildConnection(),
+      implementations: implementations.value.map((f) => ({
+        path: f.path,
+        content: f.content
+      })),
       description: description.value,
       category: data.value?.capability?.category || '',
       tags: tags.value.split(/[,，]/).map((s) => s.trim()).filter(Boolean)
@@ -114,6 +176,7 @@ async function save() {
     data.value = body
     applyConnection(body.connection || {})
     toolsText.value = body.tools_json == null ? '' : JSON.stringify(body.tools_json, null, 2)
+    applyImplementations(body.implementations)
     notice.value = `已保存为新版本草稿 v${body.capability.version}，可提交审核`
   } catch (e) {
     error.value = e.message
@@ -177,11 +240,15 @@ onMounted(load)
             </label>
             <label>
               <span>Command（stdio）</span>
-              <input v-model="command" class="input" placeholder="如：npx" />
+              <input v-model="command" class="input" placeholder="如：python" />
             </label>
             <label class="full">
               <span>Args（空格分隔）</span>
-              <input v-model="argsText" class="input" placeholder="如：-y @modelcontextprotocol/server-filesystem ." />
+              <input
+                v-model="argsText"
+                class="input"
+                placeholder="如：server.py 或 -m your_mcp_server"
+              />
             </label>
             <label class="full">
               <span>URL（http / sse）</span>
@@ -206,11 +273,53 @@ onMounted(load)
         </div>
 
         <div class="panel mt-16">
+          <div class="flex-between flex-wrap" style="margin-bottom: 12px">
+            <h3 style="margin: 0">implementation/*.py</h3>
+            <span class="muted" style="font-size: 12px">stdio 时网关会解压这些文件后按 Args 启动</span>
+          </div>
+          <div class="impl-tabs">
+            <button
+              v-for="(f, i) in implementations"
+              :key="f.path"
+              type="button"
+              class="impl-tab"
+              :class="{ active: i === activeImpl }"
+              @click="selectImpl(i)"
+            >
+              {{ f.path.replace(/^implementation\//, '') }}
+              <span
+                v-if="implementations.length > 1"
+                class="impl-remove"
+                title="移除"
+                @click.stop="removeImpl(i)"
+              >×</span>
+            </button>
+          </div>
+          <div class="impl-add flex" style="gap: 8px; margin: 10px 0 12px">
+            <input
+              v-model="newImplName"
+              class="input"
+              style="flex: 1"
+              placeholder="新增文件名，如 helpers.py"
+              @keyup.enter="addImpl"
+            />
+            <button class="btn btn-sm" type="button" @click="addImpl">添加</button>
+          </div>
+          <textarea
+            v-if="activeFile"
+            v-model="activeFile.content"
+            class="textarea code-editor"
+            rows="16"
+            spellcheck="false"
+          ></textarea>
+        </div>
+
+        <div class="panel mt-16">
           <h3>tools.json（可选，留空则保留原文件）</h3>
           <textarea
             v-model="toolsText"
             class="textarea code-editor"
-            rows="10"
+            rows="8"
             spellcheck="false"
             placeholder="留空表示不覆盖包内 tools.json"
           ></textarea>
@@ -269,6 +378,34 @@ h3 { margin: 0 0 12px; }
   font-size: 13px;
 }
 .field-grid label.full { grid-column: 1 / -1; }
+.impl-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.impl-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  background: var(--panel-2);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+.impl-tab.active {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+.impl-remove {
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0.7;
+}
+.impl-remove:hover { opacity: 1; color: var(--danger); }
 .file-item {
   display: flex; justify-content: space-between; align-items: center;
   padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px;

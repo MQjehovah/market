@@ -94,8 +94,11 @@ class MCPBridge:
                 )
             tools = (await session.list_tools()).tools
         except Exception as exc:  # noqa: BLE001
-            logger.error(f"MCP [{mcp_name}] 连接失败: {exc}")
-            return {"name": mcp_name, "connected": False, "error": str(exc)[:300]}
+            from app.services.mcp_gateway import format_connect_error
+
+            err = format_connect_error(exc)
+            logger.error(f"MCP [{mcp_name}] 连接失败: {err}")
+            return {"name": mcp_name, "connected": False, "error": err[:800]}
 
         prefix = f"mcp_{_sanitize(mcp_name)}"
         # 临时实现目录的清理由 connect_upstream 自身负责

@@ -62,10 +62,20 @@ app = FastAPI(
     description="AI 能力公共市场平台 API：四大市场（Agent / 工具 / 技能 / MCP）、发布审核流程、版本管理、执行引擎。",
     lifespan=lifespan,
 )
+if (
+    not settings.debug
+    and settings.jwt_secret.startswith("dev-secret")
+):
+    import logging
 
+    logging.getLogger("market").warning(
+        "JWT_SECRET 仍为开发默认值，生产环境请通过环境变量覆盖"
+    )
+
+_cors = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=_cors or ["http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

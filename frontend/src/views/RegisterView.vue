@@ -1,10 +1,11 @@
 <script setup>
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
 import { setAuth } from '../stores/auth'
 
 const router = useRouter()
+const route = useRoute()
 const form = ref({ username: '', email: '', password: '', display_name: '', organization: '' })
 const error = ref('')
 const loading = ref(false)
@@ -15,7 +16,7 @@ async function submit() {
   try {
     const data = await api.post('/auth/register', form.value)
     setAuth(data.access_token, data.user)
-    router.push('/')
+    router.push(route.query.redirect || '/')
   } catch (e) {
     error.value = e.message
   } finally {

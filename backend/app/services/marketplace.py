@@ -238,11 +238,13 @@ async def install_mcp(db: AsyncSession, user: User, cap: Capability, config: dic
     try:
         tools = await probe_tools(cfg, files)
     except Exception as exc:  # noqa: BLE001
+        from app.services.mcp_gateway import format_connect_error
+
         return {
             "mcp": cap.name,
             "version": cap.version,
             "installed": False,
-            "error": str(exc)[:300],
+            "error": format_connect_error(exc)[:800],
             "tools": [],
         }
     return {

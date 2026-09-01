@@ -162,3 +162,25 @@ async def test_new_version_draft_inherits_prompt_for_edit(
     assert body["prompt"] == "你是继承测试人设，负责回归。"
     assert body["dependencies"] == [{"name": dep_tool, "type": "tool", "version": ""}]
     assert body["base_version"] == "1.0.0"
+
+    # 草稿若误存了空 PROMPT.md（且未带 dependencies），编辑态仍回落到已发布内容
+    empty = io.BytesIO()
+    with zipfile.ZipFile(empty, "w") as zf:
+        zf.writestr("PROMPT.md", "")
+        zf.writestr(
+            "agent.json",
+            json.dumps({"name": persona, "version": "1.0.1"}),
+        )
+    draft_id = body["capability"]["id"]
+    r = await client.post(
+        f"/api/publish/capabilities/{draft_id}/artifact",
+        headers=publisher_headers,
+        files={"file": ("empty.zip", empty.getvalue(), "application/zip")},
+    )
+    assert r.status_code == 200, r.text
+
+    r = await client.get(f"/api/agents/{persona}/edit", headers=publisher_headers)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["prompt"] == "你是继承测试人设，负责回归。"
+    assert body["dependencies"] == [{"name": dep_tool, "type": "tool", "version": ""}]

@@ -23,7 +23,7 @@ OPTIONAL_FILES: dict[str, list[str]] = {
     "agent": ["TEAM.md", "tools.json", "knowledge/", "skills/", "examples/", "agents/", "dependencies.json"],
     "tool": ["security.json", "tests/", "examples/", "docs/", "implementation/__init__.py"],
     "skill": ["templates/", "assets/", "dependencies.json", "examples/", "scripts/", "references/"],
-    "mcp": ["docker-compose.yml", "docs/"],
+    "mcp": ["docker-compose.yml", "docs/", "implementation/"],
     "workflow": ["README.md", "examples/"],
     "plugin": ["agents/", "skills/", "tools/", "mcp.json", ".cursor-plugin/", "mcp/"],
 }

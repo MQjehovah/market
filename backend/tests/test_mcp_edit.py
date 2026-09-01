@@ -7,7 +7,7 @@ import zipfile
 import pytest
 
 
-def _mcp_zip(name: str) -> bytes:
+def _mcp_zip(name: str, *, with_server: bool = False) -> bytes:
     files = {
         "mcp.json": json.dumps(
             {"name": name, "description": "测试 MCP", "version": "1.0.0", "category": "MCP"}
@@ -23,6 +23,9 @@ def _mcp_zip(name: str) -> bytes:
         "tools.json": json.dumps([{"name": "ping", "description": "ping"}]).encode("utf-8"),
         "security.json": json.dumps({"allow": ["ping"]}).encode("utf-8"),
     }
+    if with_server:
+        files["implementation/server.py"] = b"print('old-server')\n"
+        files["implementation/helpers.py"] = b"X = 1\n"
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         for fn, data in files.items():
@@ -30,7 +33,9 @@ def _mcp_zip(name: str) -> bytes:
     return buf.getvalue()
 
 
-async def _publish_mcp(client, publisher_headers, admin_headers, name: str) -> str:
+async def _publish_mcp(
+    client, publisher_headers, admin_headers, name: str, *, with_server: bool = False
+) -> str:
     r = await client.post(
         "/api/publish/capabilities",
         headers=publisher_headers,
@@ -49,7 +54,7 @@ async def _publish_mcp(client, publisher_headers, admin_headers, name: str) -> s
     r = await client.post(
         f"/api/publish/capabilities/{cap_id}/artifact",
         headers=publisher_headers,
-        files={"file": ("mcp.zip", _mcp_zip(name), "application/zip")},
+        files={"file": ("mcp.zip", _mcp_zip(name, with_server=with_server), "application/zip")},
     )
     assert r.status_code == 200, r.text
     r = await client.post(f"/api/publish/capabilities/{cap_id}/submit", headers=publisher_headers)
@@ -74,6 +79,8 @@ async def test_mcp_edit_read_and_save_new_version(client, publisher_headers, adm
     assert body["capability"]["version"] == "1.0.0"
     assert body["connection"]["command"] == "npx"
     assert any(f["path"] == "security.json" for f in body["files"])
+    assert body["implementations"]
+    assert body["implementations"][0]["path"] == "implementation/server.py"
 
     r = await client.put(
         f"/api/mcp/{name}/edit",
@@ -119,6 +126,57 @@ async def test_mcp_edit_read_and_save_new_version(client, publisher_headers, adm
     )
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "published"
+
+
+@pytest.mark.asyncio
+async def test_mcp_edit_implementation_py(client, publisher_headers, admin_headers):
+    name = "mcp-with-py"
+    await _publish_mcp(client, publisher_headers, admin_headers, name, with_server=True)
+
+    r = await client.get(f"/api/mcp/{name}/edit", headers=publisher_headers)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    paths = {f["path"] for f in body["implementations"]}
+    assert paths == {"implementation/server.py", "implementation/helpers.py"}
+    assert "old-server" in body["implementations"][0]["content"]
+    assert not any(f["path"].startswith("implementation/") for f in body["files"])
+
+    r = await client.put(
+        f"/api/mcp/{name}/edit",
+        headers=publisher_headers,
+        json={
+            "connection": {
+                "transport": "stdio",
+                "command": "python",
+                "args": ["server.py"],
+            },
+            "implementations": [
+                {"path": "implementation/server.py", "content": "print('new-server')\n"},
+                {"path": "implementation/utils.py", "content": "Y = 2\n"},
+            ],
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["capability"]["version"] == "1.0.1"
+    assert {f["path"] for f in body["implementations"]} == {
+        "implementation/server.py",
+        "implementation/utils.py",
+    }
+    draft_id = body["capability"]["id"]
+
+    r = await client.get(
+        f"/api/publish/capabilities/{draft_id}/artifact/download",
+        headers=publisher_headers,
+    )
+    assert r.status_code == 200, r.text
+    with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+        names = set(zf.namelist())
+        assert "implementation/server.py" in names
+        assert "implementation/utils.py" in names
+        assert "implementation/helpers.py" not in names
+        assert zf.read("implementation/server.py").decode("utf-8") == "print('new-server')\n"
+        assert "security.json" in names
 
 
 @pytest.mark.asyncio

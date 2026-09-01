@@ -127,6 +127,54 @@ async def test_gateway_probe_and_call(client, admin_headers, mcp_script):
     assert "7" in (result.content[0].text if result.content else "")
 
 
+@pytest.mark.asyncio
+async def test_stdio_preserves_implementation_tree(tmp_path):
+    """嵌套 implementation/pkg/server.py 应保留目录，并按相对路径启动。"""
+    nested = tmp_path / "pkg"
+    nested.mkdir()
+    script = nested / "server.py"
+    script.write_text(
+        "from mcp.server.fastmcp import FastMCP\n"
+        "mcp = FastMCP('nested')\n"
+        "@mcp.tool()\n"
+        "def ping() -> str:\n"
+        "    return 'pong'\n"
+        "mcp.run()\n",
+        encoding="utf-8",
+    )
+    files = {"implementation/pkg/server.py": script.read_bytes()}
+    config = {
+        "name": "nested-mcp",
+        "transport": "stdio",
+        "command": "python",
+        "args": ["implementation/pkg/server.py"],
+        "env": {},
+    }
+    async with connect_upstream(config, files) as session:
+        tools = await session.list_tools()
+        assert {t.name for t in tools.tools} == {"ping"}
+
+
+@pytest.mark.asyncio
+async def test_stdio_connect_surfaces_stderr(tmp_path):
+    """子进程 import 失败时，错误信息应带上 stderr，而不是只剩 TaskGroup。"""
+    script = tmp_path / "broken.py"
+    script.write_text("import definitely_missing_module_xyz\n", encoding="utf-8")
+    config = {
+        "name": "broken-mcp",
+        "transport": "stdio",
+        "command": "python",
+        "args": [str(script)],
+        "env": {},
+    }
+    with pytest.raises(RuntimeError) as ei:
+        async with connect_upstream(config) as _session:
+            pass
+    msg = str(ei.value)
+    assert "definitely_missing_module_xyz" in msg
+    assert "TaskGroup" not in msg or "definitely_missing_module_xyz" in msg
+
+
 async def _start_uvicorn():
     config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="error")
     server = uvicorn.Server(config)
