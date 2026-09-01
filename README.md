@@ -1,7 +1,7 @@
 # AI 能力目录（公司内部）
 
 **定位：内部 AI 资产的系统记录与治理控制面**——注册、版本、审核、发现、分发、授权、计量。  
-**不是**对话产品、不是编排 PaaS、不是 IDE。零号员工 / Cursor / Dify 是消费者。
+**不是**对话产品、不是编排 PaaS、不是 IDE。零号员工 / IDE / Dify 等是消费者。
 
 产品叙事对齐 [飞书 aily SkillHub](https://www.feishu.cn/content/article/7646699294103292898)：  
 **员工发现安装**（目录精选/热门 → 加入我的能力 → `cap install`）· **开发者发布**（上传/校验 → 提交审核）· **管理员治理**（人工审核、可见性、上下架）。  
@@ -18,7 +18,7 @@
 | **组件** | 组件 | `tool` | 沙箱函数，主要给能力编排节点 | 仅云端 invoke；**不是** `src/tools` |
 | **助手** `recipe` | 助手 | `agent` | 人设 + 依赖；可选 **TEAM.md 团队流水线** | `cap install` → `config/agents/<name>/` |
 | **助手** | 助手 | `workflow` | **能力编排**（已上架能力的静态 DAG） | 只云端执行，**不进** Agent 目录 |
-| **安装包** `install` | 安装包 | `plugin` | 一键分发技能+连接器（可选助手） | 拆子能力；Cursor 可用 skills+mcp |
+| **安装包** `install` | 安装包 | `plugin` | 一键分发技能+连接器（可选助手） | 拆子能力；IDE 可用 skills+mcp |
 
 逛店顶栏：**推荐 | 技能 | 安装包 | 助手 | 更多**。  
 推荐默认浏览：`skill + plugin + agent`。连接器 / 能力编排 / 编排函数进「更多」。`plugin-component` 默认隐藏。
@@ -65,7 +65,7 @@ Agent 拿到 skill / mcp 的三种来源：
 market/
 ├── backend/                 # FastAPI：Catalog / Governance / Consume
 │   ├── app/services/taxonomy.py   # 货架与语义
-│   ├── marketplace_mcp/           # 市场 MCP 桥（Cursor 等）
+│   ├── marketplace_mcp/           # 市场 MCP 桥（IDE / Agent 客户端）
 │   └── ...
 ├── frontend/                # Vue 3：能力目录 / 我的能力 / 治理后台
 └── consumer/                # cap CLI：sync / install / run
@@ -103,7 +103,7 @@ MCP 注意：市场包必须是 `mcp.json` + `connection.json` + `tools.json` + 
 | 本地运行 | `cap run --mode local` | 市场不执行 |
 | 云端试用 | `POST /api/runtime/*` | 调试，非门户主路径 |
 | A2A | Agent Card + `tasks/send` | 协议层 |
-| 市场 MCP 桥 | `marketplace_*` | Cursor 一个 MCP 进全目录 |
+| 市场 MCP 桥 | `marketplace_*` | 一个 MCP 进全目录 |
 | MCP HTTP 网关 | `/api/mcp-gateway/{name}` | Dify 等；平台能力非商品 kind |
 | 加入我的能力 | `/api/my/capabilities` | 调用授权前提之一 |
 
@@ -119,7 +119,7 @@ MCP 注意：市场包必须是 `mcp.json` + `connection.json` + `tools.json` + 
 
 - 市场：Asset 记录、zip、审核、网关、试用 API  
 - 零号员工：`PROMPT` / `TEAM` / `skills` / `mcp_servers.json` + 宿主 `src/tools` + 通道 `src/plugins`  
-- Cursor：装 Plugin 或连市场 MCP；Rules/Hooks **不进**市场 kind  
+- IDE / 客户端：装 Plugin 或连市场 MCP；Rules/Hooks **不进**市场 kind  
 - **不要**把宿主 BuiltinTool、钉钉/飞书通道插件登记成市场商品  
 
 `cap install` 目标：

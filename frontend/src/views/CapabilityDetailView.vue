@@ -109,6 +109,7 @@ const canReview = computed(() => isAdmin.value && cap.value?.status === 'reviewi
 const isAgent = computed(() => cap.value?.type === 'agent')
 const isPlugin = computed(() => cap.value?.type === 'plugin')
 const isWorkflow = computed(() => cap.value?.type === 'workflow')
+const isMcp = computed(() => cap.value?.type === 'mcp')
 const isPublished = computed(() => ['published', 'deprecated'].includes(cap.value?.status))
 const kindHint = computed(() => (cap.value ? KIND_HINTS[cap.value.type] : null))
 const shelfName = computed(() => (cap.value ? shelfLabel(cap.value.type) : ''))
@@ -172,9 +173,112 @@ const validationReport = computed(() => {
 })
 
 const contentTab = ref('intro')
+const mcpConnection = ref(null)
+const mcpTools = ref([])
+const mcpMetaLoading = ref(false)
+const mcpConfigNotice = ref('')
+
+function normalizeMcpTools(raw) {
+  const rows = Array.isArray(raw?.tools) ? raw.tools : Array.isArray(raw) ? raw : []
+  return rows
+    .filter((t) => t && t.name)
+    .map((t) => ({
+      name: String(t.name),
+      description: String(t.description || '')
+    }))
+}
+
+/** 对外展示：只给 ${VAR} 占位，不回传明文密钥 */
+function publicEnvHint(key, value) {
+  const text = value == null ? '' : String(value).trim()
+  if (/^\$\{[^}]+\}$/.test(text)) return text
+  const safe = String(key || 'VAR').replace(/[^A-Za-z0-9_]/g, '_').replace(/^_+|_+$/g, '') || 'VAR'
+  return `\${${safe}}`
+}
+
+function publicEnvMap(env) {
+  if (!env || typeof env !== 'object') return {}
+  const out = {}
+  for (const [k, v] of Object.entries(env)) out[k] = publicEnvHint(k, v)
+  return out
+}
+
+const mcpSchema = computed(() => {
+  const s = cap.value?.input_schema
+  return s && s.kind === 'mcp' ? s : null
+})
+
+const mcpTransport = computed(() => {
+  return (
+    mcpConnection.value?.transport ||
+    mcpConnection.value?.type ||
+    mcpSchema.value?.transport ||
+    'stdio'
+  )
+})
+
+const mcpToolRows = computed(() => {
+  if (mcpTools.value.length) return mcpTools.value
+  return normalizeMcpTools(mcpSchema.value?.tools)
+})
+
+const mcpEnvRows = computed(() => {
+  const env =
+    (mcpConnection.value?.env && typeof mcpConnection.value.env === 'object'
+      ? mcpConnection.value.env
+      : null) ||
+    (mcpSchema.value?.env && typeof mcpSchema.value.env === 'object' ? mcpSchema.value.env : null) ||
+    {}
+  const keys = Object.keys(env).length
+    ? Object.keys(env)
+    : mcpSchema.value?.required_env || []
+  return keys.map((k) => ({
+    key: k,
+    hint: publicEnvHint(k, env[k]),
+    required: true
+  }))
+})
+
+const mcpClientConfigJson = computed(() => {
+  if (!cap.value || !isMcp.value) return ''
+  const name = cap.value.name
+  const conn = mcpConnection.value || {}
+  const schema = mcpSchema.value || {}
+  const transport = mcpTransport.value
+  const entry = {
+    name,
+    isActive: true
+  }
+  if (transport === 'stdio') {
+    entry.type = 'stdio'
+    entry.command = conn.command || schema.command || 'python'
+    entry.args = Array.isArray(conn.args)
+      ? conn.args
+      : Array.isArray(schema.args)
+        ? schema.args
+        : []
+    const env = publicEnvMap(conn.env || schema.env || {})
+    if (Object.keys(env).length) entry.env = env
+  } else if (transport === 'gateway') {
+    const server = conn.server || schema.server || name
+    entry.type = 'sse'
+    entry.baseUrl = `${window.location.origin}/api/mcp-gateway/${server}/sse`
+  } else if (transport === 'sse') {
+    entry.type = 'sse'
+    entry.baseUrl = conn.url || schema.url || ''
+  } else {
+    entry.type = 'streamableHttp'
+    entry.baseUrl = conn.url || schema.url || ''
+  }
+  return JSON.stringify({ mcpServers: { [name]: entry } }, null, 2)
+})
+
 const contentTabs = computed(() => {
   if (!cap.value) return []
   const tabs = [{ key: 'intro', label: '介绍' }]
+  if (isMcp.value && mcpToolRows.value.length) {
+    tabs.push({ key: 'tools', label: `工具（${mcpToolRows.value.length}）` })
+  }
   if ((cap.value.artifacts || []).length) {
     tabs.push({ key: 'files', label: '文件预览' })
   }
@@ -253,6 +357,47 @@ watch(cap, (c) => {
   editForm.visibility = c.visibility || 'internal'
 })
 
+async function loadMcpPackageMeta() {
+  mcpConnection.value = null
+  mcpTools.value = []
+  if (!cap.value || cap.value.type !== 'mcp' || !(cap.value.artifacts || []).length) return
+  mcpMetaLoading.value = true
+  try {
+    const [connRes, toolsRes] = await Promise.all([
+      api.get(`/capabilities/${cap.value.id}/package/file?path=${encodeURIComponent('connection.json')}`).catch(() => null),
+      api.get(`/capabilities/${cap.value.id}/package/file?path=${encodeURIComponent('tools.json')}`).catch(() => null)
+    ])
+    if (connRes?.content) {
+      try {
+        mcpConnection.value = JSON.parse(connRes.content)
+      } catch {
+        mcpConnection.value = null
+      }
+    }
+    if (toolsRes?.content) {
+      try {
+        mcpTools.value = normalizeMcpTools(JSON.parse(toolsRes.content))
+      } catch {
+        mcpTools.value = []
+      }
+    }
+  } finally {
+    mcpMetaLoading.value = false
+  }
+}
+
+async function copyMcpClientConfig() {
+  const text = mcpClientConfigJson.value
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    mcpConfigNotice.value = '已复制 MCP 客户端配置'
+    setTimeout(() => { mcpConfigNotice.value = '' }, 2000)
+  } catch {
+    mcpConfigNotice.value = text
+  }
+}
+
 async function load() {
   try {
     cap.value = await api.get(`/capabilities/${props.id}`)
@@ -261,6 +406,7 @@ async function load() {
     allowedUsers.value = (cap.value.allowed_users || []).join(', ')
     versions.value = await api.get(`/capabilities/${props.id}/versions`)
     ratings.value = await api.get(`/capabilities/${props.id}/ratings`)
+    await loadMcpPackageMeta()
   } catch (e) {
     error.value = e.message
   }
@@ -625,6 +771,8 @@ onMounted(() => {
           <span v-if="cap.latest" class="badge badge-primary">最新版</span>
           <span class="badge">{{ TYPE_LABELS[cap.type] }}</span>
           <span v-if="shelfName" class="badge badge-primary">{{ shelfName }}</span>
+          <span v-if="isMcp" class="badge">{{ mcpTransport }}</span>
+          <span v-if="isMcp && mcpToolRows.length" class="badge badge-primary">{{ mcpToolRows.length }} 工具</span>
         </div>
         <h1 class="detail-title">
           {{ cap.name }}
@@ -688,6 +836,86 @@ onMounted(() => {
                 <li v-for="(s, i) in scenarioList" :key="'sc-'+i">{{ s }}</li>
               </ul>
             </div>
+
+            <div v-if="isMcp" class="guide-block">
+              <h3 class="guide-title">核心能力 · 工具</h3>
+              <div v-if="mcpMetaLoading" class="muted" style="font-size: 13px">加载 tools.json…</div>
+              <div v-else-if="!mcpToolRows.length" class="muted" style="font-size: 13px">
+                暂无工具清单。可在能力包 <code>tools.json</code> 声明，或连接后由服务端发现。
+              </div>
+              <table v-else class="table">
+                <thead><tr><th>工具名称</th><th>描述</th></tr></thead>
+                <tbody>
+                  <tr v-for="t in mcpToolRows" :key="t.name">
+                    <td><code>{{ t.name }}</code></td>
+                    <td class="muted">{{ t.description || '—' }}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <button
+                v-if="mcpToolRows.length"
+                class="btn btn-sm mt-12"
+                type="button"
+                @click="contentTab = 'tools'"
+              >查看全部工具</button>
+            </div>
+
+            <div v-if="isMcp" class="guide-block">
+              <h3 class="guide-title">配置参数</h3>
+              <table class="table">
+                <thead><tr><th>参数</th><th>必填</th><th>说明 / 默认</th></tr></thead>
+                <tbody>
+                  <tr>
+                    <td><code>transport</code></td>
+                    <td><span class="badge badge-danger">必填</span></td>
+                    <td class="muted">{{ mcpTransport }}（stdio / sse / http / gateway）</td>
+                  </tr>
+                  <tr v-if="mcpTransport === 'stdio'">
+                    <td><code>command</code></td>
+                    <td><span class="badge badge-danger">必填</span></td>
+                    <td class="muted">{{ mcpConnection?.command || mcpSchema?.command || 'python' }}</td>
+                  </tr>
+                  <tr v-if="mcpTransport === 'stdio' && (mcpConnection?.args || mcpSchema?.args || []).length">
+                    <td><code>args</code></td>
+                    <td><span class="muted">可选</span></td>
+                    <td class="muted"><code>{{ (mcpConnection?.args || mcpSchema?.args || []).join(' ') }}</code></td>
+                  </tr>
+                  <tr v-if="['sse', 'http', 'streamable_http'].includes(mcpTransport)">
+                    <td><code>url</code></td>
+                    <td><span class="badge badge-danger">必填</span></td>
+                    <td class="muted">{{ mcpConnection?.url || mcpSchema?.url || '—' }}</td>
+                  </tr>
+                  <tr v-if="mcpTransport === 'gateway'">
+                    <td><code>server</code></td>
+                    <td><span class="badge badge-danger">必填</span></td>
+                    <td class="muted">网关服务名 {{ mcpConnection?.server || mcpSchema?.server || '—' }}</td>
+                  </tr>
+                  <tr v-for="row in mcpEnvRows" :key="row.key">
+                    <td><code>{{ row.key }}</code></td>
+                    <td>
+                      <span v-if="row.required" class="badge badge-danger">必填</span>
+                      <span v-else class="muted">可选</span>
+                    </td>
+                    <td class="muted">
+                      自行配置，占位 <code>{{ row.hint }}</code>（详情不展示明文密钥）
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div v-if="isMcp && mcpClientConfigJson" class="guide-block">
+              <div class="flex-between flex-wrap" style="align-items: center; gap: 8px">
+                <h3 class="guide-title" style="margin: 0">快速配置（MCP 客户端）</h3>
+                <button class="btn btn-sm" type="button" @click="copyMcpClientConfig">复制 JSON</button>
+              </div>
+              <p class="muted" style="font-size: 12px; margin: 8px 0 10px">
+                可粘贴到兼容 MCP 客户端的 <code>mcpServers</code>；生产仍推荐先「加入」再 <code>cap install</code>。
+              </p>
+              <pre class="mcp-config-pre">{{ mcpClientConfigJson }}</pre>
+              <p v-if="mcpConfigNotice" class="muted" style="font-size: 12px; margin: 8px 0 0">{{ mcpConfigNotice }}</p>
+            </div>
+
             <div v-if="exampleList.length" class="guide-block">
               <h3 class="guide-title">示例用法</h3>
               <ul class="guide-list">
@@ -811,6 +1039,25 @@ onMounted(() => {
               </div>
             </div>
           </div>
+        </div>
+
+        <div v-show="contentTab === 'tools'">
+          <section class="panel">
+            <h2 class="detail-section-title">工具清单</h2>
+            <p class="muted" style="font-size: 13px; margin: 0 0 12px">
+              来自能力包 <code>tools.json</code>（声明式清单；真实可用工具以连接后发现为准）。
+            </p>
+            <table v-if="mcpToolRows.length" class="table">
+              <thead><tr><th style="width: 28%">工具名称</th><th>描述</th></tr></thead>
+              <tbody>
+                <tr v-for="t in mcpToolRows" :key="'full-'+t.name">
+                  <td><code>{{ t.name }}</code></td>
+                  <td class="muted">{{ t.description || '—' }}</td>
+                </tr>
+              </tbody>
+            </table>
+            <div v-else class="muted">暂无工具声明</div>
+          </section>
         </div>
 
         <div v-if="contentTab === 'files'">
@@ -1190,6 +1437,9 @@ onMounted(() => {
             <div><dt>可见性</dt><dd>{{ VISIBILITY_LABELS[cap.visibility] }}</dd></div>
             <div v-if="cap.category"><dt>分类</dt><dd>{{ cap.category }}</dd></div>
             <div><dt>作者</dt><dd>{{ cap.author_name || '-' }}</dd></div>
+            <div v-if="isMcp"><dt>传输</dt><dd>{{ mcpTransport }}</dd></div>
+            <div v-if="isMcp && mcpToolRows.length"><dt>工具</dt><dd>{{ mcpToolRows.length }} 个</dd></div>
+            <div v-if="isMcp && mcpEnvRows.length"><dt>环境变量</dt><dd>{{ mcpEnvRows.length }} 项</dd></div>
             <div><dt>更新</dt><dd>{{ formatDate(cap.updated_at) }}</dd></div>
           </dl>
         </div>
@@ -1380,6 +1630,13 @@ onMounted(() => {
 .readme-body :deep(th),
 .readme-body :deep(td) { border: 1px solid var(--border); padding: 8px 10px; text-align: left; }
 .readme-body :deep(th) { background: var(--panel-2); color: var(--muted); font-weight: 500; }
+.mcp-config-pre {
+  margin: 0; padding: 12px 14px; border-radius: 10px;
+  background: var(--panel-2); border: 1px solid var(--border);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px; line-height: 1.55; overflow: auto; max-height: 320px;
+  color: var(--text); white-space: pre;
+}
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field label { font-size: 13px; color: var(--muted); }
 .package-tree { list-style: none; margin: 0; padding: 0; }

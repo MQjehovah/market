@@ -652,7 +652,7 @@ def build_package_template(kind: str, *, name: str = "example") -> bytes:
         files["README.md"] = (
             "# Plugin 模板\n\n"
             "上传后市场会拆出 skills / mcp（及可选 agents）子能力。\n"
-            "Cursor 可只用 skills + mcp；零号员工可用整包。\n"
+            "零号员工可用整包；MCP 客户端可只取 skills + mcp。\n"
         )
 
     buf = io.BytesIO()

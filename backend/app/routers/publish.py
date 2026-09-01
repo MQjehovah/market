@@ -1,6 +1,8 @@
 """发布者：草稿管理 / 提交审核 / 版本管理 / 能力包上传下载。"""
 
 import io
+import json
+import zipfile
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
@@ -202,6 +204,32 @@ async def upload_artifact(cap_id: str, db: DbSession, user: CurrentUser, file: U
         meta = details.get("meta") or {}
         conn = details.get("connection") or {}
         env = conn.get("env") if isinstance(conn.get("env"), dict) else {}
+        tools_summary: list[dict[str, str]] = []
+        try:
+            with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                if "tools.json" in zf.namelist():
+                    raw_tools = json.loads(zf.read("tools.json").decode("utf-8-sig"))
+                    rows = (
+                        raw_tools.get("tools")
+                        if isinstance(raw_tools, dict)
+                        else raw_tools
+                        if isinstance(raw_tools, list)
+                        else []
+                    )
+                    for item in rows or []:
+                        if not isinstance(item, dict) or not item.get("name"):
+                            continue
+                        tools_summary.append(
+                            {
+                                "name": str(item.get("name")),
+                                "description": str(item.get("description") or ""),
+                            }
+                        )
+        except Exception:  # noqa: BLE001
+            tools_summary = []
+        from app.services.mcp_editor import public_env_map
+
+        headers = conn.get("headers") if isinstance(conn.get("headers"), dict) else {}
         cap.input_schema = {
             "kind": "mcp",
             "name": meta.get("name") or cap.name,
@@ -209,9 +237,13 @@ async def upload_artifact(cap_id: str, db: DbSession, user: CurrentUser, file: U
             "description": meta.get("description") or "",
             "transport": conn.get("transport") or conn.get("type") or "stdio",
             "command": conn.get("command") or "",
+            "args": list(conn.get("args") or []) if isinstance(conn.get("args"), list) else [],
             "url": conn.get("url") or "",
             "server": conn.get("server") or "",
+            "header_keys": [str(k) for k in headers.keys()],
             "required_env": [str(k) for k in env.keys()],
+            "env": public_env_map(env),
+            "tools": tools_summary,
         }
     if cap.type == "workflow" and details.get("meta"):
         meta = details["meta"]

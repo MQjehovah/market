@@ -3,7 +3,7 @@
 用法：
     python examples/quick_use.py
 更推荐的方式是 MCP 桥接（见 marketplace_mcp/server.py），
-这样 Codex / Claude Code / Cursor / 自研 Agent 都能原生调用。
+这样各类 MCP 客户端 / 自研 Agent 都能原生调用。
 """
 
 import os

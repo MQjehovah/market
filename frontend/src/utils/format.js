@@ -47,7 +47,7 @@ export const KIND_HINTS = {
     shelf: 'brick',
     what: 'SOP 说明书（SKILL.md）；自己不执行，由 Agent 的 skill 元工具读入上下文',
     where: 'cap install --type skill → config/.../skills/',
-    whoRuns: '零号员工 / Cursor（不单独「干活」）'
+    whoRuns: '零号员工 / IDE（不单独「干活」）'
   },
   mcp: {
     shelf: 'brick',
@@ -119,13 +119,13 @@ export const SCENARIO_HINTS = {
   tool: ['作为能力编排（Workflow）节点执行', '云端沙箱调试函数逻辑', '被 Agent 配方间接引用'],
   agent: ['面向业务场景的助手人设与依赖锁定', '带 TEAM.md 时做多角色协作流水线', '通过 A2A / 市场 MCP 被其他 Agent 调用'],
   workflow: ['把已上架能力串成固定 DAG', '云端批处理 / 自动化流水线', '与 TEAM.md 团队流水线分工并行'],
-  plugin: ['一次分发 skills + mcp（+ 可选 agents）', '给 Cursor / 零号员工做场景安装包', '把相关能力打成可一键安装的合集']
+  plugin: ['一次分发 skills + mcp（+ 可选 agents）', '给零号员工 / IDE 做场景安装包', '把相关能力打成可一键安装的合集']
 }
 
 /** 示例用法（命令或提示级，非对话内唤起） */
 export const EXAMPLE_PROMPTS = {
   skill: ['先加载该 skill，再按 SKILL.md 步骤处理当前任务', 'cap install <name> --type skill 后在 Agent 中激活'],
-  mcp: ['cap install <name> --type mcp 后启用对应 mcp server', '在 Cursor MCP 配置中引用本连接器'],
+  mcp: ['cap install <name> --type mcp 后启用对应 mcp server', '在 MCP 客户端配置中引用本连接器'],
   tool: ['在 Workflow 中添加 tool 节点并选择本能力', 'POST /api/runtime/tools/{name}/invoke 调试'],
   agent: ['cap install <name> 后在零号员工中打开该 Agent', '用自然语言描述任务，由该 Agent 按人设执行'],
   workflow: ['在市场运行本 Workflow 并查看节点日志', 'marketplace_run_workflow 通过 MCP 桥触发'],
@@ -156,7 +156,7 @@ export const CONSUME_WAYS = [
   { id: 'local', label: '本地运行', api: 'cap run --mode local', who: '零号员工（市场不执行）' },
   { id: 'trial', label: '云端试用', api: 'POST /api/runtime/*', who: '开发者调试' },
   { id: 'a2a', label: 'A2A 互调', api: 'Agent Card + tasks/send', who: 'Agent 之间' },
-  { id: 'mcp_bridge', label: '市场 MCP 桥', api: 'marketplace_* tools', who: 'Cursor 等' },
+  { id: 'mcp_bridge', label: '市场 MCP 桥', api: 'marketplace_* tools', who: 'IDE / Agent 客户端' },
   { id: 'gateway', label: 'MCP HTTP 网关', api: '/api/mcp-gateway/{name}', who: 'Dify 等' },
   { id: 'join', label: '加入我的能力', api: 'POST /api/my/capabilities', who: '人（调用授权前提）' }
 ]
@@ -214,7 +214,7 @@ export const PACKAGE_HINTS = {
   skill: 'skill.json + SKILL.md',
   mcp: 'mcp.json + connection.json + tools.json + security.json（可含 implementation/*.py）',
   workflow: 'workflow.json（nodes/edges 引用已上架能力；与 TEAM.md 平行，不进 Agent 目录）',
-  plugin: 'plugin.json 或 .cursor-plugin/plugin.json + skills/ + mcp.json（拆包子能力；浏览默认隐藏子项）'
+  plugin: 'plugin.json（或兼容插件清单）+ skills/ + mcp.json（拆包子能力；浏览默认隐藏子项）'
 }
 
 /** 角色展示 */

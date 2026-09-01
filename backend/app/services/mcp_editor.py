@@ -116,8 +116,51 @@ def _normalize_implementations(
     return out
 
 
+def _tools_summary(tools_json: Any) -> list[dict[str, str]]:
+    rows = (
+        tools_json.get("tools")
+        if isinstance(tools_json, dict)
+        else tools_json
+        if isinstance(tools_json, list)
+        else []
+    )
+    out: list[dict[str, str]] = []
+    for item in rows or []:
+        if not isinstance(item, dict) or not item.get("name"):
+            continue
+        out.append(
+            {
+                "name": str(item.get("name")),
+                "description": str(item.get("description") or ""),
+            }
+        )
+    return out
+
+
+_ENV_PLACEHOLDER_RE = re.compile(r"^\$\{[^}]+\}$")
+
+
+def public_env_hint(key: str, value: Any = None) -> str:
+    """对外展示用：仅保留 ${VAR} 占位，绝不回传明文密钥。"""
+    text = "" if value is None else str(value).strip()
+    if text and _ENV_PLACEHOLDER_RE.match(text):
+        return text
+    safe = re.sub(r"[^A-Za-z0-9_]", "_", str(key or "VAR")).strip("_") or "VAR"
+    return f"${{{safe}}}"
+
+
+def public_env_map(env: dict[str, Any] | None) -> dict[str, str]:
+    if not isinstance(env, dict):
+        return {}
+    return {str(k): public_env_hint(str(k), v) for k, v in env.items()}
+
+
 def _input_schema_from_connection(
-    name: str, version: str, description: str, connection: dict[str, Any]
+    name: str,
+    version: str,
+    description: str,
+    connection: dict[str, Any],
+    tools_json: Any = None,
 ) -> dict[str, Any]:
     env = connection.get("env") if isinstance(connection.get("env"), dict) else {}
     return {
@@ -127,9 +170,23 @@ def _input_schema_from_connection(
         "description": description or "",
         "transport": connection.get("transport") or connection.get("type") or "stdio",
         "command": connection.get("command") or "",
+        "args": list(connection.get("args") or [])
+        if isinstance(connection.get("args"), list)
+        else [],
         "url": connection.get("url") or "",
         "server": connection.get("server") or "",
+        # headers 可能含 token，详情只暴露键名
+        "header_keys": [
+            str(k)
+            for k in (
+                connection.get("headers")
+                if isinstance(connection.get("headers"), dict)
+                else {}
+            ).keys()
+        ],
         "required_env": [str(k) for k in env.keys()],
+        "env": public_env_map(env),
+        "tools": _tools_summary(tools_json),
     }
 
 
@@ -338,21 +395,21 @@ async def save_version(
         tags=list(cap.tags or []),
         implementations=implementations,
     )
-    cap.input_schema = _input_schema_from_connection(
-        cap.name, cap.version, cap.description or "", connection
-    )
     info = get_storage().save(cap.id, f"{cap.name}-{cap.version}.zip", io.BytesIO(pkg))
     db.add(
         CapabilityArtifact(
             capability_id=cap.id, filename=f"{cap.name}-{cap.version}.zip", **info
         )
     )
-    await db.commit()
     tools = data.tools_json
     if tools is None:
         with zipfile.ZipFile(io.BytesIO(pkg)) as zf:
             if "tools.json" in zf.namelist():
                 tools = json.loads(zf.read("tools.json").decode("utf-8"))
+    cap.input_schema = _input_schema_from_connection(
+        cap.name, cap.version, cap.description or "", connection, tools
+    )
+    await db.commit()
     with zipfile.ZipFile(io.BytesIO(pkg)) as zf:
         pkg_files = {
             name: zf.read(name)

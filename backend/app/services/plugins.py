@@ -1,11 +1,11 @@
-"""Plugin 拆包：支持 Agent Plugins / Cursor 插件目录结构。
+"""Plugin 拆包：支持 Agent Plugins / 兼容插件目录结构。
 
 典型目录结构：
-    plugin.json                 # 或 .cursor-plugin/plugin.json
+    plugin.json                 # 或兼容插件清单路径
     agents/<name>/agent.json
     agents/<name>/PROMPT.md
     skills/<name>/SKILL.md      # 可选 skill.json
-    mcp.json                    # Cursor 风格 mcpServers，或顶层 connection 文件
+    mcp.json                    # mcpServers 风格，或顶层 connection 文件
     tools/<name>/...            # 可选的 tool 子目录
 
 上传后自动拆为 agent / skill / mcp / tool 子草稿并挂到 plugin；
@@ -67,7 +67,7 @@ def resolve_plugin_meta(files: dict[str, bytes]) -> tuple[str, dict[str, Any]]:
             return path, meta
     raise HTTPException(
         status.HTTP_422_UNPROCESSABLE_ENTITY,
-        "plugin 包根目录需含 plugin.json 或 .cursor-plugin/plugin.json",
+        "plugin 包根目录需含 plugin.json 或兼容插件清单",
     )
 
 
