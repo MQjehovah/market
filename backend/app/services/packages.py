@@ -535,3 +535,128 @@ def read_package_entry(content: bytes, path: str, *, max_bytes: int = _MAX_PREVI
             result["binary"] = True
             result["content"] = ""
         return result
+
+
+_TEMPLATE_KINDS = frozenset({"skill", "mcp", "tool", "agent", "plugin"})
+
+
+def build_package_template(kind: str, *, name: str = "example") -> bytes:
+    """生成符合 REQUIRED_FILES 的空模板 zip，供小白下载改写。"""
+    if kind not in _TEMPLATE_KINDS:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            f"不支持的模板类型：{kind}（可选 {sorted(_TEMPLATE_KINDS)}）",
+        )
+    safe = NAME_RE.match(name) and name or "example"
+    files: dict[str, str] = {}
+    if kind == "skill":
+        files["skill.json"] = json.dumps(
+            {"name": safe, "description": "示例技能", "version": "0.1.0"},
+            ensure_ascii=False,
+            indent=2,
+        )
+        files["SKILL.md"] = (
+            f"# {safe}\n\n## 何时使用\n\n- …\n\n## 步骤\n\n1. …\n"
+        )
+    elif kind == "mcp":
+        files["mcp.json"] = json.dumps(
+            {"name": safe, "description": "示例连接器", "version": "0.1.0"},
+            ensure_ascii=False,
+            indent=2,
+        )
+        files["connection.json"] = json.dumps(
+            {
+                "name": safe,
+                "transport": "stdio",
+                "command": "python",
+                "args": ["-m", "your_mcp_server"],
+                "env": {"API_KEY": "${API_KEY}"},
+                "enabled": False,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        files["tools.json"] = json.dumps(
+            {"tools": [{"name": "example_tool", "description": "示例工具"}]},
+            ensure_ascii=False,
+            indent=2,
+        )
+        files["security.json"] = json.dumps(
+            {"notes": "密钥请用 ${VAR} 占位，勿硬编码"},
+            ensure_ascii=False,
+            indent=2,
+        )
+        files["README.md"] = (
+            "# MCP 市场包规范\n\n"
+            "必需：`mcp.json`、`connection.json`、`tools.json`、`security.json`。\n\n"
+            "不能直接上传 agent 仓里的 `mcp-server.json` / `mcp-config.json`，"
+            "请按本模板改写。\n"
+        )
+    elif kind == "tool":
+        files["tool.json"] = json.dumps(
+            {"name": safe, "description": "示例沙箱工具", "version": "0.1.0"},
+            ensure_ascii=False,
+            indent=2,
+        )
+        files["schema.json"] = json.dumps(
+            {
+                "type": "object",
+                "properties": {"text": {"type": "string", "description": "输入"}},
+                "required": ["text"],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        files["implementation/tool.py"] = (
+            "def run(params):\n"
+            '    """云端沙箱入口。"""\n'
+            '    return {"ok": True, "echo": params.get("text")}\n'
+        )
+    elif kind == "agent":
+        files["agent.json"] = json.dumps(
+            {"name": safe, "description": "示例 Agent", "version": "0.1.0"},
+            ensure_ascii=False,
+            indent=2,
+        )
+        files["PROMPT.md"] = f"# {safe}\n\n你是一个示例助手。\n"
+        files["dependencies.json"] = "[]\n"
+    elif kind == "plugin":
+        files["plugin.json"] = json.dumps(
+            {
+                "name": safe,
+                "description": "示例安装包：含 skill + mcp",
+                "version": "0.1.0",
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        files["skills/demo-skill/SKILL.md"] = "# demo-skill\n\n示例技能步骤。\n"
+        files["skills/demo-skill/skill.json"] = json.dumps(
+            {"name": "demo-skill", "description": "插件内嵌技能", "version": "0.1.0"},
+            ensure_ascii=False,
+            indent=2,
+        )
+        files["mcp.json"] = json.dumps(
+            {
+                "mcpServers": {
+                    "demo-mcp": {
+                        "command": "python",
+                        "args": ["-m", "your_mcp_server"],
+                        "env": {"API_KEY": "${API_KEY}"},
+                    }
+                }
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        files["README.md"] = (
+            "# Plugin 模板\n\n"
+            "上传后市场会拆出 skills / mcp（及可选 agents）子能力。\n"
+            "Cursor 可只用 skills + mcp；零号员工可用整包。\n"
+        )
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for path, content in files.items():
+            zf.writestr(path, content if isinstance(content, bytes) else content.encode("utf-8"))
+    return buf.getvalue()

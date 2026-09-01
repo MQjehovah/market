@@ -15,13 +15,17 @@ import {
   CONSUME_WAYS,
   REVIEW_CHECKLIST,
   INSTALL_POLICY_LABELS,
+  OWNER_PROGRESS_STEPS,
   shelfLabel,
   formatDate,
   stars,
   formatSize,
   needsZipUpload,
   SCENARIO_HINTS,
-  EXAMPLE_PROMPTS
+  EXAMPLE_PROMPTS,
+  installCommandFor,
+  isLocalInstallKind,
+  ownerProgressIndex
 } from '../utils/format'
 import StatusBadge from '../components/StatusBadge.vue'
 import PackagePreview from '../components/PackagePreview.vue'
@@ -59,7 +63,7 @@ const showPackageUpload = computed(
   () =>
     needsPackage.value &&
     isOwner.value &&
-    ['draft', 'returned', 'reviewing'].includes(cap.value?.status)
+    ['draft', 'returned', 'rejected', 'reviewing'].includes(cap.value?.status)
 )
 
 function resetReviewChecks() {
@@ -84,15 +88,34 @@ const isAdmin = computed(() => authState.user?.role === 'admin')
 const isPublisher = computed(() => ['admin', 'publisher'].includes(authState.user?.role))
 
 const canEdit = computed(() => isOwner.value && ['draft', 'returned', 'rejected'].includes(cap.value?.status))
-const canSubmit = computed(() => isOwner.value && ['draft', 'returned', 'rejected'].includes(cap.value?.status))
+const hasPackage = computed(() => Boolean((cap.value?.artifacts || []).length))
+const canSubmit = computed(() => {
+  if (!isOwner.value || !['draft', 'returned', 'rejected'].includes(cap.value?.status)) return false
+  if (needsZipUpload(cap.value?.type) && !hasPackage.value) return false
+  return true
+})
+const needsPackageFirst = computed(
+  () =>
+    isOwner.value &&
+    ['draft', 'returned', 'rejected'].includes(cap.value?.status) &&
+    needsZipUpload(cap.value?.type) &&
+    !hasPackage.value
+)
 const canDelete = computed(() => isOwner.value && ['draft', 'returned', 'rejected', 'reviewing'].includes(cap.value?.status))
 const canWithdraw = computed(() => isOwner.value && cap.value?.status === 'reviewing')
 const canReview = computed(() => isAdmin.value && cap.value?.status === 'reviewing')
 const isAgent = computed(() => cap.value?.type === 'agent')
 const isPlugin = computed(() => cap.value?.type === 'plugin')
 const isWorkflow = computed(() => cap.value?.type === 'workflow')
+const isPublished = computed(() => ['published', 'deprecated'].includes(cap.value?.status))
 const kindHint = computed(() => (cap.value ? KIND_HINTS[cap.value.type] : null))
 const shelfName = computed(() => (cap.value ? shelfLabel(cap.value.type) : ''))
+const showTemplateDownload = computed(
+  () => showPackageUpload.value && ['skill', 'mcp', 'tool', 'agent', 'plugin'].includes(cap.value?.type)
+)
+const progressIndex = computed(() =>
+  ownerProgressIndex(cap.value, { joined: myIds.value.has(props.id) })
+)
 const showInstallPolicy = computed(() =>
   ['plugin', 'mcp', 'agent'].includes(cap.value?.type) && (isOwner.value || isAdmin.value)
 )
@@ -121,10 +144,9 @@ const packageSizeLabel = computed(() =>
   latestArtifact.value ? formatSize(latestArtifact.value.size_bytes) : ''
 )
 
-const installCommand = computed(() => {
-  if (!cap.value) return ''
-  return `cap install ${cap.value.name}@${cap.value.version}`
-})
+const installCommand = computed(() => (cap.value ? installCommandFor(cap.value) : ''))
+const canLocalInstall = computed(() => (cap.value ? isLocalInstallKind(cap.value.type) : false))
+const consumeActionLabel = computed(() => (canLocalInstall.value ? '安装' : '消费'))
 const scenarioList = computed(() => {
   if (!cap.value) return []
   const schema = cap.value.input_schema || {}
@@ -187,7 +209,7 @@ async function copyInstallCommand() {
   if (!cmd) return
   try {
     await navigator.clipboard.writeText(cmd)
-    copyNotice.value = '已复制安装命令'
+    copyNotice.value = canLocalInstall.value ? '已复制安装命令' : '已复制消费接口'
     setTimeout(() => { copyNotice.value = '' }, 2000)
   } catch {
     copyNotice.value = cmd
@@ -263,11 +285,28 @@ async function toggleMy() {
     } else {
       const r = await api.post('/my/capabilities', { capability_id: props.id })
       myIds.value = new Set([...myIds.value, props.id])
-      myNotice.value = r.message
+      const cmd = installCommand.value
+      myNotice.value = canLocalInstall.value && cmd
+        ? `${r.message} 本地安装：${cmd}`
+        : r.message
     }
   } catch (e) {
     myNotice.value = e.message
   }
+}
+
+function downloadTemplate() {
+  if (!cap.value) return
+  const name = encodeURIComponent(cap.value.name || 'example')
+  window.open(`/api/meta/package-templates/${cap.value.type}?name=${name}`, '_blank')
+}
+
+function focusPackage() {
+  contentTab.value = 'manage'
+  router.replace({ query: { ...route.query, focus: 'package' } })
+  setTimeout(() => {
+    document.getElementById('package-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, 50)
 }
 
 async function saveAccess() {
@@ -561,10 +600,25 @@ onMounted(() => {
     <nav class="detail-crumb muted">
       <router-link to="/">发现</router-link>
       <span>/</span>
-      <router-link v-if="shelfName" :to="{ path: '/', query: { shelf: kindHint?.shelf || '' } }">{{ shelfName }}</router-link>
-      <span v-if="shelfName">/</span>
+      <router-link v-if="cap.type === 'skill'" :to="{ path: '/', query: { type: 'skill' } }">技能</router-link>
+      <router-link v-else-if="cap.type === 'agent'" :to="{ path: '/', query: { type: 'agent' } }">助手</router-link>
+      <router-link v-else-if="cap.type === 'plugin'" :to="{ path: '/', query: { shelf: 'install' } }">安装包</router-link>
+      <router-link v-else-if="shelfName" :to="{ path: '/', query: { type: cap.type } }">{{ TYPE_LABELS[cap.type] || shelfName }}</router-link>
+      <span v-if="cap.type || shelfName">/</span>
       <span>{{ cap.name }}</span>
     </nav>
+
+    <div v-if="isOwner" class="owner-progress panel mb-16">
+      <div
+        v-for="(step, i) in OWNER_PROGRESS_STEPS"
+        :key="step.key"
+        class="owner-progress-step"
+        :class="{ done: i < progressIndex, active: i === progressIndex }"
+      >
+        <span class="n">{{ i + 1 }}</span>
+        <span class="l">{{ step.label }}</span>
+      </div>
+    </div>
 
     <section class="detail-hero panel">
       <div class="detail-hero-icon" aria-hidden="true">{{ typeInitial }}</div>
@@ -958,7 +1012,18 @@ onMounted(() => {
           <div v-if="canSubmit || canWithdraw || canDelete || isAdmin || isPublisher" class="panel">
             <h3>操作</h3>
             <div class="flex flex-wrap" style="gap: 8px">
-              <button v-if="canSubmit" class="btn btn-success" type="button" @click="doAction(`/publish/capabilities/${props.id}/submit`)">提交审核</button>
+              <button
+                v-if="canSubmit"
+                class="btn btn-success"
+                type="button"
+                @click="doAction(`/publish/capabilities/${props.id}/submit`)"
+              >提交审核</button>
+              <button
+                v-else-if="needsPackageFirst"
+                class="btn btn-primary"
+                type="button"
+                @click="focusPackage"
+              >去上传能力包</button>
               <button v-if="canWithdraw" class="btn" type="button" @click="withdrawReview">撤回审核</button>
               <button v-if="canDelete" class="btn btn-danger" type="button" @click="removeCap">删除</button>
               <button v-if="isAdmin && cap.status === 'published'" class="btn btn-danger" type="button" @click="doAction(`/admin/capabilities/${props.id}/deprecate`)">下架（弃用）</button>
@@ -968,7 +1033,7 @@ onMounted(() => {
                 :to="`/workflows/${props.id}/edit`"
                 class="btn"
               >{{ canEdit ? '编辑编排' : '查看编排' }}</router-link>
-              <router-link v-if="cap.type === 'agent' && (isAdmin || isPublisher)" :to="`/agents/${encodeURIComponent(cap.name)}/edit`" class="btn">编辑 Agent</router-link>
+              <router-link v-if="cap.type === 'agent' && (isAdmin || isPublisher)" :to="`/agents/${encodeURIComponent(cap.name)}/edit`" class="btn">编辑助手</router-link>
               <router-link v-if="cap.type === 'skill' && (isOwner || isAdmin || isPublisher)" :to="`/skills/${encodeURIComponent(cap.name)}/edit`" class="btn">编辑技能</router-link>
               <router-link v-if="cap.type === 'tool' && (isOwner || isAdmin || isPublisher)" :to="`/tools/${encodeURIComponent(cap.name)}/edit`" class="btn">编辑工具</router-link>
               <router-link v-if="cap.type === 'mcp' && (isOwner || isAdmin || isPublisher)" :to="`/mcp/${encodeURIComponent(cap.name)}/edit`" class="btn">编辑 MCP</router-link>
@@ -1011,9 +1076,9 @@ onMounted(() => {
             <div class="muted" style="font-size: 13px">对标 Cursor Team Marketplace：可选 / 默认加入 / 强制。</div>
             <div class="flex mt-16" style="gap: 10px; flex-wrap: wrap">
               <select v-model="installPolicy" class="select" style="max-width: 280px">
-                <option value="optional">可选（Default Off）</option>
-                <option value="default_on">默认加入（Default On，可退）</option>
-                <option value="required">强制（Required）</option>
+                <option value="optional">可选</option>
+                <option value="default_on">默认加入（可退）</option>
+                <option value="required">强制</option>
               </select>
               <button class="btn btn-primary" type="button" @click="saveInstallPolicy">保存</button>
             </div>
@@ -1036,12 +1101,24 @@ onMounted(() => {
               checksum {{ (latestArtifact.checksum || '').slice(0, 16) }}…
             </div>
             <div v-if="showPackageUpload" class="mt-16">
-              <label class="btn btn-primary btn-block">
-                {{ uploading ? '上传中…' : '上传能力包 (zip)' }}
-                <input type="file" accept=".zip" style="display: none" @change="uploadArtifact" />
-              </label>
+              <div class="flex" style="gap: 8px; flex-wrap: wrap">
+                <label class="btn btn-primary">
+                  {{ uploading ? '上传中…' : '上传能力包 (zip)' }}
+                  <input type="file" accept=".zip" style="display: none" @change="uploadArtifact" />
+                </label>
+                <button
+                  v-if="showTemplateDownload"
+                  class="btn"
+                  type="button"
+                  @click="downloadTemplate"
+                >下载空模板 zip</button>
+              </div>
               <div class="muted mt-8" style="font-size: 12px">
-                包内需包含 {{ cap.type }} 规范要求文件（如 {{ PACKAGE_HINTS[cap.type] }}）
+                包内需包含 {{ TYPE_LABELS[cap.type] || cap.type }} 规范文件（{{ PACKAGE_HINTS[cap.type] }}）
+              </div>
+              <div v-if="cap.type === 'mcp'" class="alert mt-8" style="font-size: 12px">
+                市场 MCP 需 <code>mcp.json</code>、<code>connection.json</code>、<code>tools.json</code>、<code>security.json</code>。
+                不能直接上传 agent 仓的 <code>mcp-server.json</code>。
               </div>
             </div>
           </div>
@@ -1050,38 +1127,60 @@ onMounted(() => {
 
       <aside class="detail-aside">
         <div class="panel aside-card sticky-card">
-          <h3>安装</h3>
-          <div class="install-box">
-            <code class="install-cmd">{{ installCommand }}</code>
-            <button class="btn btn-sm" type="button" @click="copyInstallCommand">复制</button>
-          </div>
-          <p v-if="copyNotice" class="muted" style="font-size: 12px; margin: 8px 0 0">{{ copyNotice }}</p>
-          <div class="aside-cta mt-16">
-            <button
-              v-if="authState.token && ['published', 'deprecated'].includes(cap.status)"
-              class="btn btn-block btn-lg"
-              :class="myIds.has(cap.id) ? '' : 'btn-primary'"
-              type="button"
-              @click="toggleMy"
-            >
-              {{ myIds.has(cap.id) ? (isPlugin ? '移出插件' : '已在我的能力') : (isPlugin ? '加入我的能力 · 插件' : '加入我的能力') }}
-            </button>
-            <button
-              v-if="['published', 'deprecated'].includes(cap.status)"
-              class="btn btn-block"
-              type="button"
-              @click="downloadArtifact"
-            >下载 zip{{ packageSizeLabel ? ` · ${packageSizeLabel}` : '' }}</button>
-            <button v-if="authState.token && cap.status === 'published'" class="btn btn-block" type="button" @click="subscribe">订阅更新</button>
-            <router-link v-if="authState.token" to="/my" class="btn btn-block">去我的能力试用</router-link>
-            <span v-if="myNotice" class="muted" style="font-size: 12px">{{ myNotice }}</span>
-          </div>
-          <p class="aside-hint muted">
-            「加入我的能力」完成授权收录；生产安装请使用上方命令，或在零号员工 / IDE 中同步。
-          </p>
+          <h3>{{ isPublished ? consumeActionLabel : '下一步' }}</h3>
+          <template v-if="isPublished">
+            <div class="install-box" :class="{ muted: !canLocalInstall }">
+              <code class="install-cmd">{{ installCommand }}</code>
+              <button class="btn btn-sm" type="button" @click="copyInstallCommand">复制</button>
+            </div>
+            <p v-if="copyNotice" class="muted" style="font-size: 12px; margin: 8px 0 0">{{ copyNotice }}</p>
+            <div class="aside-cta mt-16">
+              <button
+                v-if="authState.token"
+                class="btn btn-block btn-lg"
+                :class="myIds.has(cap.id) ? '' : 'btn-primary'"
+                type="button"
+                @click="toggleMy"
+              >
+                {{ myIds.has(cap.id) ? (isPlugin ? '移出安装包' : '已加入') : (isPlugin ? '加入 · 安装包' : '加入') }}
+              </button>
+              <button
+                class="btn btn-block"
+                type="button"
+                @click="downloadArtifact"
+              >下载 zip{{ packageSizeLabel ? ` · ${packageSizeLabel}` : '' }}</button>
+              <button v-if="authState.token && cap.status === 'published'" class="btn btn-block" type="button" @click="subscribe">订阅更新</button>
+              <router-link v-if="authState.token" to="/my" class="btn btn-block">去我的能力（云端调试）</router-link>
+              <span v-if="myNotice" class="muted" style="font-size: 12px; display: block; margin-top: 8px">{{ myNotice }}</span>
+            </div>
+            <p class="aside-hint muted">
+              <template v-if="canLocalInstall">
+                「加入」只完成授权收录（加入≠安装）；生产请复制上方命令在零号员工 / IDE 执行。
+              </template>
+              <template v-else>
+                本类型不支持本地 cap install。「加入」仅授权；请用上方云端接口或在能力编排中引用。
+              </template>
+            </p>
+          </template>
+          <template v-else>
+            <p class="aside-hint muted" style="margin-top: 0">
+              <template v-if="needsPackageFirst">先上传能力包，再提交审核。可先下载空模板。</template>
+              <template v-else-if="cap.status === 'reviewing'">已提交，等待管理员审核。</template>
+              <template v-else>完善内容后提交审核；上架后才能加入与本地安装。</template>
+            </p>
+            <div class="aside-cta mt-16">
+              <button v-if="needsPackageFirst" class="btn btn-block btn-primary btn-lg" type="button" @click="focusPackage">去上传能力包</button>
+              <button
+                v-else-if="canSubmit"
+                class="btn btn-block btn-success btn-lg"
+                type="button"
+                @click="doAction(`/publish/capabilities/${props.id}/submit`)"
+              >提交审核</button>
+            </div>
+          </template>
           <dl class="aside-meta">
             <div><dt>类型</dt><dd>{{ TYPE_LABELS[cap.type] }}</dd></div>
-            <div><dt>货架</dt><dd>{{ shelfName || '—' }}</dd></div>
+            <div><dt>分类</dt><dd>{{ shelfName || '—' }}</dd></div>
             <div><dt>版本</dt><dd>v{{ cap.version }}</dd></div>
             <div><dt>可见性</dt><dd>{{ VISIBILITY_LABELS[cap.visibility] }}</dd></div>
             <div v-if="cap.category"><dt>分类</dt><dd>{{ cap.category }}</dd></div>
@@ -1183,6 +1282,25 @@ onMounted(() => {
 .detail-tab:hover { color: var(--text); background: var(--panel-2); }
 .detail-tab.active { color: var(--primary); background: var(--primary-soft); font-weight: 600; }
 .sticky-card { position: sticky; top: 16px; z-index: 1; }
+.owner-progress {
+  display: flex; flex-wrap: wrap; gap: 6px 4px; align-items: stretch;
+  padding: 12px 14px;
+}
+.owner-progress-step {
+  display: flex; align-items: center; gap: 6px;
+  flex: 1 1 auto; min-width: 88px;
+  font-size: 12px; color: var(--muted);
+}
+.owner-progress-step .n {
+  width: 22px; height: 22px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); background: var(--panel-2);
+  font-weight: 600; font-size: 11px;
+}
+.owner-progress-step.done { color: var(--text); }
+.owner-progress-step.done .n { background: var(--primary-soft); border-color: var(--primary); color: var(--primary); }
+.owner-progress-step.active { color: var(--primary); font-weight: 600; }
+.owner-progress-step.active .n { background: var(--primary); border-color: var(--primary); color: #fff; }
 .aside-cta { display: flex; flex-direction: column; gap: 8px; }
 .btn-block { width: 100%; justify-content: center; }
 .btn-lg { padding: 11px 20px; font-size: 15px; font-weight: 600; }

@@ -1,5 +1,8 @@
 """货架 / taxonomy / 默认浏览（控制面 IA）。"""
 
+import io
+import zipfile
+
 import pytest
 
 
@@ -10,17 +13,37 @@ async def test_taxonomy_endpoint(client):
     body = r.json()
     assert "shelves" in body
     assert set(body["shelves"].keys()) == {"brick", "recipe", "install"}
-    assert body["default_browse_kinds"] == ["plugin", "agent", "workflow"]
+    assert body["default_browse_kinds"] == ["skill", "plugin", "agent"]
+    assert body["more_browse_kinds"] == ["mcp", "workflow", "tool"]
     assert "orchestration" in body
     assert body["orchestration"]["capability_dag"]["lands_in_agent_config"] is False
     assert "review_checklist" in body
     assert body["domain"]["note"]
+    assert set(body["local_install_kinds"]) == {"agent", "skill", "mcp", "plugin"}
+    assert len(body["ref_ways"]) == 3
+    assert body["kinds"]["tool"]["local_install"] == "no"
+    assert body["kinds"]["workflow"]["local_install"] == "no"
+    assert body["shelves"]["brick"]["label"] == "组件"
+    assert body["shelves"]["recipe"]["label"] == "助手"
+    assert body["shelves"]["install"]["label"] == "安装包"
 
 
 @pytest.mark.asyncio
-async def test_browse_default_excludes_bricks(client, publisher_headers, admin_headers):
-    """默认浏览应为安装包+配方，不含积木 skill。"""
-    # 发布一个 skill 与一个 agent
+async def test_package_template_download(client):
+    for kind in ("skill", "mcp", "tool", "agent", "plugin"):
+        r = await client.get(f"/api/meta/package-templates/{kind}?name=demo")
+        assert r.status_code == 200, kind
+        assert "zip" in (r.headers.get("content-type") or "")
+        with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+            names = zf.namelist()
+            assert names, kind
+    r_bad = await client.get("/api/meta/package-templates/workflow")
+    assert r_bad.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_browse_default_includes_skill_excludes_more(client, publisher_headers, admin_headers):
+    """默认浏览含 skill；mcp/workflow/tool 需显式筛选。"""
     for typ, name in (("skill", "tax-skill-demo"), ("agent", "tax-agent-demo")):
         r = await client.post(
             "/api/publish/capabilities",
@@ -34,16 +57,9 @@ async def test_browse_default_excludes_bricks(client, publisher_headers, admin_h
             },
         )
         assert r.status_code == 201, r.text
-        cap_id = r.json()["id"]
-        # skill/agent 需要包才能审核通过；此处直接用 admin 改状态不现实。
-        # 仅测浏览过滤：把 status 设为 published 需走审核。用 seed 已有 published 更稳。
-        _ = cap_id
 
     r = await client.get("/api/capabilities")
     assert r.status_code == 200
-    kinds = {c["type"] for c in r.json()["items"]}
-    # 默认不应出现 skill/mcp/tool（除非种子数据没有这些）
-    assert "skill" not in kinds or True  # 种子可能无 skill；下面显式测 shelf
 
     r_brick = await client.get("/api/capabilities?shelf=brick&include_bricks=true")
     assert r_brick.status_code == 200

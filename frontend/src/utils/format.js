@@ -1,42 +1,43 @@
-/** 能力 kind 显示名（type 字段 = kind，不是六个并列商店） */
+/** 能力类型显示名（type 字段 = kind） */
 export const TYPE_LABELS = {
-  agent: 'Agent',
-  tool: '工具',
+  agent: '助手',
+  tool: '编排函数',
   skill: '技能',
-  mcp: 'MCP',
-  workflow: 'Workflow（能力编排）',
-  plugin: 'Plugin'
+  mcp: '连接器',
+  workflow: '能力编排',
+  plugin: '安装包'
 }
 
-/** 三货架：按使用意图，不按技术名词平铺 */
+/** 三货架：API key 不变，中文对用户可读 */
 export const SHELVES = {
   brick: {
     key: 'brick',
-    label: '积木',
-    short: '可复用积木',
-    description: 'Skill / MCP（及供编排节点用的 Tool）。给配方与安装包引用，不是日常「加入」主路径。',
+    label: '组件',
+    short: '组件',
+    description: '技能 / 连接器 / 编排函数。发布与高级筛选用；逛店请用「技能」或「更多」。',
     kinds: ['skill', 'mcp', 'tool']
   },
   recipe: {
     key: 'recipe',
-    label: '配方',
-    short: '配方',
-    description:
-      'Agent（可含 TEAM.md 团队流水线）与能力编排 Workflow（能力 DAG）平行；禁止互相转换节点模型。',
+    label: '助手',
+    short: '助手',
+    description: '助手（Agent，可含 TEAM.md）与能力编排平行；禁止互相转换节点模型。',
     kinds: ['agent', 'workflow']
   },
   install: {
     key: 'install',
     label: '安装包',
     short: '安装包',
-    description: 'Plugin：Agent Plugins 一键分发（skills + mcp + 可选 agents）。不是钉钉/飞书通道插件。',
+    description: '一次分发技能 + 连接器（可选助手）。装到零号员工 / IDE，不是钉钉/飞书通道插件。',
     kinds: ['plugin']
   }
 }
 
-/** 浏览默认货架：安装包 + 配方 */
-export const DEFAULT_BROWSE_KINDS = ['plugin', 'agent', 'workflow']
+/** 推荐默认：技能 + 安装包 + 助手 */
+export const DEFAULT_BROWSE_KINDS = ['skill', 'plugin', 'agent']
 
+/** 「更多」里的高级类型 */
+export const MORE_BROWSE_KINDS = ['mcp', 'workflow', 'tool']
 export const KIND_SHELF = Object.fromEntries(
   Object.values(SHELVES).flatMap((s) => s.kinds.map((k) => [k, s.key]))
 )
@@ -44,40 +45,70 @@ export const KIND_SHELF = Object.fromEntries(
 export const KIND_HINTS = {
   skill: {
     shelf: 'brick',
-    what: '可复用 SOP（SKILL.md），按需注入说明书',
-    where: '装到 config/.../skills/；由 Agent 的 skill 工具激活',
+    what: 'SOP 说明书（SKILL.md）；自己不执行，由 Agent 的 skill 元工具读入上下文',
+    where: 'cap install --type skill → config/.../skills/',
     whoRuns: '零号员工 / Cursor（不单独「干活」）'
   },
   mcp: {
     shelf: 'brick',
-    what: '外部/跨语言连接器；真正可调的是发现出的 tools',
-    where: '合并进 mcp_servers.json（常先 enabled:false）',
+    what: '连接器；真正可调的是发现出的 tools（≠ 市场 tool kind，≠ 宿主 src/tools）',
+    where: 'cap install --type mcp → 合并进 mcp_servers.json（常先 enabled:false）',
     whoRuns: '零号员工 MCPManager / IDE / 市场网关'
   },
   tool: {
     shelf: 'brick',
-    what: '沙箱函数（JSON Schema + tool.py），主要给能力编排节点引用',
-    where: '仅云端 invoke；不写入 src/tools，不是宿主 BuiltinTool',
+    what: '云端沙箱函数（tool.py）；主要给 Workflow 节点；无本地安装',
+    where: '仅 POST /api/runtime/tools/{name}/invoke；不写 src/tools',
     whoRuns: '市场 runtime 沙箱 / Workflow 节点'
   },
   agent: {
     shelf: 'recipe',
-    what: '人设 + 依赖锁定；有 TEAM.md 时为团队流水线（角色协作）',
+    what: '人设 + 依赖容器；日常靠 skill 说明书 + MCP 发现的 tools',
     where: 'cap install → config/agents/<name>/',
     whoRuns: '零号员工 Agent.initialize / A2A；试用走云端 runtime'
   },
   workflow: {
     shelf: 'recipe',
-    what: '已上架能力的静态 DAG（tool|agent|skill|mcp），与 TEAM.md 平行',
+    what: '已上架能力的静态 DAG（tool|agent|skill|mcp），与 TEAM.md 平行；无本地安装',
     where: '不进 Agent 目录；只云端执行',
     whoRuns: '市场 workflows 引擎 / MCP 桥 marketplace_run_workflow'
   },
   plugin: {
     shelf: 'install',
-    what: '一键分发包（plugin.json + skills/mcp/可选 agents）',
-    where: '拆子能力；Cursor 可只用 skills+mcp',
+    what: '分发袋（skills + mcp + 可选 agents/tools）；上传后拆子能力',
+    where: 'cap install --type plugin → config/plugins/<name>/',
     whoRuns: '安装后由 IDE 或零号员工执行子组件'
   }
+}
+
+/** 可本地 cap install 的 kind（与 taxonomy.local_install_kinds 对齐） */
+export const LOCAL_INSTALL_KINDS = ['agent', 'skill', 'mcp', 'plugin']
+
+/** 按 kind 生成真实消费命令；workflow/tool 不假装 cap install */
+export function installCommandFor(cap) {
+  if (!cap?.name) return ''
+  const ver = cap.version ? `@${cap.version}` : ''
+  const name = `${cap.name}${ver}`
+  switch (cap.type) {
+    case 'agent':
+      return `cap install ${name}`
+    case 'skill':
+      return `cap install ${name} --type skill`
+    case 'mcp':
+      return `cap install ${name} --type mcp`
+    case 'plugin':
+      return `cap install ${name} --type plugin`
+    case 'tool':
+      return `POST /api/runtime/tools/${cap.name}/invoke`
+    case 'workflow':
+      return `POST /api/runtime/workflows/${cap.name}/executions`
+    default:
+      return ''
+  }
+}
+
+export function isLocalInstallKind(kind) {
+  return LOCAL_INSTALL_KINDS.includes(kind)
 }
 
 /** 双编排用词：避免都叫「工作流」 */
@@ -93,12 +124,12 @@ export const SCENARIO_HINTS = {
 
 /** 示例用法（命令或提示级，非对话内唤起） */
 export const EXAMPLE_PROMPTS = {
-  skill: ['先加载该 skill，再按 SKILL.md 步骤处理当前任务', 'cap install <name> 后在 Agent 中激活'],
-  mcp: ['cap install <name> 后启用对应 mcp server', '在 Cursor MCP 配置中引用本连接器'],
+  skill: ['先加载该 skill，再按 SKILL.md 步骤处理当前任务', 'cap install <name> --type skill 后在 Agent 中激活'],
+  mcp: ['cap install <name> --type mcp 后启用对应 mcp server', '在 Cursor MCP 配置中引用本连接器'],
   tool: ['在 Workflow 中添加 tool 节点并选择本能力', 'POST /api/runtime/tools/{name}/invoke 调试'],
   agent: ['cap install <name> 后在零号员工中打开该 Agent', '用自然语言描述任务，由该 Agent 按人设执行'],
   workflow: ['在市场运行本 Workflow 并查看节点日志', 'marketplace_run_workflow 通过 MCP 桥触发'],
-  plugin: ['加入我的能力后同步到本地引擎', 'cap install <plugin> 拆出子能力']
+  plugin: ['加入我的能力后同步到本地引擎', 'cap install <plugin> --type plugin 拆出子能力']
 }
 
 
@@ -142,9 +173,9 @@ export const REVIEW_CHECKLIST = [
 ]
 
 export const INSTALL_POLICY_LABELS = {
-  optional: '可选（Default Off）',
-  default_on: '默认加入（Default On，可退）',
-  required: '强制（Required，治理用）'
+  optional: '可选',
+  default_on: '默认加入（可退）',
+  required: '强制'
 }
 
 export const STATUS_LABELS = {
@@ -199,27 +230,60 @@ export const ROLE_LABELS = {
   user: 'user'
 }
 
-/** 发布三意图（P1 向导） */
+/** 发布三意图：小白默认 Path B = 发安装包优先 */
 export const PUBLISH_INTENTS = [
-  {
-    key: 'brick',
-    label: '发积木',
-    blurb: 'Skill / MCP（及编排用 Tool）。装到配置目录，给配方引用。',
-    defaultType: 'skill'
-  },
-  {
-    key: 'recipe',
-    label: '发配方',
-    blurb: 'Agent（可含 TEAM.md）或 Workflow（能力 DAG）。场景级用法。',
-    defaultType: 'agent'
-  },
   {
     key: 'install',
     label: '发安装包',
-    blurb: 'Plugin：一次带走 skills + mcp + 可选 agents。',
+    blurb: '推荐：一次装齐技能+连接器（可选助手）。审核通过后 cap install 即可。',
     defaultType: 'plugin'
+  },
+  {
+    key: 'recipe',
+    label: '发助手',
+    blurb: '助手（可含 TEAM.md）或能力编排。依赖的技能/连接器需先上架，或改发安装包内嵌。',
+    defaultType: 'agent'
+  },
+  {
+    key: 'brick',
+    label: '发组件',
+    blurb: '技能 / 连接器 / 编排函数。可复用零件，给助手与安装包引用。',
+    defaultType: 'skill'
   }
 ]
+
+/** 所有者发布进度（详情 / 我的） */
+export const OWNER_PROGRESS_STEPS = [
+  { key: 'created', label: '创建' },
+  { key: 'package', label: '上传包' },
+  { key: 'submit', label: '提交审核' },
+  { key: 'reviewing', label: '审核中' },
+  { key: 'published', label: '已上架' },
+  { key: 'joined', label: '已加入' },
+  { key: 'install', label: '本地安装' }
+]
+
+/**
+ * 计算所有者进度：返回当前步 index（0-based）与是否可本地安装展示。
+ * joined = 已在「我的能力」；install 步与 joined 同亮（提示复制命令）。
+ */
+export function ownerProgressIndex(cap, { joined = false } = {}) {
+  if (!cap) return 0
+  const hasArtifact = Boolean(
+    cap.has_artifact || (cap.artifacts && cap.artifacts.length) || cap.artifact_id
+  )
+  const status = cap.status
+  if (['published', 'deprecated'].includes(status)) {
+    if (joined) return 6
+    return 4
+  }
+  if (status === 'reviewing') return 3
+  if (['draft', 'returned', 'rejected'].includes(status)) {
+    if (!needsZipUpload(cap.type) || hasArtifact) return 2
+    return 1
+  }
+  return 0
+}
 
 /** 非 zip 主路径的 kind（内容在编辑器/定义里） */
 export const ZIP_OPTIONAL_KINDS = ['workflow']
@@ -252,13 +316,16 @@ export function roleLabel(role) {
 
 /** 我的能力待办分类 */
 export function ownedTodoBucket(cap) {
-  if (!cap?.owned && cap?.owned !== undefined) {
-    // some payloads use owned; tolerate missing
+  if (cap?.has_draft) {
+    if (needsZipUpload(cap.type) && !cap.draft_has_artifact) return 'missing_package'
+    return 'ready_to_submit'
   }
-  const status = cap.status
-  const hasArtifact = Boolean(cap.has_artifact || (cap.artifacts && cap.artifacts.length) || cap.artifact_id)
+  const status = cap?.status
+  const hasArtifact = Boolean(
+    cap?.has_artifact || (cap?.artifacts && cap.artifacts.length) || cap?.artifact_id
+  )
   if (['draft', 'returned', 'rejected'].includes(status)) {
-    if (needsZipUpload(cap.type) && !hasArtifact && !cap.has_draft) return 'missing_package'
+    if (needsZipUpload(cap.type) && !hasArtifact) return 'missing_package'
     return 'ready_to_submit'
   }
   if (status === 'reviewing') return 'in_review'

@@ -1,5 +1,6 @@
 """门户：浏览 / 搜索 / 详情 / 评分 / 订阅 / 通知 / 版本列表。"""
 
+import io
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -59,6 +60,22 @@ def _visibility_where(user: User | None):
 async def taxonomy():
     """货架 / kind / 双编排 / 消费矩阵 / 审核清单（控制面语义）。"""
     return taxonomy_payload()
+
+
+@router.get("/meta/package-templates/{kind}")
+async def package_template(kind: str, name: str = Query("example", max_length=80)):
+    """下载空能力包模板 zip（skill/mcp/tool/agent/plugin）。"""
+    from app.services.packages import build_package_template
+
+    content = build_package_template(kind, name=name or "example")
+    filename = f"{kind}-template.zip"
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"
+        },
+    )
 
 
 @router.get("/capabilities", response_model=CapabilityPage)

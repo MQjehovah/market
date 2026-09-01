@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
 import { authState, clearAuth } from '../stores/auth'
+import { adminState } from '../stores/admin'
 import { roleLabel } from '../utils/format'
 
 const router = useRouter()
@@ -31,8 +32,11 @@ const isPublishActive = computed(
   () => route.path === '/my' && String(route.query.publish || '') === '1'
 )
 const isMyAssetsActive = computed(() => isMyArea.value && !isPublishActive.value)
-const isAdminActive = computed(() => route.path === '/admin')
+const adminSection = computed(() =>
+  route.path.startsWith('/admin/') ? String(route.params.section || '') : ''
+)
 const isProfileActive = computed(() => route.path === '/profile')
+const reviewingCount = computed(() => adminState.reviewingCount)
 
 function goDiscover() {
   router.push({ path: '/' })
@@ -58,6 +62,19 @@ async function loadNotifications() {
   }
 }
 
+async function loadAdminBadge() {
+  if (!isAdmin.value) {
+    adminState.reviewingCount = 0
+    return
+  }
+  try {
+    const s = await api.get('/admin/stats')
+    adminState.reviewingCount = s.reviewing_count || 0
+  } catch {
+    adminState.reviewingCount = 0
+  }
+}
+
 async function readAll() {
   await api.post('/notifications/read-all')
   await loadNotifications()
@@ -68,8 +85,15 @@ function logout() {
   router.push('/')
 }
 
-onMounted(loadNotifications)
-watch(() => authState.token, loadNotifications)
+onMounted(() => {
+  loadNotifications()
+  loadAdminBadge()
+})
+watch(() => authState.token, () => {
+  loadNotifications()
+  loadAdminBadge()
+})
+watch(isAdmin, loadAdminBadge)
 </script>
 
 <template>
@@ -124,13 +148,33 @@ watch(() => authState.token, loadNotifications)
       <div v-if="isAdmin" class="nav-group">
         <div class="nav-label">治理</div>
         <router-link
-          to="/admin"
+          to="/admin/review"
           class="nav-item"
-          active-class="nav-rr"
-          exact-active-class="nav-rr"
-          :class="{ active: isAdminActive }"
+          :class="{ active: adminSection === 'review' }"
         >
-          审核台
+          审核
+          <span v-if="reviewingCount" class="nav-count">{{ reviewingCount }}</span>
+        </router-link>
+        <router-link
+          to="/admin/listed"
+          class="nav-item"
+          :class="{ active: adminSection === 'listed' }"
+        >
+          上架治理
+        </router-link>
+        <router-link
+          to="/admin/users"
+          class="nav-item"
+          :class="{ active: adminSection === 'users' }"
+        >
+          用户
+        </router-link>
+        <router-link
+          to="/admin/gateway"
+          class="nav-item"
+          :class="{ active: adminSection === 'gateway' }"
+        >
+          MCP 网关
         </router-link>
       </div>
     </div>
@@ -152,10 +196,47 @@ watch(() => authState.token, loadNotifications)
           <div class="user-role">{{ roleText }}</div>
         </div>
         <div class="user-actions" @click.stop>
-          <button type="button" class="icon-btn" title="通知" @click="showNotify = !showNotify">🔔</button>
-          <button type="button" class="icon-btn" title="退出" @click="logout">⎋</button>
+          <button type="button" class="icon-btn" title="通知" aria-label="通知" @click="showNotify = !showNotify">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+              <path
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.75"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M6.5 9.5a5.5 5.5 0 0 1 11 0c0 4 1.5 5.5 1.5 5.5H5s1.5-1.5 1.5-5.5"
+              />
+              <path
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.75"
+                stroke-linecap="round"
+                d="M10 18.5a2 2 0 0 0 4 0"
+              />
+            </svg>
+            <span v-if="unreadCount" class="notify-dot">{{ unreadCount > 9 ? '9+' : unreadCount }}</span>
+          </button>
+          <button type="button" class="icon-btn" title="退出登录" aria-label="退出登录" @click="logout">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+              <path
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.75"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M10 4H6.5A2.5 2.5 0 0 0 4 6.5v11A2.5 2.5 0 0 0 6.5 20H10"
+              />
+              <path
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.75"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M14 8l4 4-4 4M18 12H9"
+              />
+            </svg>
+          </button>
         </div>
-        <span v-if="unreadCount" class="notify-dot">{{ unreadCount }}</span>
       </div>
       <div v-else class="guest-actions">
         <router-link to="/login" class="btn btn-primary btn-block btn-sm">登录</router-link>
@@ -267,6 +348,19 @@ watch(() => authState.token, loadNotifications)
   border-radius: 0 3px 3px 0;
   background: var(--primary);
 }
+.nav-count {
+  margin-left: auto;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
 
 .side-bottom {
   position: relative;
@@ -302,31 +396,39 @@ watch(() => authState.token, loadNotifications)
 }
 .user-name { font-size: 13px; font-weight: 600; line-height: 1.2; }
 .user-role { font-size: 11px; color: var(--muted); }
-.user-actions { display: flex; gap: 2px; }
+.user-actions { display: flex; gap: 2px; flex-shrink: 0; }
 .icon-btn {
+  position: relative;
   border: none;
   background: transparent;
   cursor: pointer;
   color: var(--muted);
-  font-size: 14px;
-  padding: 4px 6px;
+  padding: 6px;
   border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
 }
-.icon-btn:hover { background: #fff; color: var(--text); }
+.icon-btn svg { display: block; }
+.icon-btn:hover { background: #fff; color: var(--primary); }
 .notify-dot {
   position: absolute;
-  top: 4px;
-  right: 4px;
-  min-width: 16px;
-  height: 16px;
-  border-radius: 8px;
+  top: 0;
+  right: 0;
+  min-width: 14px;
+  height: 14px;
+  border-radius: 7px;
   background: var(--danger);
   color: #fff;
-  font-size: 10px;
+  font-size: 9px;
+  font-weight: 700;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 0 3px;
+  line-height: 1;
+  pointer-events: none;
 }
 .notify-panel {
   position: absolute;

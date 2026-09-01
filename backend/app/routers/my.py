@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import and_, select
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 
 from app.auth import CurrentUser, DbSession
 from app.models import Capability, UserCapability
@@ -18,6 +18,7 @@ def _out(cap: Capability, *, added: bool, owned: bool) -> dict:
     ).model_dump()
     data["added"] = added
     data["owned"] = owned
+    data["has_artifact"] = bool(getattr(cap, "artifacts", None))
     return data
 
 
@@ -35,14 +36,20 @@ async def my_capabilities(
     rows = (
         await db.scalars(
             select(UserCapability)
-            .options(joinedload(UserCapability.capability).joinedload(Capability.author))
+            .options(
+                joinedload(UserCapability.capability).joinedload(Capability.author),
+                joinedload(UserCapability.capability).selectinload(Capability.artifacts),
+            )
             .where(UserCapability.user_id == user.id)
         )
     ).all()
     owned = (
         await db.scalars(
             select(Capability)
-            .options(joinedload(Capability.author))
+            .options(
+                joinedload(Capability.author),
+                selectinload(Capability.artifacts),
+            )
             .where(Capability.author_id == user.id)
         )
     ).all()
@@ -89,8 +96,10 @@ async def my_capabilities(
             item["draft_id"] = draft.id
             item["draft_version"] = draft.version
             item["draft_status"] = draft.status
+            item["draft_has_artifact"] = bool(getattr(draft, "artifacts", None))
         else:
             item["has_draft"] = False
+            item["draft_has_artifact"] = False
 
     result = list(items.values())
     if not include_components:

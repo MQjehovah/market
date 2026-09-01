@@ -66,7 +66,7 @@ const fromPlugin = computed(() => (props.cap.tags || []).includes('plugin-compon
           class="btn btn-sm btn-primary"
           @click="emit('add', cap)"
         >
-          加入我的能力
+          加入
         </button>
       </div>
     </div>

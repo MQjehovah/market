@@ -14,6 +14,32 @@ import ProfileView from '../views/ProfileView.vue'
 import AdminView from '../views/AdminView.vue'
 import { authState } from '../stores/auth'
 
+const ADMIN_TITLES = {
+  review: '审核',
+  listed: '上架治理',
+  users: '用户管理',
+  gateway: 'MCP 网关'
+}
+
+function adminLanding(to) {
+  const map = {
+    desk: 'review',
+    review: 'review',
+    caps: 'listed',
+    listed: 'listed',
+    users: 'users',
+    gateway: 'gateway',
+    stats: 'review',
+    debug: 'review',
+    roles: 'users'
+  }
+  const section = map[String(to.query.tab || '')] || 'review'
+  const query = { ...to.query }
+  delete query.tab
+  if (String(to.query.tab) === 'debug') query.trial = '1'
+  return { path: `/admin/${section}`, query }
+}
+
 const router = createRouter({
   history: createWebHistory(),
   routes: [
@@ -29,7 +55,12 @@ const router = createRouter({
     { path: '/capabilities/:id', component: CapabilityDetailView, props: true, meta: { title: '能力详情' } },
     { path: '/my', component: MyCapabilitiesView, meta: { title: '我的能力', auth: true } },
     { path: '/profile', component: ProfileView, meta: { title: '个人中心', auth: true } },
-    { path: '/admin', component: AdminView, meta: { title: '审核台', auth: true, admin: true } }
+    { path: '/admin', redirect: adminLanding, meta: { title: '治理后台', auth: true, admin: true } },
+    {
+      path: '/admin/:section',
+      component: AdminView,
+      meta: { title: '治理后台', auth: true, admin: true }
+    }
   ]
 })
 
@@ -43,7 +74,10 @@ router.beforeEach((to) => {
   if (to.meta.admin && authState.user && authState.user.role !== 'admin') {
     return '/'
   }
-  document.title = `${to.meta.title || '能力目录'} · AI 能力目录`
+  const title = to.path.startsWith('/admin')
+    ? ADMIN_TITLES[to.params.section] || '治理后台'
+    : to.meta.title || '能力目录'
+  document.title = `${title} · AI 能力目录`
 })
 
 export default router

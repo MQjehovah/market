@@ -1,8 +1,10 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { marked } from 'marked'
 import { api } from '../api'
 import { authState } from '../stores/auth'
+import { adminState } from '../stores/admin'
 import {
   TYPE_LABELS,
   REVIEW_CHECKLIST,
@@ -14,12 +16,38 @@ import StatusBadge from '../components/StatusBadge.vue'
 import DebugCapabilityModal from '../components/DebugCapabilityModal.vue'
 import PackagePreview from '../components/PackagePreview.vue'
 
-const rawTab = new URLSearchParams(location.search).get('tab') || 'desk'
-const tab = ref(['review', 'caps'].includes(rawTab) ? 'desk' : rawTab)
-/** desk 内页签：audit | listed */
-const deskTab = ref(rawTab === 'caps' ? 'listed' : 'audit')
-/** 审核状态筛选：pending | passed | rejected */
+const route = useRoute()
+const router = useRouter()
+
+const SECTIONS = ['review', 'listed', 'users', 'gateway']
+const SECTION_META = {
+  review: { label: '审核', hint: '处理待审、拒绝与打回；通过后到「上架治理」做下架归档' },
+  listed: { label: '上架治理', hint: '已发布与已下架资产的下架、归档' },
+  users: { label: '用户管理', hint: '账号、角色与启停；权限边界见下方角色说明' },
+  gateway: { label: 'MCP 网关', hint: '把 stdio / HTTP / SSE 统一暴露为 HTTP 端点，供 Dify / Agent 接入' }
+}
+
+const section = computed(() => {
+  const s = String(route.params.section || '')
+  return SECTIONS.includes(s) ? s : 'review'
+})
+const sectionTitle = computed(() => SECTION_META[section.value].label)
+const sectionHint = computed(() => SECTION_META[section.value].hint)
+
+watch(
+  () => route.params.section,
+  (s) => {
+    if (!SECTIONS.includes(String(s))) router.replace('/admin/review')
+  },
+  { immediate: true }
+)
+
+/** 审核队列：pending | rejected | returned */
 const auditFilter = ref('pending')
+const auditTypeFilter = ref('')
+const listedFilter = ref('published')
+const showTrial = ref(false)
+const showStatsDetail = ref(false)
 const selectedId = ref('')
 const detailTab = ref('intro')
 const reviewQueue = ref([])
@@ -89,30 +117,27 @@ const gatewayForm = ref({
 })
 const gatewayTest = ref({})
 
-const sections = [
-  { key: 'desk', label: '审核台' },
-  { key: 'stats', label: '统计看板' },
-  { key: 'users', label: '用户管理' },
-  { key: 'gateway', label: 'MCP 网关' },
-  { key: 'debug', label: '云端试用' },
-  { key: 'roles', label: '权限说明' }
-]
-
-const sectionTitle = computed(() => sections.find((s) => s.key === tab.value)?.label || '治理后台')
-
-const publishedCaps = computed(() => allCaps.value.filter((c) => c.status === 'published'))
-const rejectedCaps = computed(() => [...rejectedQueue.value, ...returnedQueue.value])
-
 const auditCounts = computed(() => ({
   pending: reviewQueue.value.length,
-  passed: publishedCaps.value.length,
-  rejected: rejectedCaps.value.length
+  rejected: rejectedQueue.value.length,
+  returned: returnedQueue.value.length
+}))
+
+const listedCounts = computed(() => ({
+  published: allCaps.value.filter((c) => c.status === 'published').length,
+  deprecated: allCaps.value.filter((c) => c.status === 'deprecated').length,
+  all: allCaps.value.filter((c) => ['published', 'deprecated'].includes(c.status)).length
 }))
 
 const auditList = computed(() => {
-  if (auditFilter.value === 'pending') return reviewQueue.value
-  if (auditFilter.value === 'passed') return publishedCaps.value
-  return rejectedCaps.value
+  let list =
+    auditFilter.value === 'pending'
+      ? reviewQueue.value
+      : auditFilter.value === 'returned'
+        ? returnedQueue.value
+        : rejectedQueue.value
+  if (auditTypeFilter.value) list = list.filter((c) => c.type === auditTypeFilter.value)
+  return list
 })
 
 const selectedCap = computed(() => auditList.value.find((c) => c.id === selectedId.value) || null)
@@ -141,9 +166,11 @@ const fileList = computed(() => {
   return []
 })
 
-const listedCaps = computed(() =>
-  allCaps.value.filter((c) => ['published', 'deprecated'].includes(c.status))
-)
+const listedCaps = computed(() => {
+  const all = allCaps.value.filter((c) => ['published', 'deprecated'].includes(c.status))
+  if (listedFilter.value === 'all') return all
+  return all.filter((c) => c.status === listedFilter.value)
+})
 
 function typeColor(type) {
   return TYPE_COLORS[type] || '#2f6bff'
@@ -171,17 +198,11 @@ function selectCap(cap) {
 
 function setAuditFilter(key) {
   auditFilter.value = key
-  const list = key === 'pending' ? reviewQueue.value : key === 'passed' ? publishedCaps.value : rejectedCaps.value
+  const list =
+    key === 'pending' ? reviewQueue.value : key === 'returned' ? returnedQueue.value : rejectedQueue.value
   selectedId.value = list[0]?.id || ''
   resetReviewChecks()
   reviewComment.value = ''
-}
-
-function switchDeskTab(key) {
-  deskTab.value = key
-  if (key === 'audit' && !selectedId.value && auditList.value.length) {
-    selectedId.value = auditList.value[0].id
-  }
 }
 
 watch(auditList, (list) => {
@@ -191,8 +212,8 @@ watch(auditList, (list) => {
 })
 
 const roleDefs = [
-  { key: 'admin', label: '管理员', desc: '审核上架、下架归档、用户管理、统计看板、试用全部资产、MCP 网关' },
-  { key: 'publisher', label: '发布者', desc: '发布/编辑积木与配方；提交审核；试用自己创建或已加入的资产' },
+  { key: 'admin', label: '管理员', desc: '审核上架、下架归档、用户管理、试用全部资产、MCP 网关' },
+  { key: 'publisher', label: '发布者', desc: '发布/编辑组件与助手；提交审核；试用自己创建或已加入的资产' },
   { key: 'user', label: '普通用户', desc: '登录可发布草稿；可试用自己创建或已加入的资产；生产消费走 cap install / MCP' }
 ]
 
@@ -226,6 +247,7 @@ async function load() {
     users.value = userList
     stats.value = stat
     gatewayServers.value = gatewayList
+    adminState.reviewingCount = reviewQueue.value.length
     if (!selectedId.value && auditList.value.length) {
       selectedId.value = auditList.value[0].id
     }
@@ -518,82 +540,118 @@ function selectDebugType(type) {
 function openDebug() {
   if (!debugName.value) return
   debugCap.value = debugCaps.value.find((c) => c.name === debugName.value) || null
+  showTrial.value = false
 }
 
 onMounted(() => {
   resetReviewChecks()
+  if (route.query.trial === '1') showTrial.value = true
   load()
 })
+
+watch(
+  () => route.query.trial,
+  (v) => {
+    if (v === '1') showTrial.value = true
+  }
+)
 </script>
 
 <template>
-  <div class="admin-layout">
-    <aside class="admin-side">
-      <div class="side-title">治理后台</div>
-      <button
-        v-for="s in sections"
-        :key="s.key"
-        class="side-item"
-        :class="{ active: tab === s.key }"
-        @click="tab = s.key"
-      >
-        <span class="side-dot" :class="s.key"></span>{{ s.label }}
-        <span v-if="s.key === 'desk' && auditCounts.pending" class="side-count">{{ auditCounts.pending }}</span>
-      </button>
-      <div class="side-foot muted">AI 能力目录 · 控制面</div>
-    </aside>
-
-    <main class="admin-main">
+  <div class="admin-page">
       <div class="admin-header">
         <div>
           <h2 style="margin: 0">{{ sectionTitle }}</h2>
-          <div class="muted" style="font-size: 13px">
-            审核上架、下架治理；执行留给零号员工 / IDE / Dify
+          <div class="muted" style="font-size: 13px">{{ sectionHint }}</div>
+        </div>
+        <div class="header-right">
+          <div v-if="stats && (section === 'review' || section === 'listed')" class="header-chips">
+            <div class="chip"><span class="chip-num">{{ stats.total_capabilities }}</span>能力总数</div>
+            <div class="chip"><span class="chip-num success">{{ stats.published_count }}</span>已上架</div>
+            <div class="chip"><span class="chip-num warning">{{ stats.reviewing_count }}</span>待审核</div>
+            <div class="chip"><span class="chip-num primary">{{ stats.total_usage }}</span>总用量</div>
+          </div>
+          <button
+            v-if="section === 'review' && stats"
+            class="btn btn-sm"
+            type="button"
+            @click="showStatsDetail = !showStatsDetail"
+          >{{ showStatsDetail ? '收起统计' : '统计明细' }}</button>
+          <div class="trial-wrap">
+            <button class="btn btn-sm" type="button" :class="{ 'btn-primary': showTrial }" @click="showTrial = !showTrial">
+              云端试用
+            </button>
+            <div v-if="showTrial" class="trial-pop panel">
+              <div class="muted" style="font-size: 12px; margin-bottom: 10px">
+                试用已发布资产（会计入用量）。生产请走 cap install / 本地引擎 / MCP。
+              </div>
+              <select v-model="debugType" class="select" @change="selectDebugType(debugType)">
+                <option v-for="t in ['tool', 'agent', 'skill', 'mcp', 'workflow', 'plugin']" :key="t" :value="t">{{ TYPE_LABELS[t] }}</option>
+              </select>
+              <select v-model="debugName" class="select" style="margin-top: 8px">
+                <option value="">选择已发布的能力…</option>
+                <option v-for="c in debugCaps" :key="c.id" :value="c.name">{{ c.name }}（v{{ c.version }}）</option>
+              </select>
+              <button class="btn btn-primary btn-block mt-12" :disabled="!debugName" @click="openDebug">打开试用</button>
+            </div>
           </div>
         </div>
-        <div v-if="stats" class="header-chips">
-          <div class="chip"><span class="chip-num">{{ stats.total_capabilities }}</span>能力总数</div>
-          <div class="chip"><span class="chip-num success">{{ stats.published_count }}</span>已上架</div>
-          <div class="chip"><span class="chip-num warning">{{ stats.reviewing_count }}</span>待审核</div>
-          <div class="chip"><span class="chip-num primary">{{ stats.total_usage }}</span>总用量</div>
-        </div>
       </div>
+
+      <div v-if="showTrial" class="trial-dismiss" @click="showTrial = false"></div>
 
       <div v-if="notice" class="alert alert-success mb-12">{{ notice }}</div>
       <div v-if="error" class="alert alert-error mb-12">{{ error }}</div>
 
-      <!-- 审核台：审核 / 已上架 -->
-      <section v-if="tab === 'desk'" class="desk">
-        <div class="main-tabs">
-          <button type="button" class="main-tab" :class="{ active: deskTab === 'audit' }" @click="switchDeskTab('audit')">
-            审核
-            <span v-if="auditCounts.pending" class="count">{{ auditCounts.pending }}</span>
-          </button>
-          <button type="button" class="main-tab" :class="{ active: deskTab === 'listed' }" @click="switchDeskTab('listed')">
-            已上架
-            <span class="count">{{ listedCaps.length }}</span>
-          </button>
+      <!-- 审核队列 -->
+      <section v-if="section === 'review'" class="desk">
+        <div v-if="showStatsDetail && stats" class="stats-band">
+          <div class="panel">
+            <h3>类型分布</h3>
+            <div v-for="t in Object.keys(stats.type_breakdown)" :key="t" class="type-bar">
+              <span style="width: 110px">{{ TYPE_LABELS[t] }}</span>
+              <div class="bar"><div class="bar-fill" :style="{ width: Math.min(100, stats.type_breakdown[t] / stats.total_capabilities * 100) + '%' }"></div></div>
+              <span class="muted">{{ stats.type_breakdown[t] }}</span>
+            </div>
+          </div>
+          <div class="panel">
+            <h3>热门能力 TOP5</h3>
+            <div v-for="item in stats.top_used" :key="item.id" class="top-item">
+              <router-link :to="`/capabilities/${item.id}`">{{ item.name }}</router-link>
+              <span class="badge">{{ item.type }}</span>
+              <span class="muted">{{ item.count }} 次</span>
+            </div>
+            <div v-if="!(stats.top_used || []).length" class="muted" style="font-size: 13px">暂无用量</div>
+          </div>
+          <div class="panel">
+            <h3>最近使用</h3>
+            <div v-for="(item, i) in stats.recent_usage" :key="i" class="recent-item">
+              <div>{{ item.capability }}</div>
+              <div class="muted" style="font-size: 12px">{{ item.action }} · {{ formatDate(item.at) }}</div>
+            </div>
+            <div v-if="!(stats.recent_usage || []).length" class="muted" style="font-size: 13px">暂无记录</div>
+          </div>
         </div>
 
-        <template v-if="deskTab === 'audit'">
-          <div class="rule-card">
-            <div class="rule-title">默认审核</div>
-            <div class="muted" style="font-size: 12px">能力上架审核规则 · 包结构 / 密钥 / 依赖 / 可见性</div>
-          </div>
-
+        <div class="desk-toolbar">
           <div class="seg">
             <button type="button" class="seg-item" :class="{ active: auditFilter === 'pending' }" @click="setAuditFilter('pending')">
               待审核 <span>{{ auditCounts.pending }}</span>
             </button>
-            <button type="button" class="seg-item" :class="{ active: auditFilter === 'passed' }" @click="setAuditFilter('passed')">
-              已通过 <span>{{ auditCounts.passed }}</span>
-            </button>
             <button type="button" class="seg-item" :class="{ active: auditFilter === 'rejected' }" @click="setAuditFilter('rejected')">
               已拒绝 <span>{{ auditCounts.rejected }}</span>
             </button>
+            <button type="button" class="seg-item" :class="{ active: auditFilter === 'returned' }" @click="setAuditFilter('returned')">
+              已打回 <span>{{ auditCounts.returned }}</span>
+            </button>
           </div>
+          <select v-model="auditTypeFilter" class="select" style="max-width: 180px">
+            <option value="">全部类型</option>
+            <option v-for="t in Object.keys(TYPE_LABELS)" :key="t" :value="t">{{ TYPE_LABELS[t] }}</option>
+          </select>
+        </div>
 
-          <div class="audit-split">
+        <div class="audit-split">
             <div class="audit-list panel">
               <div class="list-head">
                 <span>能力</span>
@@ -718,100 +776,84 @@ onMounted(() => {
               </template>
             </div>
           </div>
-        </template>
+      </section>
 
-        <template v-else>
-          <div class="panel table-panel">
-            <div v-if="listedCaps.length === 0" class="empty">暂无已上架能力</div>
-            <table v-else class="skill-table">
-              <thead>
-                <tr>
-                  <th style="width: 36%">能力</th>
-                  <th>状态</th>
-                  <th>可见范围</th>
-                  <th>作者</th>
-                  <th>使用量</th>
-                  <th style="width: 160px">操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="cap in listedCaps" :key="cap.id">
-                  <td>
-                    <div class="skill-cell">
-                      <div class="skill-icon" :style="{ background: typeColor(cap.type) }">{{ typeInitial(cap.type) }}</div>
-                      <div class="skill-meta">
-                        <div class="skill-name-row">
-                          <router-link class="skill-name link" :to="`/capabilities/${cap.id}`">{{ cap.name }}</router-link>
-                          <span class="ver-tag">v{{ cap.version }}</span>
-                        </div>
-                        <div class="skill-desc muted">{{ cap.description || TYPE_LABELS[cap.type] }}</div>
+      <section v-else-if="section === 'listed'">
+        <div class="desk-toolbar">
+          <div class="seg">
+            <button type="button" class="seg-item" :class="{ active: listedFilter === 'published' }" @click="listedFilter = 'published'">
+              已上架 <span>{{ listedCounts.published }}</span>
+            </button>
+            <button type="button" class="seg-item" :class="{ active: listedFilter === 'deprecated' }" @click="listedFilter = 'deprecated'">
+              已下架 <span>{{ listedCounts.deprecated }}</span>
+            </button>
+            <button type="button" class="seg-item" :class="{ active: listedFilter === 'all' }" @click="listedFilter = 'all'">
+              全部 <span>{{ listedCounts.all }}</span>
+            </button>
+          </div>
+        </div>
+        <div class="panel table-panel">
+          <div v-if="listedCaps.length === 0" class="empty">暂无记录</div>
+          <table v-else class="skill-table">
+            <thead>
+              <tr>
+                <th style="width: 36%">能力</th>
+                <th>状态</th>
+                <th>可见范围</th>
+                <th>作者</th>
+                <th>使用量</th>
+                <th style="width: 160px">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="cap in listedCaps" :key="cap.id">
+                <td>
+                  <div class="skill-cell">
+                    <div class="skill-icon" :style="{ background: typeColor(cap.type) }">{{ typeInitial(cap.type) }}</div>
+                    <div class="skill-meta">
+                      <div class="skill-name-row">
+                        <router-link class="skill-name link" :to="`/capabilities/${cap.id}`">{{ cap.name }}</router-link>
+                        <span class="ver-tag">v{{ cap.version }}</span>
                       </div>
+                      <div class="skill-desc muted">{{ cap.description || TYPE_LABELS[cap.type] }}</div>
                     </div>
-                  </td>
-                  <td><StatusBadge :status="cap.status" /></td>
-                  <td><span class="vis-pill">{{ VISIBILITY_LABELS[cap.visibility] || cap.visibility }}</span></td>
-                  <td>{{ cap.author_name }}</td>
-                  <td>{{ cap.usage_count }}</td>
-                  <td>
-                    <div class="ops">
-                      <router-link class="op-link" :to="`/capabilities/${cap.id}`">详情</router-link>
-                      <button v-if="cap.status === 'published'" class="op-link danger" type="button" @click="statusAction(cap, 'deprecate')">下架</button>
-                      <button
-                        v-if="['published', 'deprecated'].includes(cap.status)"
-                        class="op-link danger"
-                        type="button"
-                        @click="statusAction(cap, 'archive')"
-                      >归档</button>
-                    </div>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </template>
-      </section>
-
-      <section v-if="tab === 'stats' && stats" class="mt-16">
-        <div class="grid" style="grid-template-columns: 1fr 1fr">
-          <div class="panel">
-            <h3>类型分布</h3>
-            <div v-for="t in Object.keys(stats.type_breakdown)" :key="t" class="type-bar">
-              <span style="width: 130px">{{ TYPE_LABELS[t] }}</span>
-              <div class="bar"><div class="bar-fill" :style="{ width: Math.min(100, stats.type_breakdown[t] / stats.total_capabilities * 100) + '%' }"></div></div>
-              <span class="muted">{{ stats.type_breakdown[t] }}</span>
-            </div>
-          </div>
-          <div class="panel">
-            <h3>热门能力 TOP5</h3>
-            <div v-for="item in stats.top_used" :key="item.id" class="top-item">
-              <router-link :to="`/capabilities/${item.id}`">{{ item.name }}</router-link>
-              <span class="badge">{{ item.type }}</span>
-              <span class="muted">{{ item.count }} 次</span>
-            </div>
-          </div>
-        </div>
-        <div class="panel mt-16">
-          <h3>最近使用</h3>
-          <div v-for="(item, i) in stats.recent_usage" :key="i" class="recent-item">
-            <div>{{ item.capability }}</div>
-            <div class="muted" style="font-size: 12px">{{ item.action }} · {{ formatDate(item.at) }}</div>
-          </div>
+                  </div>
+                </td>
+                <td><StatusBadge :status="cap.status" /></td>
+                <td><span class="vis-pill">{{ VISIBILITY_LABELS[cap.visibility] || cap.visibility }}</span></td>
+                <td>{{ cap.author_name }}</td>
+                <td>{{ cap.usage_count }}</td>
+                <td>
+                  <div class="ops">
+                    <router-link class="op-link" :to="`/capabilities/${cap.id}`">详情</router-link>
+                    <button v-if="cap.status === 'published'" class="op-link danger" type="button" @click="statusAction(cap, 'deprecate')">下架</button>
+                    <button
+                      v-if="['published', 'deprecated'].includes(cap.status)"
+                      class="op-link danger"
+                      type="button"
+                      @click="statusAction(cap, 'archive')"
+                    >归档</button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </section>
 
-      <section v-if="tab === 'users'" class="panel">
-        <div class="flex-between mb-16" style="align-items: flex-end">
-          <div>
-            <h3 style="margin: 0">角色定义</h3>
-            <div class="role-cards mt-8">
-              <div v-for="r in roleDefs" :key="r.key" class="role-card">
-                <strong>{{ r.label }}</strong>
-                <span class="muted" style="font-size: 12px">{{ r.desc }}</span>
-              </div>
+      <section v-else-if="section === 'users'" class="panel">
+        <div class="users-head">
+          <p class="muted boundary-hint">
+            市场是目录控制面。宿主 BuiltinTool（src/tools）与通道插件（钉钉/飞书）不上架。
+          </p>
+          <div class="role-cards">
+            <div v-for="r in roleDefs" :key="r.key" class="role-card">
+              <strong>{{ r.label }}</strong>
+              <span class="muted" style="font-size: 12px">{{ r.desc }}</span>
             </div>
           </div>
-          <div class="flex" style="gap: 10px">
-            <input v-model="userQuery" class="input" style="max-width: 200px" placeholder="搜索用户…" />
+          <div class="users-tools">
+            <input v-model="userQuery" class="input" style="max-width: 220px" placeholder="搜索用户…" />
             <button class="btn btn-primary" @click="showCreateUser = true">+ 新增用户</button>
           </div>
         </div>
@@ -821,7 +863,10 @@ onMounted(() => {
             <tr><th>用户</th><th>邮箱</th><th>组织</th><th>角色</th><th>状态</th><th>操作</th></tr>
           </thead>
           <tbody>
-            <tr v-for="u in users" :key="u.id">
+            <tr v-if="filteredUsers.length === 0">
+              <td colspan="6" class="muted">{{ userQuery ? '无匹配用户' : '暂无用户' }}</td>
+            </tr>
+            <tr v-for="u in filteredUsers" :key="u.id">
               <td>{{ u.display_name || u.username }} <span class="muted">@{{ u.username }}</span></td>
               <td>{{ u.email }}</td>
               <td>{{ u.organization || u.team || '-' }}</td>
@@ -848,112 +893,55 @@ onMounted(() => {
         </table>
       </section>
 
-      <section v-if="tab === 'gateway'" class="panel">
+      <section v-else-if="section === 'gateway'">
         <div class="flex-between mb-16" style="align-items: flex-end">
-          <div>
-            <h3 style="margin: 0">MCP HTTP 中转网关</h3>
-            <p class="muted" style="font-size: 13px; max-width: 720px">
-              把 stdio / HTTP / SSE 的 MCP 服务统一暴露为 HTTP 端点（Streamable HTTP + SSE），
-              外部 MCP 客户端（Dify、Claude Desktop、其他 Agent）用令牌即可接入；
-              市场 MCP 能力包也可以用 transport=gateway 引用这里的服务。
-            </p>
-          </div>
+          <p class="muted" style="font-size: 13px; max-width: 720px; margin: 0">
+            外部 MCP 客户端（Dify、Claude Desktop、其他 Agent）用令牌接入；
+            市场 MCP 能力包也可以用 transport=gateway 引用这里的服务。
+          </p>
           <button class="btn btn-primary" @click="openGatewayCreate">+ 注册 MCP 服务</button>
         </div>
         <div v-if="gatewayNotice" class="alert alert-success">{{ gatewayNotice }}</div>
-        <div v-if="gatewayServers.length === 0" class="empty">
+        <div v-if="gatewayServers.length === 0" class="panel empty">
           还没有注册 MCP 服务。点击右上角「+ 注册 MCP 服务」。
         </div>
-        <table v-else class="table">
-          <thead>
-            <tr>
-              <th>服务</th>
-              <th>传输</th>
-              <th>连接</th>
-              <th>令牌</th>
-              <th>状态</th>
-              <th>外部端点</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="s in gatewayServers" :key="s.id">
-              <td>
+        <div v-else class="gw-grid">
+          <div v-for="s in gatewayServers" :key="s.id" class="gw-card panel">
+            <div class="gw-card-top">
+              <div>
                 <strong>{{ s.name }}</strong>
-                <div class="muted" style="font-size: 11px">{{ s.description || '-' }}</div>
-              </td>
-              <td>
+                <div class="muted" style="font-size: 12px; margin-top: 2px">{{ s.description || '无描述' }}</div>
+              </div>
+              <div class="gw-badges">
                 <span class="badge badge-primary">{{ { stdio: 'stdio', http: 'HTTP', sse: 'SSE' }[s.transport] || s.transport }}</span>
-              </td>
-              <td>
-                <code class="gw-code">{{ s.transport === 'stdio' ? `${s.command} ${(s.args || []).join(' ')}` : s.url }}</code>
-              </td>
-              <td>
-                <span v-if="s.api_token" class="badge badge-warning">已启用</span>
-                <span v-else class="badge">免鉴权</span>
-              </td>
-              <td>
                 <span class="badge" :class="s.enabled ? 'badge-success' : 'badge-danger'">{{ s.enabled ? '启用' : '停用' }}</span>
-              </td>
-              <td>
-                <div class="flex" style="gap: 6px">
-                  <button class="btn btn-sm" @click="copyText(gatewayUrl(s))">复制 Stream</button>
-                  <button class="btn btn-sm" @click="copyText(gatewaySseUrl(s))">复制 SSE</button>
+                <span v-if="s.api_token" class="badge badge-warning">令牌</span>
+                <span v-else class="badge">免鉴权</span>
+              </div>
+            </div>
+            <code class="gw-code">{{ s.transport === 'stdio' ? `${s.command} ${(s.args || []).join(' ')}` : s.url }}</code>
+            <div class="gw-card-actions">
+              <button class="btn btn-sm" @click="copyText(gatewayUrl(s))">复制 Stream</button>
+              <button class="btn btn-sm" @click="copyText(gatewaySseUrl(s))">复制 SSE</button>
+              <button class="btn btn-sm" @click="testGateway(s)">测试连接</button>
+              <button class="btn btn-sm" @click="openGatewayEdit(s)">编辑</button>
+              <button class="btn btn-sm btn-danger" @click="removeGateway(s)">删除</button>
+            </div>
+            <div v-if="gatewayTest[s.id]" class="gw-test">
+              <div v-if="gatewayTest[s.id].loading" class="muted" style="font-size: 12px">连接测试中…</div>
+              <div v-else>
+                <span class="badge" :class="gatewayTest[s.id].connected ? 'badge-success' : 'badge-danger'">
+                  {{ gatewayTest[s.id].connected ? `已连接，发现 ${gatewayTest[s.id].tools.length} 个工具` : '连接失败' }}
+                </span>
+                <div class="flex" style="gap: 6px; flex-wrap: wrap; margin-top: 8px">
+                  <span v-for="t in (gatewayTest[s.id].tools || [])" :key="t.name" class="badge badge-primary">{{ t.name }}</span>
                 </div>
-              </td>
-              <td>
-                <div class="flex" style="gap: 6px">
-                  <button class="btn btn-sm" @click="testGateway(s)">测试连接</button>
-                  <button class="btn btn-sm" @click="openGatewayEdit(s)">编辑</button>
-                  <button class="btn btn-sm btn-danger" @click="removeGateway(s)">删除</button>
-                </div>
-              </td>
-            </tr>
-            <tr v-for="s in gatewayServers" v-if="gatewayTest[s.id]" :key="`t-${s.id}`">
-              <td colspan="7">
-                <div v-if="gatewayTest[s.id].loading" class="muted" style="font-size: 12px">连接测试中…</div>
-                <div v-else class="flex-between flex-wrap">
-                  <span class="badge" :class="gatewayTest[s.id].connected ? 'badge-success' : 'badge-danger'">
-                    {{ gatewayTest[s.id].connected ? `已连接，发现 ${gatewayTest[s.id].tools.length} 个工具` : '连接失败' }}
-                  </span>
-                  <div class="flex" style="gap: 6px; flex-wrap: wrap">
-                    <span v-for="t in (gatewayTest[s.id].tools || [])" :key="t.name" class="badge badge-primary">{{ t.name }}</span>
-                  </div>
-                  <span v-if="gatewayTest[s.id].error" class="muted" style="font-size: 12px">{{ gatewayTest[s.id].error }}</span>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </section>
-
-      <section v-if="tab === 'debug'" class="panel">
-        <p class="muted" style="font-size: 13px">
-          云端试用已发布资产（验证参数与连通性，会计入用量）。生产请走 cap install / 本地引擎 / MCP。
-        </p>
-        <div class="flex mt-16" style="gap: 10px; flex-wrap: wrap">
-          <select v-model="debugType" class="select" style="max-width: 160px" @change="selectDebugType(debugType)">
-            <option v-for="t in ['tool', 'agent', 'skill', 'mcp', 'workflow', 'plugin']" :key="t" :value="t">{{ TYPE_LABELS[t] }}</option>
-          </select>
-          <select v-model="debugName" class="select" style="max-width: 320px">
-            <option value="">选择已发布的能力…</option>
-            <option v-for="c in debugCaps" :key="c.id" :value="c.name">{{ c.name }}（v{{ c.version }}）</option>
-          </select>
-          <button class="btn btn-primary" :disabled="!debugName" @click="openDebug">打开试用弹窗</button>
+                <div v-if="gatewayTest[s.id].error" class="muted" style="font-size: 12px; margin-top: 6px">{{ gatewayTest[s.id].error }}</div>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
-
-      <section v-if="tab === 'roles'" class="panel">
-        <h3 style="margin-top: 0">角色与边界</h3>
-        <div class="muted" style="font-size: 13px; line-height: 1.55; margin-bottom: 12px">
-          市场是目录控制面。宿主 BuiltinTool（src/tools）与通道插件（src/plugins 钉钉/飞书）不上架。
-        </div>
-        <div v-for="r in roleDefs" :key="r.key" class="role-card">
-          <strong>{{ r.label }}</strong>
-          <div class="muted" style="font-size: 13px">{{ r.desc }}</div>
-        </div>
-      </section>
-    </main>
 
     <DebugCapabilityModal :show="!!debugCap" :cap="debugCap" title="云端试用" @close="debugCap = null" />
 
@@ -1126,30 +1114,31 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.admin-layout { display: grid; grid-template-columns: 200px 1fr; gap: 24px; align-items: start; }
-.admin-side {
-  position: sticky; top: 78px; background: var(--panel); border: 1px solid var(--border);
-  border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 2px;
+.admin-page { min-width: 0; }
+.header-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.trial-wrap { position: relative; z-index: 30; }
+.trial-pop {
+  position: absolute; right: 0; top: calc(100% + 8px); width: 320px; z-index: 30;
+  padding: 14px; box-shadow: var(--shadow-lg);
 }
-.side-title { font-size: 13px; color: var(--muted); padding: 6px 10px 10px; }
-.side-item {
-  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
-  background: none; border: none; color: var(--muted); padding: 9px 10px; border-radius: 8px;
-  font-size: 14px; cursor: pointer;
+.trial-dismiss { position: fixed; inset: 0; z-index: 20; }
+.stats-band {
+  display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 12px; margin-bottom: 14px;
 }
-.side-item:hover { background: var(--panel-2); color: var(--text); }
-.side-item.active { background: rgba(79,140,255,.12); color: var(--primary); }
-.side-dot { width: 8px; height: 8px; border-radius: 3px; background: var(--border); flex: none; }
-.side-dot.desk { background: var(--warning); }
-.side-dot.stats { background: var(--success); }
-.side-dot.users { background: #7a5cff; }
-.side-dot.gateway { background: #ff9f43; }
-.side-dot.debug { background: #ff9f43; }
-.side-item.active .side-dot { background: var(--primary); }
-.side-count {
-  margin-left: auto; min-width: 18px; height: 18px; border-radius: 9px; display: inline-flex;
-  align-items: center; justify-content: center; background: var(--danger); color: #fff; font-size: 11px; padding: 0 5px;
+.desk-toolbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  flex-wrap: wrap; margin-bottom: 14px;
 }
+.desk-toolbar .seg { margin-bottom: 0; }
+.users-head { display: flex; flex-direction: column; gap: 12px; }
+.boundary-hint { margin: 0; font-size: 13px; line-height: 1.55; }
+.users-tools { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+.gw-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; }
+.gw-card-top { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; margin-bottom: 10px; }
+.gw-badges { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+.gw-card .gw-code { display: block; margin: 8px 0 12px; }
+.gw-card-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.gw-test { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
 .gw-code {
   font-family: 'Cascadia Code', Consolas, monospace;
   font-size: 11px;
@@ -1159,8 +1148,6 @@ onMounted(() => {
 .gw-modal { width: 680px; max-width: 100%; }
 .checkbox { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); padding-top: 9px; }
 .code { font-family: 'Cascadia Code', Consolas, monospace; font-size: 12px; }
-.side-foot { margin-top: 14px; padding: 8px 10px 2px; border-top: 1px solid var(--border); font-size: 12px; }
-.admin-main { min-width: 0; }
 .admin-header {
   display: flex; justify-content: space-between; align-items: center; gap: 16px;
   flex-wrap: wrap; margin-bottom: 16px;
@@ -1193,28 +1180,6 @@ onMounted(() => {
 .chip-num.warning { color: var(--warning); }
 .chip-num.primary { color: var(--primary); }
 
-.main-tabs {
-  display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 14px;
-}
-.main-tab {
-  background: none; border: none; color: var(--muted);
-  padding: 10px 16px; cursor: pointer; font-size: 14px;
-  border-bottom: 2px solid transparent; display: inline-flex; align-items: center; gap: 6px;
-}
-.main-tab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
-.main-tab .count {
-  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
-  background: var(--panel-2); color: var(--muted); font-size: 11px;
-  display: inline-flex; align-items: center; justify-content: center;
-}
-.main-tab.active .count { background: var(--primary-soft); color: var(--primary); }
-
-.rule-card {
-  background: #f7f9fc; border: 1px solid var(--border); border-radius: 10px;
-  padding: 12px 14px; margin-bottom: 12px;
-}
-.rule-title { font-weight: 650; font-size: 13px; margin-bottom: 2px; }
-
 .seg {
   display: inline-flex; background: var(--panel-2); border-radius: 10px; padding: 3px; margin-bottom: 14px; gap: 2px;
 }
@@ -1229,7 +1194,7 @@ onMounted(() => {
   display: grid; grid-template-columns: minmax(280px, 380px) 1fr; gap: 14px; align-items: start;
   min-height: 520px;
 }
-.audit-list { padding: 0; overflow: hidden; max-height: calc(100vh - 260px); overflow-y: auto; }
+.audit-list { padding: 0; overflow: hidden; max-height: calc(100vh - 200px); overflow-y: auto; }
 .list-head {
   display: flex; justify-content: space-between; padding: 10px 14px;
   font-size: 12px; color: var(--muted); background: #fafbfc; border-bottom: 1px solid var(--border);
@@ -1268,7 +1233,7 @@ onMounted(() => {
   display: -webkit-box; -webkit-line-clamp: 1; line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden;
 }
 
-.audit-detail { padding: 18px 20px; min-height: 520px; max-height: calc(100vh - 260px); overflow-y: auto; }
+.audit-detail { padding: 18px 20px; min-height: 520px; max-height: calc(100vh - 200px); overflow-y: auto; }
 .detail-top { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
 .detail-identity { display: flex; gap: 12px; align-items: flex-start; }
 .detail-name-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -1373,9 +1338,6 @@ h3 { margin: 0 0 12px; }
 @media (max-width: 1100px) {
   .audit-split { grid-template-columns: 1fr; }
   .audit-list, .audit-detail { max-height: none; }
-}
-@media (max-width: 900px) {
-  .admin-layout { grid-template-columns: 1fr; }
-  .admin-side { position: static; flex-direction: row; overflow-x: auto; }
+  .stats-band { grid-template-columns: 1fr; }
 }
 </style>

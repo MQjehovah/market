@@ -1,12 +1,14 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
 import { authState } from '../stores/auth'
 import {
   DEFAULT_BROWSE_KINDS,
+  MORE_BROWSE_KINDS,
   SHELVES,
-  TYPE_CATEGORIES
+  TYPE_CATEGORIES,
+  TYPE_LABELS
 } from '../utils/format'
 import CapabilityCard from '../components/CapabilityCard.vue'
 
@@ -32,31 +34,33 @@ const filters = reactive({
   category: '',
   skill: '',
   mcp: '',
-  sort: 'latest'
+  sort: 'latest',
+  tab: '' // '', skill, install, agent, more
 })
 const myIds = ref(new Set())
 const notice = ref('')
 
-const shelfTabs = [
-  { key: '', label: '推荐', hint: '精选、热门与高分' },
-  { key: 'install', label: SHELVES.install.label, hint: SHELVES.install.description },
-  { key: 'recipe', label: SHELVES.recipe.label, hint: SHELVES.recipe.description },
-  { key: 'brick', label: SHELVES.brick.label, hint: SHELVES.brick.description }
+const browseTabs = [
+  { key: '', label: '推荐', hint: '技能、安装包与助手的精选与热门' },
+  { key: 'skill', label: '技能', hint: '可复用 SOP（SKILL.md）' },
+  { key: 'install', label: '安装包', hint: SHELVES.install.description },
+  { key: 'agent', label: '助手', hint: '面向场景的 Agent 人设' },
+  { key: 'more', label: '更多', hint: '连接器、能力编排、编排函数' }
 ]
 
-/** 推荐页：无货架、无搜索、无其它筛选 */
+/** 推荐页：无货架、无类型、无搜索、无其它筛选 */
 const showDiscovery = computed(
   () =>
     !filters.q &&
     !filters.shelf &&
     !filters.type &&
+    !filters.tab &&
     !filters.category &&
     !filters.skill &&
     !filters.mcp &&
     page.value === 1
 )
 
-/** 搜索结果（含跨货架 shelf=all）或某一货架目录 */
 const showCatalog = computed(() => !showDiscovery.value)
 
 const pageContext = computed(() => {
@@ -64,39 +68,52 @@ const pageContext = computed(() => {
     return {
       eyebrow: '搜索',
       title: '搜索结果',
-      desc: filters.shelf && SHELVES[filters.shelf]
-        ? `在「${SHELVES[filters.shelf].label}」中查找「${filters.q}」。`
-        : `跨货架查找「${filters.q}」。`
+      desc: '跨目录查找能力。'
+    }
+  }
+  if (filters.tab === 'skill' || filters.type === 'skill') {
+    return { eyebrow: '目录', title: '技能', desc: '可复用 SOP；加入后用 cap install --type skill，或装进助手/安装包。' }
+  }
+  if (filters.tab === 'install' || filters.shelf === 'install') {
+    return { eyebrow: '目录', title: '安装包', desc: SHELVES.install.description }
+  }
+  if (filters.tab === 'agent' || filters.type === 'agent') {
+    return { eyebrow: '目录', title: '助手', desc: '场景级 Agent；依赖的技能/连接器需已上架，或改用安装包内嵌。' }
+  }
+  if (filters.tab === 'more' || MORE_BROWSE_KINDS.includes(filters.type)) {
+    return {
+      eyebrow: '目录',
+      title: '更多',
+      desc: '连接器、能力编排与编排函数；进阶发布与编排用。'
     }
   }
   if (filters.shelf && SHELVES[filters.shelf]) {
     const s = SHELVES[filters.shelf]
-    return { eyebrow: '货架', title: s.label, desc: s.description }
+    return { eyebrow: '分类', title: s.label, desc: s.description }
   }
   if (filters.shelf === 'all') {
-    return {
-      eyebrow: '目录',
-      title: '搜索结果',
-      desc: '含安装包、配方与积木。'
-    }
+    return { eyebrow: '目录', title: '搜索结果', desc: '含技能、安装包、助手与更多类型。' }
   }
   return {
-    eyebrow: '企业内部 Skill / Agent 能力市场',
+    eyebrow: '企业内部能力目录',
     title: '发现当下值得使用的能力',
-    desc: '从热度、评分与安装策略中快速找到可复用的能力；加入我的能力后用 cap install 装到零号员工 / IDE。'
+    desc: '优先看技能与安装包；加入后用 cap install 装到零号员工 / IDE（加入≠安装）。'
   }
 })
 
 const catalogTitle = computed(() => {
   if (filters.q) return '搜索结果'
+  if (filters.type && TYPE_LABELS[filters.type]) return TYPE_LABELS[filters.type]
   if (filters.shelf && SHELVES[filters.shelf]) return SHELVES[filters.shelf].label
   return '筛选结果'
 })
 
 const typeOptions = computed(() => {
+  if (filters.tab === 'more') return [...MORE_BROWSE_KINDS]
   if (filters.shelf && filters.shelf !== 'all' && SHELVES[filters.shelf]) {
     return SHELVES[filters.shelf].kinds
   }
+  if (filters.type) return [filters.type]
   if (!filters.shelf) return [...DEFAULT_BROWSE_KINDS]
   return Object.keys(TYPE_CATEGORIES)
 })
@@ -108,9 +125,14 @@ const categoryOptions = computed(() => {
   return [...set]
 })
 
-const activeShelfTab = computed(() => {
+const activeBrowseTab = computed(() => {
+  if (filters.q && filters.shelf === 'all') return ''
+  if (filters.tab) return filters.tab
+  if (filters.type === 'skill') return 'skill'
+  if (filters.type === 'agent') return 'agent'
+  if (MORE_BROWSE_KINDS.includes(filters.type)) return 'more'
+  if (filters.shelf === 'install') return 'install'
   if (filters.shelf === 'all') return ''
-  if (filters.shelf && SHELVES[filters.shelf]) return filters.shelf
   return ''
 })
 
@@ -221,7 +243,25 @@ async function removeFromMy(cap) {
   }
 }
 
+function selectBrowseTab(key) {
+  const query = {}
+  if (key === 'skill') query.type = 'skill'
+  else if (key === 'install') query.shelf = 'install'
+  else if (key === 'agent') query.type = 'agent'
+  else if (key === 'more') query.type = filters.type && MORE_BROWSE_KINDS.includes(filters.type) ? filters.type : 'mcp'
+  router.push({ path: '/', query })
+}
+
 function selectShelf(key) {
+  // 兼容旧入口：积木→更多(mcp)，配方→助手
+  if (key === 'brick') {
+    selectBrowseTab('more')
+    return
+  }
+  if (key === 'recipe') {
+    selectBrowseTab('agent')
+    return
+  }
   const query = {}
   if (key) query.shelf = key
   router.push({ path: '/', query })
@@ -232,37 +272,22 @@ function goPublish(shelf = '') {
 }
 
 function reset() {
-  if (filters.shelf && filters.shelf !== 'all') {
-    router.push({ path: '/', query: { shelf: filters.shelf } })
-    return
-  }
   router.push({ path: '/' })
 }
 
 function applyFilter() {
   page.value = 1
-  filters.type = ''
   const query = {}
   if (filters.q) query.q = filters.q
-  if (filters.shelf && filters.shelf !== 'all') {
-    query.shelf = filters.shelf
-  } else if (filters.q) {
-    query.shelf = 'all'
-  }
+  if (filters.type) query.type = filters.type
+  else if (filters.shelf && filters.shelf !== 'all') query.shelf = filters.shelf
+  else if (filters.q) query.shelf = 'all'
   if (filters.skill) query.skill = filters.skill
   if (filters.mcp) query.mcp = filters.mcp
-  const same =
-    String(route.query.q || '') === String(query.q || '') &&
-    String(route.query.shelf || '') === String(query.shelf || '') &&
-    String(route.query.skill || '') === String(query.skill || '') &&
-    String(route.query.mcp || '') === String(query.mcp || '') &&
-    !route.query.type
-  if (!same) {
-    router.push({ path: '/', query })
-    return
-  }
-  load()
+  if (filters.sort && filters.sort !== 'latest') query.sort = filters.sort
+  router.push({ path: '/', query })
 }
+
 
 function goPage(p) {
   if (p < 1 || p > totalPages.value) return
@@ -283,37 +308,50 @@ function useSort(sort) {
 }
 
 onMounted(() => {
-  if (route.query.skill) {
-    filters.skill = String(route.query.skill)
-    showAdvanced.value = true
-  }
-  if (route.query.mcp) {
-    filters.mcp = String(route.query.mcp)
-    showAdvanced.value = true
-  }
-  if (route.query.type) filters.type = String(route.query.type)
-  if (route.query.shelf) filters.shelf = String(route.query.shelf)
-  if (route.query.q) filters.q = String(route.query.q)
-  if (route.query.sort) filters.sort = String(route.query.sort)
-  if ((filters.skill || filters.mcp) && !filters.shelf && !filters.type) {
-    filters.shelf = 'all'
-  }
+  syncFromRoute()
   load()
   loadMy()
 })
+
+function syncFromRoute() {
+  filters.skill = route.query.skill ? String(route.query.skill) : ''
+  filters.mcp = route.query.mcp ? String(route.query.mcp) : ''
+  filters.type = route.query.type ? String(route.query.type) : ''
+  filters.shelf = route.query.shelf ? String(route.query.shelf) : ''
+  filters.q = route.query.q ? String(route.query.q) : ''
+  filters.sort = route.query.sort ? String(route.query.sort) : 'latest'
+  if (filters.skill || filters.mcp) showAdvanced.value = true
+  if (filters.type === 'skill') filters.tab = 'skill'
+  else if (filters.type === 'agent') filters.tab = 'agent'
+  else if (MORE_BROWSE_KINDS.includes(filters.type)) filters.tab = 'more'
+  else if (filters.shelf === 'install') filters.tab = 'install'
+  else filters.tab = ''
+  if ((filters.skill || filters.mcp) && !filters.shelf && !filters.type) {
+    filters.shelf = 'all'
+  }
+}
+
+watch(
+  () => route.fullPath,
+  () => {
+    page.value = 1
+    syncFromRoute()
+    load()
+  }
+)
 </script>
 
 <template>
   <div>
     <div class="shelf-tabs mb-16">
       <button
-        v-for="t in shelfTabs"
+        v-for="t in browseTabs"
         :key="t.key || 'rec'"
         type="button"
         class="shelf-tab"
-        :class="{ active: activeShelfTab === t.key && !(filters.q && filters.shelf === 'all') }"
+        :class="{ active: activeBrowseTab === t.key && !(filters.q && filters.shelf === 'all') }"
         :title="t.hint"
-        @click="selectShelf(t.key)"
+        @click="selectBrowseTab(t.key)"
       >
         {{ t.label }}
       </button>
@@ -409,9 +447,24 @@ onMounted(() => {
     </div>
 
     <div v-if="showDiscovery" class="discover-footer mb-16">
-      <button class="btn" type="button" @click="selectShelf('install')">安装包</button>
-      <button class="btn" type="button" @click="selectShelf('recipe')">配方</button>
-      <button class="btn" type="button" @click="selectShelf('brick')">积木</button>
+      <button class="btn" type="button" @click="selectBrowseTab('skill')">技能</button>
+      <button class="btn" type="button" @click="selectBrowseTab('install')">安装包</button>
+      <button class="btn" type="button" @click="selectBrowseTab('agent')">助手</button>
+      <button class="btn" type="button" @click="selectBrowseTab('more')">更多</button>
+    </div>
+
+    <div v-if="activeBrowseTab === 'more'" class="panel toolbar mb-16">
+      <span class="muted" style="font-size: 13px; margin-right: 8px">类型</span>
+      <button
+        v-for="k in MORE_BROWSE_KINDS"
+        :key="k"
+        type="button"
+        class="btn btn-sm"
+        :class="{ 'btn-primary': filters.type === k }"
+        @click="router.push({ path: '/', query: { type: k } })"
+      >
+        {{ TYPE_LABELS[k] }}
+      </button>
     </div>
 
     <template v-if="showCatalog">

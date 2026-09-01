@@ -1,6 +1,6 @@
 """能力市场货架与 kind 语义（控制面目录，不是六个并列商店）。
 
-type 字段 = kind；门户按 shelf（积木 / 配方 / 安装包）组织。
+type 字段 = kind；门户按 shelf（组件 / 助手 / 安装包）组织。
 """
 
 from __future__ import annotations
@@ -10,20 +10,20 @@ from typing import Any
 SHELVES: dict[str, dict[str, Any]] = {
     "brick": {
         "key": "brick",
-        "label": "积木",
-        "description": "Skill / MCP（及供编排节点用的 Tool）。给配方与安装包引用。",
+        "label": "组件",
+        "description": "技能 / 连接器 / 编排函数。发布与高级筛选用。",
         "kinds": ["skill", "mcp", "tool"],
     },
     "recipe": {
         "key": "recipe",
-        "label": "配方",
-        "description": "Agent（可含 TEAM.md 团队流水线）与能力编排 Workflow 平行。",
+        "label": "助手",
+        "description": "助手（Agent，可含 TEAM.md）与能力编排平行。",
         "kinds": ["agent", "workflow"],
     },
     "install": {
         "key": "install",
         "label": "安装包",
-        "description": "Plugin：Agent Plugins 一键分发。不是通道类 src/plugins。",
+        "description": "一次分发技能 + 连接器（可选助手）。不是通道类 src/plugins。",
         "kinds": ["plugin"],
     },
 }
@@ -34,47 +34,72 @@ KIND_SHELF: dict[str, str] = {
     for kind in shelf["kinds"]
 }
 
-# 浏览默认：安装包 + 配方（不含积木；积木需显式筛选）
-DEFAULT_BROWSE_KINDS = ("plugin", "agent", "workflow")
-
+# 浏览默认：技能 + 安装包 + 助手（连接器/编排进「更多」）
+DEFAULT_BROWSE_KINDS = ("skill", "plugin", "agent")
+MORE_BROWSE_KINDS = ("mcp", "workflow", "tool")
 KIND_META: dict[str, dict[str, str]] = {
     "skill": {
         "shelf": "brick",
-        "what": "可复用 SOP（SKILL.md）",
-        "install": "config/.../skills/",
-        "runs_in": "Agent skill 工具激活",
+        "what": "SOP 说明书（SKILL.md）；自己不执行",
+        "install": "config/.../skills/（cap install --type skill）",
+        "runs_in": "Agent 的 skill 元工具读入上下文",
+        "local_install": "yes",
     },
     "mcp": {
         "shelf": "brick",
-        "what": "连接器；发现出的 tools 可调",
-        "install": "mcp_servers.json",
+        "what": "连接器；真正可调的是发现出的 tools（≠ 市场 tool kind）",
+        "install": "mcp_servers.json（cap install --type mcp）",
         "runs_in": "MCPManager / 网关 / IDE",
+        "local_install": "yes",
     },
     "tool": {
         "shelf": "brick",
-        "what": "沙箱函数，主要给能力编排节点",
-        "install": "仅云端 invoke，不写 src/tools",
+        "what": "云端沙箱函数；≠ MCP tools，≠ 宿主 src/tools",
+        "install": "无本地安装；仅 POST /api/runtime/tools/{name}/invoke",
         "runs_in": "runtime 沙箱 / workflow 节点",
+        "local_install": "no",
     },
     "agent": {
         "shelf": "recipe",
-        "what": "人设+依赖；可选 TEAM.md 团队流水线",
-        "install": "config/agents/<name>/",
+        "what": "人设+依赖容器；日常靠 skill 说明书 + MCP tools",
+        "install": "config/agents/<name>/（cap install）",
         "runs_in": "零号员工 / A2A；试用 runtime",
+        "local_install": "yes",
     },
     "workflow": {
         "shelf": "recipe",
         "what": "已上架能力的静态 DAG（与 TEAM.md 平行）",
-        "install": "不进 Agent 目录",
+        "install": "不进 Agent 目录；无 cap install",
         "runs_in": "市场云端 workflows",
+        "local_install": "no",
     },
     "plugin": {
         "shelf": "install",
-        "what": "Agent Plugins 分发包",
-        "install": "拆 component；Cursor 装 skills+mcp",
+        "what": "分发袋：拆 skill/mcp/可选 agent/tool",
+        "install": "config/plugins/<name>/（cap install --type plugin）",
         "runs_in": "IDE / 本地引擎执行子组件",
+        "local_install": "yes",
     },
 }
+
+# Agent 引用 skill/mcp 的三种来源（效果不同）
+REF_WAYS = [
+    {
+        "id": "ref",
+        "label": "dependencies.json 引用",
+        "note": "独立上架商品；cap install agent 时按类型下载装入该 Agent 目录",
+    },
+    {
+        "id": "embed",
+        "label": "包内嵌 skills/ mcp/",
+        "note": "只服务本 Agent；不拆行逛店；同名上架时详情 used_by",
+    },
+    {
+        "id": "plugin_component",
+        "label": "plugin 拆包",
+        "note": "子项打 plugin-component；默认隐藏；装 plugin 时再装已发布子组件",
+    },
+]
 
 ORCHESTRATION = {
     "team_pipeline": {
@@ -134,16 +159,27 @@ def taxonomy_payload() -> dict[str, Any]:
         "shelves": SHELVES,
         "kinds": KIND_META,
         "default_browse_kinds": list(DEFAULT_BROWSE_KINDS),
+        "more_browse_kinds": list(MORE_BROWSE_KINDS),
         "orchestration": ORCHESTRATION,
         "consume_ways": CONSUME_WAYS,
         "review_checklist": REVIEW_CHECKLIST,
         "install_policies": list(INSTALL_POLICIES),
+        "ref_ways": REF_WAYS,
+        "local_install_kinds": [
+            k for k, meta in KIND_META.items() if meta.get("local_install") == "yes"
+        ],
         "domain": {
             "asset": "逻辑能力（唯一 name）",
             "version": "Capability 行（name+version）；status 生命周期",
             "artifact": "能力包 zip + checksum",
             "relation": "depends_on / embeds / component_of / used_by（存于 input_schema 与 tags）",
             "owner": "author_id + organization",
-            "note": "type 字段即 kind；不必先拆表",
+            "note": (
+                "type 字段即 kind；不必先拆表。"
+                "逛店默认 skill+plugin+agent；"
+                "agent 日常 = skill 说明书 + MCP 发现的 tools；"
+                "市场 tool ≠ MCP tools ≠ 宿主 src/tools；"
+                "cap install 仅 agent/skill/mcp/plugin。"
+            ),
         },
     }

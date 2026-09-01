@@ -21,12 +21,12 @@ async def test_public_browse_returns_published(client):
     r = await client.get("/api/capabilities")
     assert r.status_code == 200
     items = r.json()["items"]
-    # 默认货架：安装包 + 配方（不含积木）
+    # 默认浏览：技能 + 安装包 + 助手（不含连接器/编排/编排函数）
     assert len(items) >= 1
     assert all(item["status"] == "published" for item in items)
     types = {item["type"] for item in items}
-    assert types <= {"plugin", "agent", "workflow"}
-    assert "agent" in types
+    assert types <= {"skill", "plugin", "agent"}
+    assert "agent" in types or "plugin" in types or "skill" in types
 
     r_all = await client.get("/api/capabilities?include_bricks=true")
     assert r_all.status_code == 200

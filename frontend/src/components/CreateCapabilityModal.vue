@@ -165,8 +165,8 @@ async function create() {
 
       <template v-if="step === 'intent'">
         <div class="muted" style="font-size: 13px; line-height: 1.5; margin-bottom: 12px">
-          开发者发布入口：先选意图（积木 / 配方 / 安装包），再选 kind。
-          对标飞书 SkillHub——本站负责沉淀与分发；对话执行在零号员工 / IDE。
+          本站负责能力沉淀与分发；执行在零号员工 / IDE。
+          想一次装齐场景能力？优先选「发安装包」。
         </div>
         <div class="intent-grid">
           <button
@@ -207,7 +207,7 @@ async function create() {
         </div>
 
         <div class="field mt-12">
-          <label>kind</label>
+          <label>类型</label>
           <div class="kind-row">
             <button
               v-for="k in kindsInShelf"
@@ -232,6 +232,7 @@ async function create() {
         <div v-if="form.type === 'agent'" class="alert mt-12" style="font-size: 13px">
           有 <code>TEAM.md</code> 时为<strong>{{ ORCH_LABELS.team.name }}</strong>（角色协作，在零号员工执行）。
           不要用能力编排 Workflow 去替代 TEAM.md。
+          依赖的 skill / mcp 需先上架；若想一次内嵌，请改发「安装包」。
         </div>
         <div v-if="form.type === 'workflow'" class="alert mt-12" style="font-size: 13px">
           <strong>{{ ORCH_LABELS.capability.name }}</strong>：节点是已上架能力，只在云端执行，不进 Agent 目录。

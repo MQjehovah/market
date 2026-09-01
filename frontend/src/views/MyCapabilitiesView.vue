@@ -1,18 +1,21 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
+import { authState } from '../stores/auth'
 import {
   TYPE_LABELS,
   VISIBILITY_LABELS,
   formatDate,
-  shelfLabel
+  shelfLabel,
+  ownedTodoBucket
 } from '../utils/format'
 import StatusBadge from '../components/StatusBadge.vue'
 import CreateCapabilityModal from '../components/CreateCapabilityModal.vue'
 import DebugCapabilityModal from '../components/DebugCapabilityModal.vue'
 
 const route = useRoute()
+const router = useRouter()
 /** mainTab: owned | added — 对齐截图「审核 / 已上架」双页签，对应「我创建的 / 已加入」 */
 const mainTab = ref('owned')
 const caps = ref([])
@@ -26,6 +29,8 @@ const filters = reactive({ q: '' })
 const page = ref(1)
 const pageSize = ref(20)
 const confirmAction = ref(null)
+
+const isPublisher = computed(() => ['admin', 'publisher'].includes(authState.user?.role))
 
 const TYPE_COLORS = {
   plugin: '#2f6bff',
@@ -113,6 +118,18 @@ function sourceLabel(cap) {
 
 function visibilityLabel(cap) {
   return VISIBILITY_LABELS[cap.visibility] || cap.visibility || '—'
+}
+
+function packageTargetId(cap) {
+  return cap.has_draft && cap.draft_id ? cap.draft_id : cap.id
+}
+
+function goUploadPackage(cap) {
+  router.push({ path: `/capabilities/${packageTargetId(cap)}`, query: { focus: 'package' } })
+}
+
+function canShowAgentEdit(cap) {
+  return cap.type === 'agent' && isPublisher.value
 }
 
 async function load() {
@@ -250,7 +267,10 @@ onMounted(() => {
     <div class="page-head">
       <div>
         <h1 class="page-title">我的能力</h1>
-        <p class="page-desc muted">管理我创建与已加入的能力；生产安装请用 cap install。</p>
+        <p class="page-desc muted">
+          ① 发安装包 → ② 上传 zip 并提交审核 → ③ 上架后加入，再用 cap install 装到本地。
+          加入≠安装。
+        </p>
       </div>
       <button class="btn btn-primary" type="button" @click="openCreate()">发布能力</button>
     </div>
@@ -292,7 +312,16 @@ onMounted(() => {
 
     <div class="panel table-panel">
       <div v-if="caps.length === 0" class="empty">
-        还没有能力。去<a href="/" style="color: var(--primary)">发现</a>逛逛，或点击「发布能力」。
+        还没有能力。小白推荐路径：
+        <ol style="text-align: left; display: inline-block; margin: 12px 0; padding-left: 20px">
+          <li>点「发布能力」→ 选「发安装包」</li>
+          <li>下载空模板 / 上传 zip → 提交审核</li>
+          <li>上架后加入，本地执行 <code>cap install … --type plugin</code></li>
+        </ol>
+        <div>
+          <button class="btn btn-primary" type="button" @click="openCreate('install')">发安装包</button>
+          <a href="/" style="margin-left: 12px; color: var(--primary)">去发现逛逛</a>
+        </div>
       </div>
       <div v-else-if="filteredCaps.length === 0" class="empty">没有符合筛选条件的能力</div>
       <table v-else class="skill-table">
@@ -342,7 +371,18 @@ onMounted(() => {
                   @click="debugCap = cap"
                 >试用</button>
                 <template v-if="cap.has_draft">
-                  <button class="op-link success" type="button" @click="submitDraft(cap)">提交审核</button>
+                  <button
+                    v-if="ownedTodoBucket(cap) === 'missing_package'"
+                    class="op-link"
+                    type="button"
+                    @click="goUploadPackage(cap)"
+                  >去上传能力包</button>
+                  <button
+                    v-else
+                    class="op-link success"
+                    type="button"
+                    @click="submitDraft(cap)"
+                  >提交审核</button>
                   <router-link
                     v-if="cap.type === 'workflow'"
                     :to="`/workflows/${cap.draft_id}/edit`"
@@ -354,7 +394,7 @@ onMounted(() => {
                     class="op-link"
                   >编辑</router-link>
                   <router-link
-                    v-else-if="cap.type === 'agent'"
+                    v-else-if="canShowAgentEdit(cap)"
                     :to="`/agents/${encodeURIComponent(cap.name)}/edit`"
                     class="op-link"
                   >编辑</router-link>
@@ -370,7 +410,18 @@ onMounted(() => {
                   >编辑</router-link>
                 </template>
                 <template v-else-if="cap.owned && ['draft', 'returned', 'rejected'].includes(cap.status)">
-                  <button class="op-link success" type="button" @click="submit(cap)">提交审核</button>
+                  <button
+                    v-if="ownedTodoBucket(cap) === 'missing_package'"
+                    class="op-link"
+                    type="button"
+                    @click="goUploadPackage(cap)"
+                  >去上传能力包</button>
+                  <button
+                    v-else
+                    class="op-link success"
+                    type="button"
+                    @click="submit(cap)"
+                  >提交审核</button>
                   <router-link
                     v-if="cap.type === 'workflow'"
                     :to="`/workflows/${cap.id}/edit`"
@@ -382,7 +433,7 @@ onMounted(() => {
                     class="op-link"
                   >编辑</router-link>
                   <router-link
-                    v-else-if="cap.type === 'agent'"
+                    v-else-if="canShowAgentEdit(cap)"
                     :to="`/agents/${encodeURIComponent(cap.name)}/edit`"
                     class="op-link"
                   >编辑</router-link>

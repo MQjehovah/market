@@ -51,6 +51,7 @@ a:hover { color: var(--primary-2); }
   overflow: auto;
 }
 .app-main-full { max-width: none; padding: 0; }
+.app-main-admin { padding: 16px 20px 40px; }
 
 .panel {
   background: var(--panel);

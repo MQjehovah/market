@@ -9,20 +9,45 @@
 
 对标思路：Backstage Catalog（实体分 kind）+ 私有制品库（SemVer）+ Agent Registry / MCP Gateway（治理与入口）+ Cursor Team Marketplace（安装策略）+ 飞书 SkillHub（企业技能分发/治理闭环）。
 
-## 三货架（type = kind，不是六个并列商店）
+## 三货架（type = kind；逛店 Tab ≠ 货架一一对应）
 
-| 货架 | kind | 含义 | 装到哪 / 谁执行 |
+| 货架 key | 中文 | kind | 含义 | 装到哪 / 谁执行 |
+| --- | --- | --- | --- | --- |
+| **组件** `brick` | 组件 | `skill` | SOP（SKILL.md） | `config/.../skills/`；Agent 的 `skill` 工具激活 |
+| **组件** | 组件 | `mcp` | 连接器 | `mcp_servers.json`；MCPManager / 网关 / IDE |
+| **组件** | 组件 | `tool` | 沙箱函数，主要给能力编排节点 | 仅云端 invoke；**不是** `src/tools` |
+| **助手** `recipe` | 助手 | `agent` | 人设 + 依赖；可选 **TEAM.md 团队流水线** | `cap install` → `config/agents/<name>/` |
+| **助手** | 助手 | `workflow` | **能力编排**（已上架能力的静态 DAG） | 只云端执行，**不进** Agent 目录 |
+| **安装包** `install` | 安装包 | `plugin` | 一键分发技能+连接器（可选助手） | 拆子能力；Cursor 可用 skills+mcp |
+
+逛店顶栏：**推荐 | 技能 | 安装包 | 助手 | 更多**。  
+推荐默认浏览：`skill + plugin + agent`。连接器 / 能力编排 / 编排函数进「更多」。`plugin-component` 默认隐藏。
+
+元数据：`GET /api/meta/taxonomy`。空模板：`GET /api/meta/package-templates/{kind}`。
+
+## skill / tool / mcp / agent 关系
+
+四个 kind **不是同一层东西**。市场 `tool`、MCP 发现出的 tools、零号员工 `src/tools` **不是同一种**。
+
+| kind | 是什么 | 自己干活吗 | 主消费路径 |
 | --- | --- | --- | --- |
-| **积木** | `skill` | SOP（SKILL.md） | `config/.../skills/`；Agent 的 `skill` 工具激活 |
-| **积木** | `mcp` | 连接器 | `mcp_servers.json`；MCPManager / 网关 / IDE |
-| **积木**（不主推浏览） | `tool` | 沙箱函数，主要给能力编排节点 | 仅云端 invoke；**不是** `src/tools` |
-| **配方** | `agent` | 人设 + 依赖；可选 **TEAM.md 团队流水线** | `cap install` → `config/agents/<name>/` |
-| **配方** | `workflow` | **能力编排**（已上架能力的静态 DAG） | 只云端执行，**不进** Agent 目录 |
-| **安装包** | `plugin` | Agent Plugins 一键分发 | 拆子能力；Cursor 可用 skills+mcp |
+| **skill** | SOP（`SKILL.md`） | 否；装进 Agent 后由名为 `skill` 的元工具读进上下文 | `cap install` → `skills/` |
+| **mcp** | 连接器（`connection.json`） | 否；连上后 **发现出的 tools** 才可调 | `cap install` → `mcp_servers.json` |
+| **tool** | 云端沙箱 `tool.py` | 是（仅市场沙箱 / workflow 节点） | `POST /api/runtime/tools/{name}/invoke`；**无**本地安装 |
+| **agent** | 人设（`PROMPT.md`）+ 依赖清单 | 对话在零号员工 / A2A | `cap install` → `config/agents/<name>/` |
 
-门户默认浏览：**Plugin + Agent + Workflow**。积木用货架「积木」或 kind 筛选。`plugin-component` 默认隐藏。
+Agent 日常主路：**skill 当说明书** + **MCP 发现出的 tools 当手**。市场 `tool` 若出现在 `dependencies.json` 里，本地只生成 HTTP 桥，真正执行仍打回市场沙箱。
 
-元数据：`GET /api/meta/taxonomy`。
+Agent 拿到 skill / mcp 的三种来源：
+
+1. **ref**：`dependencies.json` 指向已上架商品；`cap install` 时再下载装入该 Agent 目录  
+2. **内嵌**：zip 自带 `skills/`、`mcp/`；不单独逛店；同名上架时详情 `used_by`  
+3. **plugin 拆包**：上传后拆子草稿（`plugin-component`），默认不出现在目录列表  
+
+`cap install` 只支持 `agent / skill / mcp / plugin`。**workflow / tool 不进本地目录。**
+
+- **plugin**：分发袋，可带 skill / mcp / 可选 agent / 可选 tool  
+- **workflow**：云端 DAG，节点 `tool|agent|skill|mcp`；与 `TEAM.md`（角色流水线）平行、禁止互转  
 
 ## 双编排（平行，禁止互转）
 
@@ -54,6 +79,19 @@ cd frontend && npm install && npm run dev
 ```
 
 或 `start-dev.bat` / `start-dev.ps1`。演示账号：`admin/admin123`、`publisher/publisher123`、`user/user123456`。
+
+## 小白发布可安装场景（推荐：安装包）
+
+1. 登录 → 侧栏「发布能力」或首页「发布能力」  
+2. 选 **发安装包** → 填名称/版本 → 创建草稿  
+3. 详情「管理」→ **下载空模板 zip** → 按需改内容 → 上传 zip  
+4. **提交审核**（无包时按钮为「去上传能力包」，不会空提交）  
+5. 管理员在治理后台通过  
+6. 发现页 **加入**（仅授权；加入≠安装）→ 复制 `cap install name@version --type plugin` 装到零号员工  
+
+MCP 注意：市场包必须是 `mcp.json` + `connection.json` + `tools.json` + `security.json`；不能直接上传 agent 仓里的 `mcp-server.json`。
+
+进阶：也可先上架技能/连接器，再发助手并在依赖里引用；依赖须已上架。
 
 ## 消费矩阵
 
@@ -97,7 +135,7 @@ config/agents/<name>/
   dependencies.json / installed.json
 ```
 
-业务函数经 MCP，不依赖未加载的 `config_dir/tools/*.py` 桥接。
+业务函数经 MCP（发现出的 tools）；市场 `tool` 仅云端沙箱 / Workflow。本地 Agent 依赖里的市场 tool 若有，也只是 HTTP 桥，不是宿主 BuiltinTool。
 
 ## 发布路径
 
