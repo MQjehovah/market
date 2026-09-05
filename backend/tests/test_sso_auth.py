@@ -4,6 +4,9 @@ helper(make_rsa_key/write_jwks/sign_token/valid_claims/enable_sso)与
 sso_env fixture、JWKS 缓存重置均在本文件内,保持独立可运行。
 
 依赖:PyJWT(自签 RS256 token)、python-jose[cryptography](验签)。
+
+后半部分是 get_current_user 双轨(HS256 | SSO)测试:复用本文件的 sso_env 签发
+RS256 token,建临时 sqlite 异步库 + db fixture 直调鉴权函数,隔离真实 DB。
 """
 
 import json
@@ -12,11 +15,17 @@ import time
 import jwt as pyjwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
+from fastapi import HTTPException
 from jose import jwk as jose_jwk
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.auth import create_access_token, get_current_user, get_current_user_optional
 from app.config import get_settings
 from app.core import sso_auth
 from app.core.sso_auth import SsoAuthError, verify_sso_token
+from app.database import Base
+from app.models import User
 
 ISSUER = "https://sso.example.com"
 AUDIENCE = "market-dashboard"
@@ -147,3 +156,154 @@ def test_verify_sso_token_rejects_unknown_kid(monkeypatch, tmp_path):
     token = sign_token(valid_claims(), key1, kid="ghost")
     with pytest.raises(SsoAuthError):
         verify_sso_token(token)
+
+
+# --------------------------------------------------------------------------
+# get_current_user 双轨鉴权（HS256 | SSO）测试
+# --------------------------------------------------------------------------
+
+SSO_EMP_NO = "10086"
+
+
+@pytest.fixture
+async def db(tmp_path):
+    """每测试一个独立 sqlite 文件库 + 单 async session（隔离真实 DB）。"""
+    db_path = tmp_path / "test_sso_auth_users.db"
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path.as_posix()}")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    session = maker()
+    try:
+        yield session
+    finally:
+        await session.close()
+        await engine.dispose()
+
+
+def _sso_employee_token(key, emp_no=SSO_EMP_NO, name=None, email=None):
+    claims = {"sub": emp_no}
+    if name is not None:
+        claims["name"] = name
+    if email is not None:
+        claims["email"] = email
+    return sign_token(valid_claims(**claims), key)
+
+
+async def _count_users(db) -> int:
+    return (await db.scalar(select(func.count()).select_from(User))) or 0
+
+
+async def test_get_current_user_sso_provisions_and_does_not_duplicate(sso_env, db):
+    """SSO 合法 token + 用户不存在 -> 自动建号返回该 User（username=工号）；
+    再次调用不重复建号（行数不变）。"""
+    key, _ = sso_env
+    token = _sso_employee_token(key, name="测试员工", email="10086@example.com")
+
+    user = await get_current_user(token, db)
+
+    assert user.username == SSO_EMP_NO
+    assert user.email == "10086@example.com"
+    assert user.display_name == "测试员工"
+    assert user.role == "user"
+    assert user.is_active is True
+    assert await _count_users(db) == 1
+
+    again = await get_current_user(token, db)
+    assert again.id == user.id
+    assert await _count_users(db) == 1
+
+
+async def test_get_current_user_sso_without_email_uses_derived_fallback(sso_env, db):
+    """claims 缺 email 时用派生自唯一 username 的占位邮箱，name 仍取自 claims。"""
+    key, _ = sso_env
+    token = _sso_employee_token(key, emp_no="20001", name="无名氏")
+
+    user = await get_current_user(token, db)
+
+    assert user.username == "20001"
+    assert user.email == "20001@sso.local"
+    assert user.display_name == "无名氏"
+
+
+async def test_get_current_user_sso_rejects_invalid_token(sso_env, db):
+    """双轨坏 token：无效字符串 -> 401（与轨1同 detail 风格）。"""
+    with pytest.raises(HTTPException) as exc_info:
+        await get_current_user("not.a.valid.jwt", db)
+    assert exc_info.value.status_code == 401
+
+
+async def test_get_current_user_sso_disabled_user_forbidden(sso_env, db):
+    """SSO 命中已存在但被禁用的用户 -> 403。"""
+    key, _ = sso_env
+    disabled = User(
+        username="10087",
+        email="10087@example.com",
+        password_hash="unused",
+        display_name="已禁用",
+        role="user",
+        is_active=False,
+    )
+    db.add(disabled)
+    await db.commit()
+
+    token = _sso_employee_token(key, emp_no="10087")
+    with pytest.raises(HTTPException) as exc_info:
+        await get_current_user(token, db)
+    assert exc_info.value.status_code == 403
+
+
+async def test_get_current_user_hs256_legacy_token_still_works(db):
+    """HS256 老轨回归：市场登录下发的 token 仍按原逻辑通过。"""
+    user = User(
+        username="legacy",
+        email="legacy@example.com",
+        password_hash="unused",
+        display_name="老用户",
+        role="user",
+        is_active=True,
+    )
+    db.add(user)
+    await db.commit()
+
+    token = create_access_token(user)
+    got = await get_current_user(token, db)
+
+    assert got.id == user.id
+    assert got.username == "legacy"
+
+
+async def test_get_current_user_hs256_disabled_user_unauthorized(db):
+    """HS256 老轨回归：命中已禁用用户 -> 401（与旧语义一致，非 403）。"""
+    user = User(
+        username="legacy_disabled",
+        email="legacy_disabled@example.com",
+        password_hash="unused",
+        role="user",
+        is_active=False,
+    )
+    db.add(user)
+    await db.commit()
+
+    token = create_access_token(user)
+    with pytest.raises(HTTPException) as exc_info:
+        await get_current_user(token, db)
+    assert exc_info.value.status_code == 401
+
+
+async def test_get_current_user_optional_invalid_token_returns_none(sso_env, db):
+    """get_current_user_optional：坏 token / 缺 token -> None（而非抛）。"""
+    assert await get_current_user_optional("not.a.valid.jwt", db) is None
+    assert await get_current_user_optional(None, db) is None
+
+
+async def test_get_current_user_optional_valid_sso_token_returns_user(sso_env, db):
+    """get_current_user_optional：合法 SSO token 同样走 SSO 轨自动建号。"""
+    key, _ = sso_env
+    token = _sso_employee_token(key, emp_no="30001", name="可选用户")
+
+    user = await get_current_user_optional(token, db)
+
+    assert user is not None
+    assert user.username == "30001"
+    assert user.display_name == "可选用户"

@@ -1,5 +1,6 @@
-"""JWT 认证与密码哈希。"""
+"""JWT 认证与密码哈希（HS256 老轨 + SSO/OIDC 新轨双轨鉴权）。"""
 
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
@@ -8,9 +9,11 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from passlib.context import CryptContext
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.core.sso_auth import SsoAuthError, verify_sso_token
 from app.database import get_db
 from app.models import User
 
@@ -42,6 +45,12 @@ async def get_current_user(
     token: Annotated[str, Depends(oauth2_scheme)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> User:
+    """双轨鉴权：先认自家 HS256 token，失败再试 SSO/OIDC 签发的 RS256 token。
+
+    轨1（HS256）保持原逻辑：sub=user UUID，不存在/已禁用 -> 401，零漂移。
+    轨2（SSO）sub=工号：用户不存在自动建号（role=user，最小角色）；
+    命中但已禁用 -> 403。两轨返回同类型 User 对象。
+    """
     credentials_exc = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="登录状态无效或已过期",
@@ -51,7 +60,8 @@ async def get_current_user(
     try:
         payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
     except jwt.PyJWTError:
-        raise credentials_exc
+        # 轨1失败：尝试 SSO 轨
+        return await _resolve_sso_user(db, token, credentials_exc)
     user_id = payload.get("sub")
     if not user_id:
         raise credentials_exc
@@ -59,6 +69,56 @@ async def get_current_user(
     if user is None or not user.is_active:
         raise credentials_exc
     return user
+
+
+async def _resolve_sso_user(
+    db: AsyncSession, token: str, credentials_exc: HTTPException
+) -> User:
+    """SSO 轨：校验 RS256 token 后按 username=工号 查/建 User。
+
+    校验失败 -> 401（与轨1同文案）；命中已禁用用户 -> 403。
+    """
+    try:
+        claims = verify_sso_token(token)
+    except SsoAuthError:
+        raise credentials_exc
+    username = str(claims["sub"])
+    user = await db.scalar(select(User).where(User.username == username))
+    if user is None:
+        user = _new_sso_user(username, claims)
+        db.add(user)
+        try:
+            await db.commit()
+        except IntegrityError:
+            # 并发建号竞态：username 唯一约束被其他请求抢建，回滚后回查兜底
+            await db.rollback()
+            user = await db.scalar(select(User).where(User.username == username))
+            if user is None:
+                raise
+        else:
+            await db.refresh(user)
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="账号已被禁用",
+        )
+    return user
+
+
+def _new_sso_user(username: str, claims: dict) -> User:
+    """按 SSO claims 建本地用户：role 取最小权限 user，email/name 有则取 claims。
+
+    email 为 NOT NULL UNIQUE，claims 缺省时用派生自唯一 username 的占位邮箱，
+    避免空串撞唯一索引；password_hash 置随机不可登录占位值（SSO 用户走免密）。
+    """
+    return User(
+        username=username,
+        email=claims.get("email") or f"{username}@sso.local",
+        password_hash=hash_password(secrets.token_urlsafe(32)),
+        display_name=claims.get("name") or claims.get("display_name") or username,
+        role="user",
+        is_active=True,
+    )
 
 
 async def get_current_user_optional(
