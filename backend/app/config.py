@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     # MCP 安装、工作流执行、A2A 委派）。默认仅管理员，可配成 "admin,publisher" 等。
     runtime_access_roles: str = "admin"
 
+    # SSO/OIDC 可选接入:配置 sso_issuer 后认证认 SSO token(D-ready)
+    sso_issuer: str = ""
+    sso_audience: str = ""
+    sso_jwks_uri: str = ""
+
     @property
     def base_dir(self) -> Path:
         """后端项目根目录（backend/）。"""
