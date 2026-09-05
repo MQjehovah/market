@@ -90,11 +90,16 @@ async def _resolve_sso_user(
         try:
             await db.commit()
         except IntegrityError:
-            # 并发建号竞态：username 唯一约束被其他请求抢建，回滚后回查兜底
+            # 并发建号竞态:username 唯一约束被其他请求抢建,回滚后回查兜底
             await db.rollback()
             user = await db.scalar(select(User).where(User.username == username))
             if user is None:
-                raise
+                # 回查仍无说明冲突非 username(病态场景:疑似 email 撞已存在账号),
+                # 抛友好 409 而非裸 500(IntegrityError 不属于 HTTPException)
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="用户创建冲突,请联系管理员",
+                )
         else:
             await db.refresh(user)
     if not user.is_active:

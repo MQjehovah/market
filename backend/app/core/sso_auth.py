@@ -15,6 +15,7 @@ from urllib.request import url2pathname
 from jose import exceptions as jose_exceptions
 from jose import jwk as jose_jwk
 from jose import jwt as jose_jwt
+from jose.exceptions import JOSEError
 
 from app.config import get_settings
 
@@ -76,22 +77,38 @@ def _get_jwks() -> dict:
         return data
 
 
-def _find_key(kid: str | None) -> dict:
-    """在 JWKS keys 中定位公钥:优先按 kid 匹配,无 kid 时取第一把兜底。"""
+def _find_key(kid: str | None):
+    """在 JWKS keys 中定位公钥:按 kid 匹配,找不到返回 None;无 kid 取第一把兜底。"""
     keys = _get_jwks().get("keys") or []
     if not keys:
         raise SsoAuthError("JWKS 文档缺少 keys")
-    if kid:
-        for item in keys:
-            if item.get("kid") == kid:
-                return item
-        raise SsoAuthError(f"JWKS 中找不到 kid={kid!r}")
-    return keys[0]
+    if not kid:
+        return keys[0]
+    for item in keys:
+        if item.get("kid") == kid:
+            return item
+    return None
+
+
+def _invalidate_jwks_cache() -> None:
+    """清空 JWKS 缓存,下次 _get_jwks 强制重拉。"""
+    _jwks_cache["uri"] = ""
+    _jwks_cache["data"] = None
+    _jwks_cache["fetched_at"] = 0.0
 
 
 def _public_key(kid: str | None):
-    """把 JWK dict 构造成可验签的公钥对象(cryptography RSAKey)。"""
+    """把 JWK dict 构造成可验签的公钥对象(cryptography RSAKey)。
+
+    kid 未命中时清缓存重拉一次兜底(防 IdP 轮换密钥在 TTL 内导致全线 401),
+    重拉后仍无匹配则抛 SsoAuthError。
+    """
     jwk_dict = _find_key(kid)
+    if jwk_dict is None:
+        _invalidate_jwks_cache()
+        jwk_dict = _find_key(kid)
+    if jwk_dict is None:
+        raise SsoAuthError("找不到匹配的签名密钥")
     return jose_jwk.construct(jwk_dict, algorithm=ALGORITHM)
 
 
@@ -120,7 +137,9 @@ def verify_sso_token(token: str) -> dict:
         )
     except SsoAuthError:
         raise
-    except jose_exceptions.JWTError as e:
+    except JOSEError as e:
+        # JOSEError 覆盖 JWTError 及其兄弟类 JWKError(公钥构造失败),
+        # 单捕 JWTError 会让 JWKError 裸抛 500
         raise SsoAuthError(f"SSO token 无效: {e}") from e
     if not claims.get("sub"):
         raise SsoAuthError("SSO token 缺少 sub(工号)")

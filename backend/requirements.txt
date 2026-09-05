@@ -6,6 +6,8 @@ asyncpg>=0.29
 pydantic>=2.7
 pydantic-settings>=2.3
 PyJWT>=2.8
+# SSO/OIDC 验签(sso_auth 与 auth 顶层 import jose),单独 pin 防干净安装缺失
+python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7
 # passlib 1.7.4 与 bcrypt>=4.1 不兼容（bcrypt.__about__ 被移除），锁定版本
 bcrypt==4.0.1
