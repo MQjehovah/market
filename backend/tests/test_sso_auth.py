@@ -80,11 +80,16 @@ def _cleanup_sso_settings_and_cache(monkeypatch):
     monkeypatch.setattr(settings, "sso_issuer", "")
     monkeypatch.setattr(settings, "sso_audience", "")
     monkeypatch.setattr(settings, "sso_jwks_uri", "")
+    monkeypatch.setattr(settings, "sso_client_id", "market")
+    monkeypatch.setattr(settings, "sso_client_secret", "")
+    monkeypatch.setattr(settings, "sso_redirect_uri", "")
+    monkeypatch.setattr(settings, "sso_redirect_target", "/login")
 
     def _reset():
         sso_auth._jwks_cache["data"] = None
         sso_auth._jwks_cache["fetched_at"] = 0.0
         sso_auth._jwks_cache["uri"] = ""
+        sso_auth._states.clear()
 
     _reset()
     yield
@@ -307,3 +312,43 @@ async def test_get_current_user_optional_valid_sso_token_returns_user(sso_env, d
     assert user is not None
     assert user.username == "30001"
     assert user.display_name == "可选用户"
+
+
+async def test_sso_start_disabled_returns_404(client):
+    r = await client.get("/api/auth/sso/start", follow_redirects=False)
+    assert r.status_code == 404
+
+
+async def test_sso_start_redirects_when_configured(sso_env, client, monkeypatch):
+    # sso_env 已打开 issuer;补登录跳转配置
+    settings = get_settings()
+    monkeypatch.setattr(settings, "sso_redirect_uri", "http://127.0.0.1:8000/api/auth/oidc/callback")
+    r = await client.get("/api/auth/sso/start", follow_redirects=False)
+    assert r.status_code == 302
+    loc = r.headers["location"]
+    assert loc.startswith(ISSUER + "/authorize?")
+    assert "state=" in loc
+    assert "client_id=market" in loc
+
+
+async def test_oidc_callback_rejects_bad_state(sso_env, client, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "sso_redirect_uri", "http://127.0.0.1:8000/api/auth/oidc/callback")
+    r = await client.get(
+        "/api/auth/oidc/callback",
+        params={"code": "abc", "state": "bad"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 401
+
+
+async def test_http_me_accepts_sso_token(sso_env, client):
+    """HTTP 层:SSO access/id token 作为 Bearer 可打 /api/auth/me 并自动建号。"""
+    key, _ = sso_env
+    token = _sso_employee_token(key, emp_no="10086", name="测试员工", email="10086@example.com")
+    r = await client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["username"] == "10086"
+    assert body["display_name"] == "测试员工"
+    assert body["role"] == "user"

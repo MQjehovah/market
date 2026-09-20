@@ -71,6 +71,10 @@ router.beforeEach((to) => {
       return { path: '/login', query: { redirect: to.fullPath } }
     }
   }
+  // SSO 回调会带 sso_token 落到 /login，即使本地还有旧会话也要先吃掉新 token
+  if (to.path === '/login' && typeof to.query.sso_token === 'string' && to.query.sso_token) {
+    return true
+  }
   if (authState.token && (to.path === '/login' || to.path === '/register')) {
     return typeof to.query.redirect === 'string' ? to.query.redirect : '/'
   }

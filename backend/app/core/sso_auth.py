@@ -3,11 +3,16 @@
 与 app.auth(自家 HS256 token)相互独立。本模块专验 SSO 签发的 RS256 token,
 通过则返回 claims,其中 sub 视为工号,供后续 D-ready 的 get_current_user
 接入使用。未配置 sso_issuer 时按 SSO 禁用处理。
+
+另提供授权码登录:build_authorize_url / exchange_code / state 一次性校验。
 """
 
+import base64
 import json
+import secrets
 import threading
 import time
+import urllib.parse
 import urllib.request
 from urllib.parse import urlparse
 from urllib.request import url2pathname
@@ -22,6 +27,7 @@ from app.config import get_settings
 ALGORITHM = "RS256"
 
 JWKS_CACHE_TTL_SECONDS = 300
+STATE_TTL_SECONDS = 300
 
 
 class SsoAuthError(Exception):
@@ -31,6 +37,28 @@ class SsoAuthError(Exception):
 # 模块级 JWKS 缓存:同一 sso_jwks_uri 在 TTL 内只拉一次,简单锁防并发重复拉取
 _jwks_cache = {"uri": "", "data": None, "fetched_at": 0.0}
 _jwks_lock = threading.Lock()
+
+
+def is_configured() -> bool:
+    """仅配置了 issuer 即可验 SSO token;登录跳转还需 client/redirect。"""
+    return bool(get_settings().sso_issuer)
+
+
+def is_login_configured() -> bool:
+    settings = get_settings()
+    return bool(settings.sso_issuer and settings.sso_client_id and settings.sso_redirect_uri)
+
+
+def _resolve_jwks_uri() -> str:
+    """JWKS 地址:显式配置优先,无则由 issuer 推断。"""
+    settings = get_settings()
+    uri = (settings.sso_jwks_uri or "").strip()
+    if uri:
+        return uri
+    issuer = (settings.sso_issuer or "").strip()
+    if issuer:
+        return issuer.rstrip("/") + "/.well-known/jwks.json"
+    return ""
 
 
 def _read_jwks(uri: str) -> dict:
@@ -51,8 +79,7 @@ def _read_jwks(uri: str) -> dict:
 
 def _get_jwks() -> dict:
     """带缓存的 JWKS 获取:TTL 内命中缓存,过期或换 URI 时加锁重拉。"""
-    settings = get_settings()
-    uri = settings.sso_jwks_uri
+    uri = _resolve_jwks_uri()
     if not uri:
         raise SsoAuthError("SSO not configured")
     cache = _jwks_cache
@@ -144,3 +171,72 @@ def verify_sso_token(token: str) -> dict:
     if not claims.get("sub"):
         raise SsoAuthError("SSO token 缺少 sub(工号)")
     return claims
+
+
+def build_authorize_url(state: str) -> str:
+    """构造 SSO OIDC 授权跳转 URL(code;PKCE 由 SSO 端按需处理)。"""
+    settings = get_settings()
+    issuer = (settings.sso_issuer or "").strip()
+    if not issuer:
+        raise SsoAuthError("SSO not configured")
+    params = {
+        "response_type": "code",
+        "client_id": settings.sso_client_id,
+        "redirect_uri": settings.sso_redirect_uri,
+        "state": state,
+        "scope": "openid profile",
+    }
+    return issuer.rstrip("/") + "/authorize?" + urllib.parse.urlencode(params)
+
+
+def exchange_code(code: str) -> str:
+    """authorization_code → token 交换,返回 id_token 字符串。"""
+    settings = get_settings()
+    issuer = (settings.sso_issuer or "").strip()
+    if not issuer:
+        raise SsoAuthError("SSO not configured")
+    form = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": settings.sso_redirect_uri,
+        "client_id": settings.sso_client_id,
+    }
+    secret = settings.sso_client_secret
+    if secret:
+        form["client_secret"] = secret
+    data = urllib.parse.urlencode(form).encode("utf-8")
+    req = urllib.request.Request(issuer.rstrip("/") + "/token", data=data, method="POST")
+    if secret:
+        basic = base64.b64encode(f"{settings.sso_client_id}:{secret}".encode()).decode("ascii")
+        req.add_header("Authorization", "Basic " + basic)
+    req.add_header("Content-Type", "application/x-www-form-urlencoded")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except (OSError, ValueError) as e:
+        raise SsoAuthError(f"SSO token 交换失败: {e}") from e
+    id_token = payload.get("id_token")
+    if not id_token:
+        raise SsoAuthError("SSO token 响应缺少 id_token")
+    return id_token
+
+
+_states: dict[str, float] = {}
+_states_lock = threading.Lock()
+
+
+def new_state() -> str:
+    """生成一次性 state(随机短串)并记录时间戳。"""
+    st = secrets.token_urlsafe(16)
+    with _states_lock:
+        _states[st] = time.time()
+    return st
+
+
+def validate_state(state: str) -> bool:
+    """校验并消费 state:过期/不存在返回 False。"""
+    with _states_lock:
+        found = _states.pop(state, None)
+    if found is None:
+        return False
+    return (time.time() - found) <= STATE_TTL_SECONDS

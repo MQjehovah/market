@@ -1,10 +1,14 @@
 import time
+import urllib.parse
 from collections import defaultdict, deque
 
 from fastapi import APIRouter, HTTPException, Request, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy import or_, select
 
-from app.auth import CurrentUser, DbSession, create_access_token, hash_password, verify_password
+from app.auth import CurrentUser, DbSession, _resolve_sso_user, create_access_token, hash_password, verify_password
+from app.config import get_settings
+from app.core import sso_auth
 from app.models import User
 from app.schemas import ChangePasswordRequest, MessageOut, TokenOut, UserLogin, UserOut, UserRegister
 from app.services.install_policy import ensure_default_on_joins
@@ -61,6 +65,45 @@ async def login(data: UserLogin, request: Request, db: DbSession):
     _login_failures.pop(key, None)
     await ensure_default_on_joins(db, user)
     return TokenOut(access_token=create_access_token(user), user=UserOut.model_validate(user))
+
+
+@router.get("/sso/start")
+async def sso_start():
+    """生成一次性 state 并 302 跳转到 SSO authorize 页。"""
+    if not sso_auth.is_login_configured():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "SSO not enabled")
+    state = sso_auth.new_state()
+    try:
+        url = sso_auth.build_authorize_url(state)
+    except sso_auth.SsoAuthError as e:
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, str(e)) from e
+    return RedirectResponse(url, status_code=302)
+
+
+@router.get("/oidc/callback")
+async def oidc_callback(db: DbSession, code: str = "", state: str = ""):
+    """SSO 回调:code→id_token→校验→查/建用户→签本地 JWT→302 回前端。"""
+    if not sso_auth.is_login_configured():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "SSO not enabled")
+    if not code or not state:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Missing code or state")
+    if not sso_auth.validate_state(state):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired state")
+    try:
+        id_token = sso_auth.exchange_code(code)
+    except sso_auth.SsoAuthError as e:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(e)) from e
+    credentials_exc = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="登录状态无效或已过期",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    user = await _resolve_sso_user(db, id_token, credentials_exc)
+    await ensure_default_on_joins(db, user)
+    token = create_access_token(user)
+    target = (get_settings().sso_redirect_target or "/login").strip() or "/login"
+    sep = "&" if "?" in target else "?"
+    return RedirectResponse(f"{target}{sep}sso_token={urllib.parse.quote(token)}", status_code=302)
 
 
 @router.get("/me", response_model=UserOut)

@@ -61,6 +61,11 @@ class Settings(BaseSettings):
     sso_issuer: str = ""
     sso_audience: str = ""
     sso_jwks_uri: str = ""
+    sso_client_id: str = "market"
+    sso_client_secret: str = ""
+    sso_redirect_uri: str = ""
+    # 回调成功后浏览器落地页(可相对路径或绝对 URL)
+    sso_redirect_target: str = "/login"
 
     @property
     def base_dir(self) -> Path:

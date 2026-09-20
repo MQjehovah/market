@@ -1,14 +1,15 @@
 <script setup>
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
-import { setAuth } from '../stores/auth'
+import { clearAuth, setAuth } from '../stores/auth'
 
 const router = useRouter()
 const route = useRoute()
 const form = ref({ username: '', password: '' })
 const error = ref('')
 const loading = ref(false)
+const ssoLoading = ref(false)
 
 async function submit() {
   error.value = ''
@@ -23,6 +24,35 @@ async function submit() {
     loading.value = false
   }
 }
+
+function loginWithSso() {
+  if (ssoLoading.value) return
+  ssoLoading.value = true
+  error.value = ''
+  window.location.href = '/api/auth/sso/start'
+}
+
+async function handleSsoCallback() {
+  const token = route.query.sso_token
+  if (typeof token !== 'string' || !token) return
+  ssoLoading.value = true
+  error.value = ''
+  try {
+    setAuth(token, { username: '', role: 'user' })
+    const user = await api.get('/auth/me')
+    setAuth(token, user)
+    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/'
+    await router.replace(redirect)
+  } catch (e) {
+    clearAuth()
+    error.value = e.message || 'SSO 登录失败'
+    await router.replace({ path: '/login' })
+  } finally {
+    ssoLoading.value = false
+  }
+}
+
+onMounted(handleSsoCallback)
 </script>
 
 <template>
@@ -64,6 +94,12 @@ async function submit() {
           {{ loading ? '登录中…' : '登录' }}
         </button>
       </form>
+
+      <p class="sso-or">或</p>
+      <button class="btn btn-block" type="button" :disabled="ssoLoading" @click="loginWithSso">
+        {{ ssoLoading ? '正在跳转…' : '企业 SSO 登录' }}
+      </button>
+      <p class="sso-hint">将打开公司统一登录页，可用钉钉扫码或工号密码。</p>
 
       <p class="foot">
         还没有账号？
@@ -138,6 +174,21 @@ h1 {
 .btn-block {
   margin-top: 8px;
   min-height: 40px;
+}
+
+.sso-or {
+  margin: 16px 0 8px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sso-hint {
+  margin: 8px 0 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .foot {
