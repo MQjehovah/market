@@ -2,7 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { api } from '../api'
 import { authState } from '../stores/auth'
-import { TYPE_LABELS, formatDate } from '../utils/format'
+import { TYPE_LABELS, formatDate , roleLabel } from '../utils/format'
 
 const stats = ref(null)
 const notifications = ref([])
@@ -33,7 +33,7 @@ onMounted(load)
               <tr><td class="muted" style="width: 120px">用户名</td><td>{{ user?.username }}</td></tr>
               <tr><td class="muted">显示名</td><td>{{ user?.display_name }}</td></tr>
               <tr><td class="muted">邮箱</td><td>{{ user?.email }}</td></tr>
-              <tr><td class="muted">角色</td><td>{{ user?.role === 'admin' ? '管理员' : '普通用户' }}</td></tr>
+              <tr><td class="muted">角色</td><td>{{ roleLabel(user?.role) }}</td></tr>
               <tr><td class="muted">组织</td><td>{{ user?.organization || user?.team || '-' }}</td></tr>
               <tr><td class="muted">注册时间</td><td>{{ formatDate(user?.created_at) }}</td></tr>
             </tbody>

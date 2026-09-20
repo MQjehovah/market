@@ -1,5 +1,6 @@
 """门户：浏览 / 搜索 / 详情 / 评分 / 订阅 / 通知 / 版本列表。"""
 
+import io
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -13,14 +14,22 @@ from app.schemas import (
     AccessPolicyUpdate,
     CapabilityOut,
     CapabilityPage,
+    InstallPolicyUpdate,
     MessageOut,
     NotificationOut,
+    PackageFileContentOut,
+    PackageTreeOut,
     RatingCreate,
     RatingOut,
     SubscribeRequest,
 )
 from app.services.capabilities import get_visible_capabilities, parse_semver, record_rating
 from app.services.capabilities import to_capability_out
+from app.services.taxonomy import (
+    DEFAULT_BROWSE_KINDS,
+    kinds_for_shelf,
+    taxonomy_payload,
+)
 from app.storage import get_storage
 
 router = APIRouter(prefix="/api", tags=["portal"])
@@ -47,26 +56,70 @@ def _visibility_where(user: User | None):
     return or_(*clauses)
 
 
+@router.get("/meta/taxonomy")
+async def taxonomy():
+    """货架 / kind / 双编排 / 消费矩阵 / 审核清单（控制面语义）。"""
+    return taxonomy_payload()
+
+
+@router.get("/meta/package-templates/{kind}")
+async def package_template(kind: str, name: str = Query("example", max_length=80)):
+    """下载空能力包模板 zip（skill/mcp/tool/agent/plugin）。"""
+    from app.services.packages import build_package_template
+
+    content = build_package_template(kind, name=name or "example")
+    filename = f"{kind}-template.zip"
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"
+        },
+    )
+
+
 @router.get("/capabilities", response_model=CapabilityPage)
 async def browse_capabilities(
     db: DbSession,
     user: OptionalUser,
     q: str = "",
     type: str = "",
+    shelf: str = "",
     category: str = "",
     status: str = "",
     visibility: str = "",
+    skill: str = "",
+    mcp: str = "",
+    include_components: bool = False,
+    include_bricks: bool = False,
     sort: str = "latest",
     page: int = Query(1, ge=1),
     page_size: int = Query(24, ge=1, le=100),
 ):
-    """浏览市场：默认只展示已发布能力，且每个逻辑能力只保留最新版本。"""
+    """浏览市场：默认只展示已发布能力，且每个逻辑能力只保留最新版本。
+
+    默认货架为安装包+配方（plugin/agent/workflow）。积木（skill/mcp/tool）需：
+    - shelf=brick，或
+    - type=某积木 kind，或
+    - include_bricks=true。
+
+    skill / mcp：按 Agent 内嵌能力名筛选（匹配 input_schema.embedded_*）。
+    include_components：为 false 时隐藏全部 plugin 拆出子能力（含已发布）。
+    """
     conditions: list = []
     visibility_where = _visibility_where(user)
     if visibility_where is not None:
         conditions.append(visibility_where)
+
+    shelf_kinds = kinds_for_shelf(shelf) if shelf else None
     if type:
         conditions.append(Capability.type == type)
+    elif shelf_kinds is not None:
+        conditions.append(Capability.type.in_(shelf_kinds))
+    elif not include_bricks and not skill and not mcp and not q.strip():
+        # 默认货架：安装包+配方；有关键词搜索时放开全部 kind，避免搜不到积木
+        conditions.append(Capability.type.in_(list(DEFAULT_BROWSE_KINDS)))
+
     if category:
         conditions.append(Capability.category == category)
     # 列表默认只显示已发布；显式指定状态时按指定状态过滤（如管理侧排查用）
@@ -93,6 +146,10 @@ async def browse_capabilities(
         stmt = stmt.where(where_clause)
     all_caps = list((await db.scalars(stmt)).all())
 
+    # 默认隐藏全部 plugin-component；include_components=true 时才列出
+    if not include_components:
+        all_caps = [c for c in all_caps if "plugin-component" not in (c.tags or [])]
+
     # 每个逻辑能力（名称 + 类型）只保留最新版本
     latest: dict[tuple[str, str], Capability] = {}
     for cap in all_caps:
@@ -101,6 +158,50 @@ async def browse_capabilities(
         if cur is None or parse_semver(cap.version) > parse_semver(cur.version):
             latest[key] = cap
     caps = list(latest.values())
+
+    def _embedded_names(cap: Capability, key: str) -> set[str]:
+        schema = cap.input_schema or {}
+        items = schema.get(key) or []
+        return {
+            str(i.get("name")).strip()
+            for i in items
+            if isinstance(i, dict) and i.get("name")
+        }
+
+    if skill:
+        skill_q = skill.strip().lower()
+        caps = [
+            c
+            for c in caps
+            if (c.type == "skill" and c.name.lower() == skill_q)
+            or any(n.lower() == skill_q for n in _embedded_names(c, "embedded_skills"))
+            or (
+                c.type == "plugin"
+                and any(
+                    isinstance(x, dict)
+                    and x.get("type") == "skill"
+                    and str(x.get("name", "")).lower() == skill_q
+                    for x in ((c.input_schema or {}).get("components") or [])
+                )
+            )
+        ]
+    if mcp:
+        mcp_q = mcp.strip().lower()
+        caps = [
+            c
+            for c in caps
+            if (c.type == "mcp" and c.name.lower() == mcp_q)
+            or any(n.lower() == mcp_q for n in _embedded_names(c, "embedded_mcp"))
+            or (
+                c.type == "plugin"
+                and any(
+                    isinstance(x, dict)
+                    and x.get("type") == "mcp"
+                    and str(x.get("name", "")).lower() == mcp_q
+                    for x in ((c.input_schema or {}).get("components") or [])
+                )
+            )
+        ]
 
     if sort == "usage":
         caps.sort(key=lambda c: c.usage_count, reverse=True)
@@ -123,7 +224,10 @@ async def browse_capabilities(
 
 @router.get("/capabilities/sync", response_model=list[dict])
 async def sync_capabilities(db: DbSession, user: OptionalUser):
-    """同步接口：返回各能力的最新发布版本/商业包，供 Agent 等消费者拉取目录。"""
+    """同步接口：返回各能力的最新发布版本/商业包，供 Agent 等消费者拉取目录。
+
+    含已发布的 plugin 拆出组件（skill/mcp 等），便于其他 Agent 依赖复用。
+    """
     visible = await get_visible_capabilities(db, user)
     published = [c for c in visible if c.status in ("published", "deprecated")]
     latest: dict[tuple[str, str], Capability] = {}
@@ -211,7 +315,32 @@ async def capability_detail(cap_id: str, db: DbSession, user: OptionalUser):
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
     same_name = [c for c in visible if c.name == cap.name]
-    return _to_out(cap, same_name)
+    out = _to_out(cap, same_name)
+    if not (out.readme_md or "").strip():
+        from app.services.packages import extract_readme_text
+        from app.storage import get_storage
+
+        arts = list(cap.artifacts or [])
+        if arts:
+            try:
+                blob = get_storage().open(arts[-1].uri).read()
+                out.readme_md = extract_readme_text(blob)
+            except Exception:
+                pass
+    if cap.type == "agent":
+        schema = out.input_schema or {}
+        if schema.get("embedded_skills") is not None or schema.get("embedded_mcp") is not None:
+            from app.services.agent_metadata import enrich_embedded_with_market
+
+            out.input_schema = await enrich_embedded_with_market(db, schema)
+    if cap.type in ("skill", "mcp"):
+        from app.services.agent_metadata import find_used_by
+
+        out.used_by = await find_used_by(db, cap)
+    parent_id = (cap.input_schema or {}).get("parent_plugin_id")
+    if parent_id:
+        out.parent_plugin_id = str(parent_id)
+    return out
 
 
 @router.get("/capabilities/{cap_id}/versions", response_model=list[CapabilityOut])
@@ -223,6 +352,60 @@ async def capability_versions(cap_id: str, db: DbSession, user: OptionalUser):
     versions = [c for c in visible if c.name == cap.name]
     versions.sort(key=lambda c: parse_semver(c.version), reverse=True)
     return [_to_out(c, versions) for c in versions]
+
+
+def _latest_artifact(cap: Capability):
+    arts = list(cap.artifacts or [])
+    if not arts:
+        return None
+    return arts[-1]
+
+
+def _load_artifact_bytes(cap: Capability) -> tuple[bytes, object]:
+    artifact = _latest_artifact(cap)
+    if artifact is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "尚未上传能力包")
+    try:
+        blob = get_storage().open(artifact.uri).read()
+    except Exception as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "能力包文件不可用") from exc
+    return blob, artifact
+
+
+@router.get("/capabilities/{cap_id}/package/tree", response_model=PackageTreeOut)
+async def capability_package_tree(cap_id: str, db: DbSession, user: OptionalUser):
+    """预览能力包内文件列表（可见范围内）。"""
+    from app.services.packages import list_package_entries
+
+    visible = await get_visible_capabilities(db, user)
+    cap = next((c for c in visible if c.id == cap_id), None)
+    if cap is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
+    blob, artifact = _load_artifact_bytes(cap)
+    files = list_package_entries(blob)
+    return PackageTreeOut(
+        files=files,
+        artifact_filename=getattr(artifact, "filename", "") or "",
+        artifact_size=int(getattr(artifact, "size_bytes", 0) or 0),
+    )
+
+
+@router.get("/capabilities/{cap_id}/package/file", response_model=PackageFileContentOut)
+async def capability_package_file(
+    cap_id: str,
+    db: DbSession,
+    user: OptionalUser,
+    path: str = Query(..., min_length=1, max_length=512, description="包内相对路径"),
+):
+    """预览能力包内单个文件内容。"""
+    from app.services.packages import read_package_entry
+
+    visible = await get_visible_capabilities(db, user)
+    cap = next((c for c in visible if c.id == cap_id), None)
+    if cap is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
+    blob, _artifact = _load_artifact_bytes(cap)
+    return PackageFileContentOut(**read_package_entry(blob, path))
 
 
 @router.get("/capabilities/{cap_id}/ratings", response_model=list[RatingOut])
@@ -284,6 +467,22 @@ async def update_access_policy(
         raise HTTPException(status.HTTP_409_CONFLICT, f"当前状态（{cap.status}）不允许修改调用权限")
     cap.access_policy = data.access_policy
     cap.allowed_users = [u.strip() for u in data.allowed_users if u.strip()]
+    await db.commit()
+    await db.refresh(cap)
+    return _to_out(cap)
+
+
+@router.post("/capabilities/{cap_id}/install-policy", response_model=CapabilityOut)
+async def update_install_policy(
+    cap_id: str, data: InstallPolicyUpdate, db: DbSession, user: CurrentUser
+):
+    """安装策略：optional / default_on / required。"""
+    cap = await db.get(Capability, cap_id)
+    if cap is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
+    if user.role != "admin" and cap.author_id != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "只有作者或管理员可以设置安装策略")
+    cap.install_policy = data.install_policy
     await db.commit()
     await db.refresh(cap)
     return _to_out(cap)

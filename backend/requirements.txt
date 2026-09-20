@@ -16,6 +16,9 @@ minio>=7.2
 httpx>=0.27
 # MCP 能力包实现按 mcp 1.x（mcp.server.fastmcp）编写，2.x 移除了该路径
 mcp>=1.26.0,<2.0.0
+# 平台预装的 stdio MCP 运行时依赖（能力包勿默认假定可随意 pip；扩展请走包内声明 + 运维预装）
+nest_asyncio>=1.6.0
+websockets>=12.0
 pymysql>=1.1.0
 rich>=13.0.0
 pytest>=8.0

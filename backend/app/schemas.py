@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-CAPABILITY_TYPES = ("agent", "tool", "skill", "mcp", "workflow")
+CAPABILITY_TYPES = ("agent", "tool", "skill", "mcp", "workflow", "plugin")
 VISIBILITY_LEVELS = ("private", "team", "internal", "public")
 STATUS_LEVELS = ("draft", "reviewing", "published", "deprecated", "archived", "rejected", "returned")
 ROLES = ("admin", "publisher", "user")
@@ -74,13 +74,14 @@ class TokenOut(BaseModel):
 class CapabilityBase(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str = Field(default="", max_length=20000)
-    type: Literal["agent", "tool", "skill", "mcp", "workflow"]
+    type: Literal["agent", "tool", "skill", "mcp", "workflow", "plugin"]
     version: str = Field(default="0.1.0", max_length=50)
     category: str = Field(default="", max_length=100)
     tags: list[str] = Field(default_factory=list)
     visibility: Literal["private", "team", "internal", "public"] = "internal"
     access_policy: Literal["open", "admin_only", "restricted"] = "open"
     allowed_users: list[str] = Field(default_factory=list, description="restricted 时的白名单用户名")
+    install_policy: Literal["optional", "default_on", "required"] = "optional"
 
     @field_validator("version")
     @classmethod
@@ -101,21 +102,31 @@ class CapabilityCreate(CapabilityBase):
 
 
 class CapabilityUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    type: Literal["agent", "tool", "skill", "mcp", "workflow", "plugin"] | None = None
     description: str | None = None
     category: str | None = Field(default=None, max_length=100)
     tags: list[str] | None = None
     visibility: Literal["private", "team", "internal", "public"] | None = None
     access_policy: Literal["open", "admin_only", "restricted"] | None = None
     allowed_users: list[str] | None = None
+    install_policy: Literal["optional", "default_on", "required"] | None = None
+
+
+class InstallPolicyUpdate(BaseModel):
+    install_policy: Literal["optional", "default_on", "required"]
 
 
 class VersionCreate(BaseModel):
-    new_version: str = Field(max_length=50)
+    new_version: str | None = Field(default=None, max_length=50)
     change_type: Literal["major", "minor", "patch"] = "patch"
+    changelog: str = Field(default="", max_length=5000)
 
     @field_validator("new_version")
     @classmethod
-    def validate_semver(cls, v: str) -> str:
+    def validate_semver(cls, v: str | None) -> str | None:
+        if v is None or v == "":
+            return None
         parts = v.split(".")
         if len(parts) != 3 or not all(p.isdigit() for p in parts):
             raise ValueError("版本号必须符合语义化版本 MAJOR.MINOR.PATCH")
@@ -167,7 +178,10 @@ class CapabilityOut(CapabilityBase):
     author_id: str
     author_name: str = ""
     organization: str
+    changelog: str = ""
+    readme_md: str = ""
     input_schema: dict[str, Any] = Field(default_factory=dict)
+    validation_report: dict[str, Any] = Field(default_factory=dict)
     usage_count: int
     rating_sum: float
     rating_count: int
@@ -176,6 +190,9 @@ class CapabilityOut(CapabilityBase):
     updated_at: datetime
     artifacts: list[ArtifactOut] = Field(default_factory=list)
     latest: bool = False
+    # skill/mcp：被哪些 agent/plugin 引用；plugin 子能力：父插件 id
+    used_by: list[dict[str, Any]] = Field(default_factory=list)
+    parent_plugin_id: str | None = None
 
 
 class CapabilityPage(BaseModel):
@@ -305,7 +322,7 @@ class WorkflowCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str = Field(default="", max_length=20000)
     version: str = Field(default="0.1.0", max_length=50)
-    category: str = Field(default="工作流", max_length=100)
+    category: str = Field(default="能力编排", max_length=100)
     tags: list[str] = Field(default_factory=list)
     visibility: Literal["private", "team", "internal", "public"] = "internal"
     access_policy: Literal["open", "admin_only", "restricted"] = "open"
@@ -373,6 +390,50 @@ class SkillEditSave(BaseModel):
     new_version: str = Field(default="", max_length=50, description="留空则基于最新版本 patch+1")
 
 
+class ToolEditOut(BaseModel):
+    capability: CapabilityOut
+    tool_schema: dict[str, Any] = Field(default_factory=dict)
+    implementation: str = ""
+    files: list[dict[str, Any]] = Field(default_factory=list)
+    base_version: str = ""
+
+
+class ToolEditSave(BaseModel):
+    tool_schema: dict[str, Any] = Field(default_factory=dict)
+    implementation: str = Field(default="", max_length=500000)
+    description: str = Field(default="", max_length=20000)
+    category: str = Field(default="", max_length=100)
+    tags: list[str] = Field(default_factory=list)
+    new_version: str = Field(default="", max_length=50, description="留空则基于最新版本 patch+1")
+
+
+class McpImplementationFile(BaseModel):
+    path: str = Field(max_length=255, description="相对路径，须为 implementation/*.py")
+    content: str = Field(default="", max_length=500000)
+
+
+class McpEditOut(BaseModel):
+    capability: CapabilityOut
+    connection: dict[str, Any] = Field(default_factory=dict)
+    tools_json: Any = None
+    implementations: list[McpImplementationFile] = Field(default_factory=list)
+    files: list[dict[str, Any]] = Field(default_factory=list)
+    base_version: str = ""
+
+
+class McpEditSave(BaseModel):
+    connection: dict[str, Any] = Field(default_factory=dict)
+    tools_json: Any = None
+    implementations: list[McpImplementationFile] | None = Field(
+        default=None,
+        description="为 null 时保留原 implementation/*.py；传入列表则整体替换",
+    )
+    description: str = Field(default="", max_length=20000)
+    category: str = Field(default="", max_length=100)
+    tags: list[str] = Field(default_factory=list)
+    new_version: str = Field(default="", max_length=50, description="留空则基于最新版本 patch+1")
+
+
 class WorkflowExecutionOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -430,6 +491,27 @@ class MCPGatewayTestOut(BaseModel):
 
 class MessageOut(BaseModel):
     message: str
+
+
+class PackageFileEntry(BaseModel):
+    path: str
+    size: int
+    text: bool = True
+
+
+class PackageTreeOut(BaseModel):
+    files: list[PackageFileEntry] = Field(default_factory=list)
+    artifact_filename: str = ""
+    artifact_size: int = 0
+
+
+class PackageFileContentOut(BaseModel):
+    path: str
+    size: int
+    truncated: bool = False
+    binary: bool = False
+    content: str = ""
+    encoding: str = ""
 
 
 class MyCapabilityAdd(BaseModel):

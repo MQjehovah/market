@@ -1,14 +1,16 @@
 <script setup>
 import { computed, reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { api } from '../api'
 import { TYPE_LABELS } from '../utils/format'
 
 const props = defineProps({
   show: { type: Boolean, default: false },
   cap: { type: Object, default: null },
-  title: { type: String, default: '调用 / 调试' }
+  title: { type: String, default: '云端试用' }
 })
 const emit = defineEmits(['close'])
+const router = useRouter()
 
 const params = reactive({})
 const complexParams = reactive({})
@@ -30,9 +32,16 @@ const schema = computed(() => props.cap?.input_schema || {})
 const hasSchema = computed(() => Object.keys(schema.value.properties || {}).length > 0)
 const isTool = computed(() => props.cap?.type === 'tool')
 const isAgent = computed(() => props.cap?.type === 'agent')
+const isPlugin = computed(() => props.cap?.type === 'plugin')
 const isSkill = computed(() => props.cap?.type === 'skill')
 const isWorkflow = computed(() => props.cap?.type === 'workflow')
 const isMcp = computed(() => props.cap?.type === 'mcp')
+const isAgentLike = computed(() => isAgent.value || isPlugin.value)
+const pluginComponents = computed(() => {
+  const s = props.cap?.input_schema || {}
+  if (s.kind !== 'plugin') return []
+  return Array.isArray(s.components) ? s.components : []
+})
 const selectedMcpTool = computed(() => mcpTools.value.find((t) => t.name === mcpSelected.value) || null)
 
 function defaultValue(prop) {
@@ -138,7 +147,7 @@ async function run() {
     if (isTool.value) {
       path = `/runtime/tools/${name}/invoke`
       payload = { params: mode.value === 'form' ? collectToolParams() : JSON.parse(jsonInput.value || '{}') }
-    } else if (isAgent.value) {
+    } else if (isAgentLike.value) {
       path = `/runtime/agents/${name}/tasks`
       payload = { task: textInput.value }
     } else if (isSkill.value) {
@@ -214,7 +223,7 @@ const resultState = computed(() => {
       extra: r.result?.execution ? `执行方式：${r.result.execution}` : ''
     }
   }
-  if (isAgent.value) {
+  if (isAgentLike.value) {
     return {
       ok: r.mode === 'llm',
       label: r.mode === 'llm' ? '真实执行（LLM）' : '模拟执行',
@@ -247,7 +256,7 @@ function stepBadge(name) {
         <div>
           <h3 style="margin: 0">{{ title }}：{{ cap.name }}</h3>
           <div class="muted" style="font-size: 12px; margin-top: 4px">
-            {{ TYPE_LABELS[cap.type] }} · v{{ cap.version }}
+            {{ TYPE_LABELS[cap.type] }} · v{{ cap.version }} · 试用（非生产主路径）
             <span v-if="cap.description" style="margin-left: 8px">{{ cap.description }}</span>
           </div>
         </div>
@@ -300,11 +309,30 @@ function stepBadge(name) {
         </div>
       </template>
 
-      <!-- Agent / 技能 -->
-      <template v-else-if="isAgent || isSkill">
+      <!-- Agent / 项目 / 技能 -->
+      <template v-else-if="isAgentLike || isSkill">
+        <div v-if="isPlugin" class="muted" style="font-size: 13px; margin-bottom: 8px">
+          将委派给插件内主 Agent 执行；也可打开组件详情分别调试。
+        </div>
+        <div v-if="isPlugin && pluginComponents.length" class="plugin-comps" style="margin-bottom: 12px">
+          <div
+            v-for="c in pluginComponents"
+            :key="c.capability_id"
+            class="comp-row"
+          >
+            <span class="badge">{{ TYPE_LABELS[c.type] || c.type }}</span>
+            <span>{{ c.name }}</span>
+            <button
+              v-if="c.capability_id"
+              class="btn btn-sm"
+              type="button"
+              @click="emit('close'); router.push(`/capabilities/${c.capability_id}`)"
+            >打开</button>
+          </div>
+        </div>
         <div class="field">
-          <label>{{ isAgent ? '任务内容' : '任务上下文' }}</label>
-          <textarea v-model="textInput" class="textarea" rows="6" :placeholder="isAgent ? '如：生成上月销售报表' : '如：写测试'"></textarea>
+          <label>{{ isAgentLike ? '任务内容' : '任务上下文' }}</label>
+          <textarea v-model="textInput" class="textarea" rows="6" :placeholder="isAgentLike ? '如：生成上月销售报表' : '如：写测试'"></textarea>
         </div>
       </template>
 
@@ -365,7 +393,7 @@ function stepBadge(name) {
             <button class="btn btn-sm" @click="copyResult">{{ copied ? '已复制' : '复制' }}</button>
           </div>
         </div>
-        <div v-if="isAgent && result.steps && result.steps.length" class="steps mt-16">
+        <div v-if="isAgentLike && result.steps && result.steps.length" class="steps mt-16">
           <h4 style="margin: 0 0 10px">执行过程（{{ result.steps.length }} 步）</h4>
           <div v-for="(s, i) in result.steps" :key="i" class="step">
             <template v-if="s.kind === 'call'">
@@ -394,7 +422,7 @@ function stepBadge(name) {
 
 <style scoped>
 .modal-mask {
-  position: fixed; inset: 0; background: rgba(5, 8, 16, 0.72); z-index: 100;
+  position: fixed; inset: 0; background: var(--overlay, rgba(15, 23, 42, 0.45)); z-index: 100;
   display: flex; align-items: center; justify-content: center; padding: 20px;
 }
 .modal {
@@ -435,6 +463,9 @@ function stepBadge(name) {
   margin: 6px 0 0 28px; background: var(--panel-2); border: 1px solid var(--border);
   border-radius: 8px; padding: 8px 10px; font-size: 12px; white-space: pre-wrap;
   max-height: 180px; overflow: auto;
+}
+.comp-row {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 13px;
 }
 @media (max-width: 700px) {
   .form-grid { grid-template-columns: 1fr; }

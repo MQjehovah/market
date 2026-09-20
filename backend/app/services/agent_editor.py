@@ -13,37 +13,34 @@ from sqlalchemy.orm import selectinload
 from app.models import Capability, CapabilityArtifact, User
 from app.schemas import AgentEditSave
 from app.services.capabilities import (
-    get_visible_capabilities,
+    draft_policy_kwargs,
+    merge_edit_package_files,
     next_version,
+    package_base_for_save,
     parse_semver,
+    read_capability_files,
+    text_file,
 )
 from app.storage import get_storage
 
 
 def _read_zip(cap: Capability) -> dict[str, bytes] | None:
-    if not cap.artifacts:
-        return None
-    try:
-        content = get_storage().open(cap.artifacts[-1].uri).read()
-        with zipfile.ZipFile(io.BytesIO(content)) as zf:
-            return {
-                name: zf.read(name)
-                for name in zf.namelist()
-                if not name.endswith("/")
-            }
-    except Exception:  # noqa: BLE001
-        return None
+    files = read_capability_files(cap)
+    return files or None
 
 
-def read_prompt_deps(cap: Capability) -> tuple[str, list[dict[str, str]]]:
-    files = _read_zip(cap) or {}
-    prompt = files.get("PROMPT.md", b"").decode("utf-8", errors="replace")
+def _prompt_deps_from_files(files: dict[str, bytes]) -> tuple[str, list[dict[str, str]]]:
+    prompt = text_file(files, "PROMPT.md")
     try:
         deps = json.loads(files.get("dependencies.json", b"[]").decode("utf-8"))
         deps = deps if isinstance(deps, list) else []
     except (ValueError, UnicodeDecodeError):
         deps = []
     return prompt, deps
+
+
+def read_prompt_deps(cap: Capability) -> tuple[str, list[dict[str, str]]]:
+    return _prompt_deps_from_files(read_capability_files(cap))
 
 
 async def _agent_versions(db: AsyncSession, name: str) -> list[Capability]:
@@ -81,7 +78,7 @@ def build_agent_package(
     """重建 agent 能力包：保留人设附属文件（TEAM/skills/agents…），替换 PROMPT.md 与依赖清单。"""
     files: dict[str, bytes] = {}
     if base is not None:
-        for fname, content in (_read_zip(base) or {}).items():
+        for fname, content in read_capability_files(base).items():
             if fname in ("agent.json", "PROMPT.md", "dependencies.json", "tools.json"):
                 continue
             files[fname] = content
@@ -130,7 +127,10 @@ async def get_editable(
     cap = draft or (max(published, key=lambda c: parse_semver(c.version)) if published else None)
     if cap is None:
         cap = max(versions, key=lambda c: parse_semver(c.version))
-    prompt, deps = read_prompt_deps(cap)
+    files = merge_edit_package_files(
+        cap, published, core_text_files=frozenset({"PROMPT.md", "dependencies.json"})
+    )
+    prompt, deps = _prompt_deps_from_files(files)
     base_version = max(published, key=lambda c: parse_semver(c.version)).version if published else ""
     return cap, prompt, deps, base_version
 
@@ -145,19 +145,26 @@ async def save_version(
     published = [c for c in versions if c.status in ("published", "deprecated")]
     base = max(published, key=lambda c: parse_semver(c.version)) if published else None
     deps = _deps_payload([d.model_dump() for d in data.dependencies])
+    inherit_files = merge_edit_package_files(
+        draft or base or versions[0],
+        published,
+        core_text_files=frozenset({"PROMPT.md", "dependencies.json"}),
+    )
+    inherit_prompt, _ = _prompt_deps_from_files(inherit_files)
 
     if draft is not None:
         if user.role != "admin" and draft.author_id != user.id:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "无权限编辑该草稿")
         cap = draft
-        prompt = data.prompt or read_prompt_deps(cap)[0]
+        prompt = data.prompt if str(data.prompt or "").strip() else inherit_prompt
     else:
         if base is None:
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
                 "该 Agent 没有已发布版本，无法创建新版本",
             )
-        base_prompt, _ = read_prompt_deps(base)
+        if user.role != "admin" and base.author_id != user.id:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "只能编辑自己发布的 Agent")
         new_version = data.new_version or next_version(base.version, "patch")
         exists = await db.scalar(
             select(Capability.id).where(
@@ -183,10 +190,11 @@ async def save_version(
             status="draft",
             author_id=user.id,
             organization=user.organization,
+            **draft_policy_kwargs(base),
         )
         db.add(cap)
         await db.flush()
-        prompt = data.prompt or base_prompt
+        prompt = data.prompt if str(data.prompt or "").strip() else inherit_prompt
 
     if data.description:
         cap.description = data.description
@@ -196,7 +204,7 @@ async def save_version(
         cap.tags = data.tags
 
     pkg = build_agent_package(
-        base=base,
+        base=package_base_for_save(draft, published) or base,
         name=cap.name,
         description=cap.description,
         version=cap.version,

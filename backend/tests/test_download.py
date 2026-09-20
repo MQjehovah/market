@@ -36,7 +36,7 @@ async def test_sync_catalog_lists_latest_published(client):
     items = r.json()
     assert len(items) >= 4
     types = {i["type"] for i in items}
-    assert types == {"agent", "tool", "skill", "mcp"}
+    assert {"agent", "tool", "skill", "mcp"}.issubset(types)
     assert all(i["status"] in ("published", "deprecated") for i in items)
     names = [i["name"] for i in items]
     assert len(names) == len(set(names))

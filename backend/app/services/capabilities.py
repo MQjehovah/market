@@ -1,34 +1,51 @@
 """能力生命周期：草稿 → 提交审核 → 审核中 → 通过(发布)/驳回/打回 → 弃用 → 归档。"""
 
+import io
+import json
+import logging
 import re
+import zipfile
 from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, delete as sql_delete, func, select
 from sqlalchemy.orm import joinedload, selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
+    A2ATask,
+    AgentBinding,
     Capability,
+    CapabilityArtifact,
     Notification,
     Rating,
     Review,
     Subscription,
+    UsageEvent,
     User,
+    UserCapability,
+    WorkflowExecution,
 )
+from app.storage import get_storage
 from app.schemas import ArtifactOut, CapabilityCreate, CapabilityOut, CapabilityUpdate
 
 SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
 STATUS_FLOW: dict[str, set[str]] = {
     "draft": {"reviewing"},
-    "reviewing": {"published", "rejected", "returned"},
+    "reviewing": {"published", "rejected", "returned", "draft"},
     "rejected": {"reviewing", "archived"},
     "returned": {"reviewing", "archived"},
     "published": {"deprecated", "archived"},
     "deprecated": {"archived", "published"},
     "archived": set(),
 }
+
+EDITABLE_STATUSES = {"draft", "returned", "rejected"}
+DELETABLE_STATUSES = {"draft", "returned", "rejected", "reviewing"}
+UPLOADABLE_STATUSES = EDITABLE_STATUSES | {"reviewing"}
+# workflow 内容在画布维护，提交审核不强制 zip
+PACKAGE_REQUIRED_TYPES = {"agent", "tool", "skill", "mcp", "plugin"}
 
 
 def parse_semver(version: str) -> tuple[int, int, int]:
@@ -47,11 +64,132 @@ def next_version(version: str, change_type: str) -> str:
     return f"{major}.{minor}.{patch + 1}"
 
 
+async def highest_version(
+    db: AsyncSession, name: str, type_: str | None = None
+) -> str | None:
+    """同名（可选同 type）能力中已有的最高语义化版本号。"""
+    stmt = select(Capability.version).where(Capability.name == name)
+    if type_ is not None:
+        stmt = stmt.where(Capability.type == type_)
+    versions = list(await db.scalars(stmt))
+    if not versions:
+        return None
+    return max(versions, key=parse_semver)
+
+
 def is_latest(cap: Capability, versions: list[Capability]) -> bool:
-    same_name = [v for v in versions if v.name == cap.name]
-    if not same_name:
+    same = [v for v in versions if v.name == cap.name and v.type == cap.type]
+    if not same:
         return True
-    return cap == max(same_name, key=lambda c: parse_semver(c.version))
+    return cap == max(same, key=lambda c: parse_semver(c.version))
+
+
+def editable_content_source(cap: Capability, published: list[Capability]) -> Capability:
+    """在线编辑内容来源：当前行已有能力包则用它；新版本空草稿则继承最新已发布包。"""
+    if cap.artifacts:
+        return cap
+    with_pkg = [c for c in published if c.artifacts]
+    if not with_pkg:
+        return cap
+    return max(with_pkg, key=lambda c: parse_semver(c.version))
+
+
+def read_capability_files(cap: Capability | None) -> dict[str, bytes]:
+    """读取能力包内文件；无包或失败时返回空 dict（失败会打日志）。"""
+    if cap is None or not cap.artifacts:
+        return {}
+    try:
+        content = get_storage().open(cap.artifacts[-1].uri).read()
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            return {
+                name: zf.read(name)
+                for name in zf.namelist()
+                if not name.endswith("/")
+            }
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("market.capabilities").warning(
+            "读取能力包失败 name=%s uri=%s: %s",
+            getattr(cap, "name", "?"),
+            cap.artifacts[-1].uri if cap.artifacts else "",
+            exc,
+        )
+        return {}
+
+
+def latest_published_with_package(published: list[Capability]) -> Capability | None:
+    with_pkg = [c for c in published if c.artifacts]
+    if not with_pkg:
+        return None
+    return max(with_pkg, key=lambda c: parse_semver(c.version))
+
+
+def package_base_for_save(
+    draft: Capability | None, published: list[Capability]
+) -> Capability | None:
+    """保存时附属文件底稿：优先用当前草稿包，否则用最新已发布包。"""
+    if draft is not None and draft.artifacts:
+        return draft
+    return latest_published_with_package(published)
+
+
+def _is_blank_core(path: str, content: bytes, core_text_files: frozenset[str]) -> bool:
+    matched = path in core_text_files
+    if not matched and "implementation/*.py" in core_text_files:
+        matched = path.startswith("implementation/") and path.endswith(".py")
+    if not matched:
+        return False
+    try:
+        text = content.decode("utf-8", errors="replace").strip()
+    except Exception:  # noqa: BLE001
+        return False
+    if not text:
+        return True
+    # 空 JSON 对象/数组视为未填写，不覆盖已发布底稿
+    if path.endswith(".json"):
+        try:
+            val = json.loads(text)
+        except Exception:  # noqa: BLE001
+            return False
+        if val in ({}, [], None):
+            return True
+    return False
+
+
+def merge_edit_package_files(
+    cap: Capability,
+    published: list[Capability],
+    *,
+    core_text_files: frozenset[str] = frozenset(),
+) -> dict[str, bytes]:
+    """编辑态文件：最新已发布包打底，当前草稿覆盖；草稿中空的核心文本不覆盖底稿。"""
+    files: dict[str, bytes] = {}
+    base = latest_published_with_package(published)
+    if base is not None:
+        files.update(read_capability_files(base))
+    if cap.artifacts and (base is None or cap.id != base.id):
+        for path, content in read_capability_files(cap).items():
+            if _is_blank_core(path, content, core_text_files):
+                continue
+            files[path] = content
+    elif not files:
+        files.update(read_capability_files(cap))
+    return files
+
+
+def text_file(files: dict[str, bytes], path: str, default: str = "") -> str:
+    raw = files.get(path)
+    if raw is None:
+        return default
+    return raw.decode("utf-8", errors="replace")
+
+
+def draft_policy_kwargs(base: Capability) -> dict:
+    """新版本草稿从已发布行继承访问/安装策略。"""
+    return {
+        "access_policy": getattr(base, "access_policy", None) or "open",
+        "allowed_users": list(getattr(base, "allowed_users", None) or []),
+        "install_policy": getattr(base, "install_policy", None) or "optional",
+    }
 
 
 def to_capability_out(
@@ -72,6 +210,10 @@ def to_capability_out(
         "visibility": cap.visibility,
         "access_policy": cap.access_policy or "open",
         "allowed_users": list(cap.allowed_users or []),
+        "install_policy": getattr(cap, "install_policy", None) or "optional",
+        "changelog": getattr(cap, "changelog", None) or "",
+        "readme_md": getattr(cap, "readme_md", None) or "",
+        "validation_report": getattr(cap, "validation_report", None) or {},
         "author_id": cap.author_id,
         "organization": cap.organization or "",
         "input_schema": cap.input_schema or {},
@@ -142,6 +284,7 @@ async def create_capability(
         visibility=data.visibility,
         access_policy=data.access_policy,
         allowed_users=list(data.allowed_users or []),
+        install_policy=data.install_policy or "optional",
         author_id=user.id,
         organization=user.organization,
         status="draft",
@@ -152,9 +295,62 @@ async def create_capability(
     return cap
 
 
+async def _sibling_count(db: AsyncSession, cap: Capability) -> int:
+    return (
+        await db.scalar(
+            select(func.count())
+            .select_from(Capability)
+            .where(and_(Capability.name == cap.name, Capability.id != cap.id))
+        )
+    ) or 0
+
+
+async def _clear_artifacts(db: AsyncSession, cap: Capability) -> None:
+    storage = get_storage()
+    rows = (
+        await db.scalars(
+            select(CapabilityArtifact).where(CapabilityArtifact.capability_id == cap.id)
+        )
+    ).all()
+    for artifact in rows:
+        try:
+            storage.delete(artifact.uri)
+        except Exception:
+            pass
+        await db.delete(artifact)
+
+
 async def update_capability(
     db: AsyncSession, cap: Capability, data: CapabilityUpdate
 ) -> Capability:
+    siblings = await _sibling_count(db, cap)
+    if data.name is not None and data.name != cap.name:
+        if siblings:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "该能力已有其他版本，不能改名"
+            )
+        taken = await db.scalar(
+            select(Capability.id).where(
+                and_(
+                    Capability.name == data.name,
+                    Capability.version == cap.version,
+                    Capability.id != cap.id,
+                )
+            )
+        )
+        if taken:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, f"能力 {data.name} 已存在版本 {cap.version}"
+            )
+        cap.name = data.name
+    if data.type is not None and data.type != cap.type:
+        if siblings:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "该能力已有其他版本，不能更改类型"
+            )
+        await _clear_artifacts(db, cap)
+        cap.type = data.type
+        cap.input_schema = {}
     if data.description is not None:
         cap.description = data.description
     if data.category is not None:
@@ -167,12 +363,79 @@ async def update_capability(
         cap.access_policy = data.access_policy
     if data.allowed_users is not None:
         cap.allowed_users = [u.strip() for u in data.allowed_users if u.strip()]
+    if data.install_policy is not None:
+        cap.install_policy = data.install_policy
     await db.commit()
     await db.refresh(cap)
     return cap
 
 
+async def withdraw_capability(db: AsyncSession, cap: Capability, user: User) -> Capability:
+    _transition(cap, "draft")
+    db.add(
+        Review(
+            capability_id=cap.id,
+            reviewer_id=user.id,
+            action="withdrawn",
+            comment="作者撤回审核",
+        )
+    )
+    if cap.type == "plugin":
+        from app.services.plugins import cascade_plugin_components
+
+        await cascade_plugin_components(db, cap, action="withdraw")
+    await db.commit()
+    await db.refresh(cap)
+    return cap
+
+
+async def delete_capability_row(db: AsyncSession, cap: Capability, *, commit: bool = True) -> None:
+    """删除单个能力及其关联行（可嵌套调用，由外层统一 commit）。"""
+    storage = get_storage()
+    rows = (
+        await db.scalars(
+            select(CapabilityArtifact).where(CapabilityArtifact.capability_id == cap.id)
+        )
+    ).all()
+    for artifact in rows:
+        try:
+            storage.delete(artifact.uri)
+        except Exception:
+            pass
+    cid = cap.id
+    await db.execute(sql_delete(CapabilityArtifact).where(CapabilityArtifact.capability_id == cid))
+    await db.execute(sql_delete(Review).where(Review.capability_id == cid))
+    await db.execute(sql_delete(Rating).where(Rating.capability_id == cid))
+    await db.execute(sql_delete(UsageEvent).where(UsageEvent.capability_id == cid))
+    await db.execute(sql_delete(UserCapability).where(UserCapability.capability_id == cid))
+    await db.execute(sql_delete(A2ATask).where(A2ATask.agent_id == cid))
+    await db.execute(sql_delete(WorkflowExecution).where(WorkflowExecution.workflow_id == cid))
+    await db.execute(sql_delete(AgentBinding).where(AgentBinding.agent_id == cid))
+    await db.delete(cap)
+    if commit:
+        await db.commit()
+
+
+async def delete_capability(db: AsyncSession, cap: Capability) -> None:
+    if cap.type == "plugin":
+        from app.services.plugins import cascade_plugin_components
+
+        await cascade_plugin_components(db, cap, action="delete")
+    await delete_capability_row(db, cap, commit=True)
+
+
 async def submit_for_review(db: AsyncSession, cap: Capability) -> Capability:
+    if cap.type in PACKAGE_REQUIRED_TYPES:
+        has_artifact = await db.scalar(
+            select(CapabilityArtifact.id)
+            .where(CapabilityArtifact.capability_id == cap.id)
+            .limit(1)
+        )
+        if has_artifact is None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "请先上传能力包后再提交审核",
+            )
     _transition(cap, "reviewing")
     db.add(Review(capability_id=cap.id, reviewer_id=cap.author_id, action="submitted", comment="提交审核"))
     await db.commit()
@@ -212,8 +475,16 @@ async def review_capability(
         )
 
     if target == "published":
+        if cap.type == "plugin":
+            from app.services.plugins import publish_plugin_components
+
+            await publish_plugin_components(db, cap)
         await _deprecate_other_published(db, cap)
         await _notify_subscribers(db, cap)
+    elif cap.type == "plugin" and target in ("rejected", "returned"):
+        from app.services.plugins import cascade_plugin_components
+
+        await cascade_plugin_components(db, cap, action="reject" if target == "rejected" else "return")
     await db.commit()
     await db.refresh(cap)
     return cap
@@ -269,6 +540,10 @@ async def change_status(db: AsyncSession, cap: Capability, target: str) -> Capab
                 body="请迁移到新版本。",
             )
         )
+        if cap.type == "plugin":
+            from app.services.plugins import cascade_plugin_components
+
+            await cascade_plugin_components(db, cap, action="deprecate")
     await db.commit()
     await db.refresh(cap)
     return cap
@@ -284,7 +559,12 @@ def _transition(cap: Capability, target: str) -> None:
 
 
 async def create_new_version(
-    db: AsyncSession, user: User, cap: Capability, new_version: str
+    db: AsyncSession,
+    user: User,
+    cap: Capability,
+    new_version: str,
+    *,
+    changelog: str = "",
 ) -> Capability:
     exists = await db.scalar(
         select(Capability.id).where(
@@ -298,12 +578,18 @@ async def create_new_version(
         description=cap.description,
         type=cap.type,
         version=new_version,
+        changelog=changelog or "",
         category=cap.category,
         tags=list(cap.tags or []),
         visibility=cap.visibility,
+        access_policy=cap.access_policy,
+        allowed_users=list(cap.allowed_users or []),
+        install_policy=getattr(cap, "install_policy", None) or "optional",
         author_id=user.id,
         organization=cap.organization,
         status="draft",
+        # 复制结构化元数据；artifact 需重新上传。plugin 的 components 仅作草案引用。
+        input_schema=dict(cap.input_schema or {}),
     )
     db.add(new_cap)
     await db.commit()

@@ -59,10 +59,16 @@ def can_view(capability: Capability, user: User | None) -> bool:
 
 
 def can_use(capability: Capability, user: User | None) -> bool:
-    """正式版/预发布才可使用；草稿仅作者。"""
-    if capability.status not in ("published", "deprecated", "reviewing"):
+    """已发布或弃用期内才可使用（与 runtime 门禁一致；审核中不可当正式消费）。"""
+    if capability.status not in ("published", "deprecated"):
         return False
     return can_view(capability, user)
+
+
+def require_admin(user: User) -> None:
+    """路由内联管理员校验（比装饰器更易用于依赖注入风格）。"""
+    if user.role != "admin":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "需要管理员权限")
 
 
 async def require_runtime_access(user: User, cap: Capability, db: AsyncSession) -> None:

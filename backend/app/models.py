@@ -55,8 +55,10 @@ class Capability(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     description: Mapped[str] = mapped_column(Text, default="")
-    type: Mapped[str] = mapped_column(String(16), index=True, nullable=False)  # agent|tool|skill|mcp
+    type: Mapped[str] = mapped_column(String(16), index=True, nullable=False)  # agent|tool|skill|mcp|workflow|plugin
     version: Mapped[str] = mapped_column(String(50), nullable=False)
+    changelog: Mapped[str] = mapped_column(Text, default="")
+    readme_md: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(20), default="draft", index=True)
     # draft | reviewing | published | deprecated | archived | rejected | returned
     category: Mapped[str] = mapped_column(String(100), default="", index=True)
@@ -69,6 +71,10 @@ class Capability(Base):
     access_policy: Mapped[str] = mapped_column(String(20), default="open")
     # open（所有登录用户可加入并调用）| admin_only（仅管理员/作者）| restricted（白名单用户名）
     allowed_users: Mapped[list] = mapped_column(JSON, default=list)
+    install_policy: Mapped[str] = mapped_column(String(20), default="optional")
+    # optional | default_on | required
+    validation_report: Mapped[dict] = mapped_column(JSON, default=dict)
+    # 最近一次上传包的结构校验摘要：{ok, warnings, errors?, files}
     usage_count: Mapped[int] = mapped_column(Integer, default=0)
     rating_sum: Mapped[float] = mapped_column(Float, default=0.0)
     rating_count: Mapped[int] = mapped_column(Integer, default=0)

@@ -7,6 +7,7 @@ from sqlalchemy import or_, select
 from app.auth import CurrentUser, DbSession, create_access_token, hash_password, verify_password
 from app.models import User
 from app.schemas import ChangePasswordRequest, MessageOut, TokenOut, UserLogin, UserOut, UserRegister
+from app.services.install_policy import ensure_default_on_joins
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -34,6 +35,7 @@ async def register(data: UserRegister, db: DbSession):
     db.add(user)
     await db.commit()
     await db.refresh(user)
+    await ensure_default_on_joins(db, user)
     return TokenOut(access_token=create_access_token(user), user=UserOut.model_validate(user))
 
 
@@ -57,6 +59,7 @@ async def login(data: UserLogin, request: Request, db: DbSession):
     if not user.is_active:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "账号已被禁用")
     _login_failures.pop(key, None)
+    await ensure_default_on_joins(db, user)
     return TokenOut(access_token=create_access_token(user), user=UserOut.model_validate(user))
 
 

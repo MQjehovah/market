@@ -19,6 +19,7 @@ from app.models import (
     UserCapability,
     WorkflowExecution,
 )
+from app.permissions import require_admin
 from app.schemas import (
     CapabilityOut,
     MessageOut,
@@ -35,14 +36,9 @@ from app.services.stats import build_stats
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
-def _require_admin(user) -> None:
-    if user.role != "admin":
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "仅管理员可执行该操作")
-
-
 @router.get("/capabilities", response_model=list[CapabilityOut])
 async def list_capabilities(db: DbSession, user: CurrentUser, status_filter: str = "", type_filter: str = ""):
-    _require_admin(user)
+    require_admin(user)
     stmt = select(Capability).options(
         selectinload(Capability.artifacts), joinedload(Capability.author)
     )
@@ -72,7 +68,7 @@ async def list_capabilities(db: DbSession, user: CurrentUser, status_filter: str
 
 @router.post("/capabilities/{cap_id}/review", response_model=CapabilityOut)
 async def review(cap_id: str, data: ReviewRequest, db: DbSession, user: CurrentUser):
-    _require_admin(user)
+    require_admin(user)
     cap = await db.get(Capability, cap_id)
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
@@ -82,7 +78,7 @@ async def review(cap_id: str, data: ReviewRequest, db: DbSession, user: CurrentU
 
 @router.post("/capabilities/{cap_id}/deprecate", response_model=CapabilityOut)
 async def deprecate(cap_id: str, db: DbSession, user: CurrentUser):
-    _require_admin(user)
+    require_admin(user)
     cap = await db.get(Capability, cap_id)
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
@@ -92,7 +88,7 @@ async def deprecate(cap_id: str, db: DbSession, user: CurrentUser):
 
 @router.post("/capabilities/{cap_id}/archive", response_model=CapabilityOut)
 async def archive(cap_id: str, db: DbSession, user: CurrentUser):
-    _require_admin(user)
+    require_admin(user)
     cap = await db.get(Capability, cap_id)
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
@@ -102,14 +98,14 @@ async def archive(cap_id: str, db: DbSession, user: CurrentUser):
 
 @router.get("/users", response_model=list[UserOut])
 async def list_users(db: DbSession, user: CurrentUser):
-    _require_admin(user)
+    require_admin(user)
     users = (await db.scalars(select(User).order_by(User.created_at.desc()))).all()
     return [UserOut.model_validate(u) for u in users]
 
 
 @router.patch("/users/{user_id}", response_model=UserOut)
 async def update_user(user_id: str, data: UserAdminUpdate, db: DbSession, user: CurrentUser):
-    _require_admin(user)
+    require_admin(user)
     target = await db.get(User, user_id)
     if target is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "用户不存在")
@@ -172,7 +168,7 @@ async def update_user(user_id: str, data: UserAdminUpdate, db: DbSession, user: 
 @router.delete("/users/{user_id}", response_model=MessageOut)
 async def delete_user(user_id: str, db: DbSession, user: CurrentUser):
     """删除用户：其发布的能力自动转移给当前管理员，再删除账号。"""
-    _require_admin(user)
+    require_admin(user)
     if user_id == user.id:
         raise HTTPException(status.HTTP_409_CONFLICT, "不能删除当前登录的管理员账号")
     target = await db.get(User, user_id)
@@ -202,7 +198,7 @@ async def delete_user(user_id: str, db: DbSession, user: CurrentUser):
 @router.post("/users", response_model=UserOut, status_code=status.HTTP_201_CREATED)
 async def create_user(data: UserAdminCreate, db: DbSession, user: CurrentUser):
     """管理员新增用户（可指定角色）。"""
-    _require_admin(user)
+    require_admin(user)
     exists = await db.scalar(
         select(User.id).where(or_(User.username == data.username, User.email == data.email))
     )
@@ -225,7 +221,7 @@ async def create_user(data: UserAdminCreate, db: DbSession, user: CurrentUser):
 
 @router.get("/stats", response_model=StatsOut)
 async def global_stats(db: DbSession, user: CurrentUser):
-    _require_admin(user)
+    require_admin(user)
     return await build_stats(db, user, scope="all")
 
 

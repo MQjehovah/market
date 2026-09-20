@@ -56,7 +56,7 @@ async def test_user_adds_capability_then_can_invoke(client, publisher_headers, a
 @pytest.mark.asyncio
 async def test_owner_can_invoke_without_joining(client, publisher_headers, admin_headers):
     """能力作者无需加入即可调用自己的能力。"""
-    tool_name = "owner-tool"
+    tool_name = "owner-invoke-tool"
     await _publish_capability(client, publisher_headers, admin_headers, tool_name, "tool", _tool_zip(tool_name))
     r = await client.post(
         f"/api/runtime/tools/{tool_name}/invoke",
@@ -64,6 +64,55 @@ async def test_owner_can_invoke_without_joining(client, publisher_headers, admin
         json={"params": {"text": "hi"}},
     )
     assert r.status_code == 200, r.text
+
+
+@pytest.mark.asyncio
+async def test_install_policy_default_on_and_required(
+    client, publisher_headers, admin_headers, user_headers
+):
+    """default_on 登录/拉列表时自动加入；required 禁止移除。"""
+    auto_name = "auto-join-tool"
+    must_name = "must-keep-tool"
+    await _publish_capability(
+        client, publisher_headers, admin_headers, auto_name, "tool", _tool_zip(auto_name)
+    )
+    await _publish_capability(
+        client, publisher_headers, admin_headers, must_name, "tool", _tool_zip(must_name)
+    )
+    r = await client.get("/api/capabilities", params={"q": auto_name})
+    auto_id = r.json()["items"][0]["id"]
+    r = await client.get("/api/capabilities", params={"q": must_name})
+    must_id = r.json()["items"][0]["id"]
+
+    r = await client.post(
+        f"/api/capabilities/{auto_id}/install-policy",
+        headers=admin_headers,
+        json={"install_policy": "default_on"},
+    )
+    assert r.status_code == 200, r.text
+    r = await client.post(
+        f"/api/capabilities/{must_id}/install-policy",
+        headers=admin_headers,
+        json={"install_policy": "required"},
+    )
+    assert r.status_code == 200, r.text
+
+    # 拉「我的能力」会同步 default_on
+    r = await client.get("/api/my/capabilities?scope=added", headers=user_headers)
+    assert r.status_code == 200
+    assert any(c["id"] == auto_id for c in r.json())
+
+    # required 也可手动加入，但不可移除
+    r = await client.post(
+        "/api/my/capabilities", headers=user_headers, json={"capability_id": must_id}
+    )
+    assert r.status_code == 201, r.text
+    r = await client.get("/api/my/capabilities", headers=user_headers)
+    must_row = next(c for c in r.json() if c["id"] == must_id)
+    assert must_row.get("removable") is False
+    r = await client.delete(f"/api/my/capabilities/{must_id}", headers=user_headers)
+    assert r.status_code == 422
+    assert "必装" in r.json()["detail"]
 
 
 @pytest.mark.asyncio

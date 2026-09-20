@@ -10,7 +10,7 @@ from typing import Any
 
 from . import __version__
 from .client import MarketClient
-from .installer import install_agent
+from .installer import install_capability
 from .local_runner import find_agent_root, run_local
 from .server import serve
 
@@ -39,7 +39,7 @@ def cmd_sync(args) -> int:
         by_type: dict[str, list[dict]] = {}
         for item in items:
             by_type.setdefault(item["type"], []).append(item)
-        for cap_type in ("agent", "tool", "skill", "mcp", "workflow"):
+        for cap_type in ("agent", "tool", "skill", "mcp", "workflow", "plugin"):
             group = by_type.get(cap_type)
             if not group:
                 continue
@@ -54,7 +54,7 @@ def cmd_sync(args) -> int:
 
 def cmd_pull(args) -> int:
     client = _client(args)
-    content, headers = client.download(args.name, args.version)
+    content, headers = client.download(args.name, args.version, cap_type=args.type or "")
     out = Path(args.output) if args.output else Path(f"{args.name}-{args.version or 'latest'}.zip")
     out.write_bytes(content)
     print(f"已下载能力包：{out}（{len(content)} 字节，SHA-256={headers.get('x-capability-checksum', '')}）")
@@ -67,9 +67,11 @@ def cmd_install(args) -> int:
         client.ensure_token(args.user, args.password)
     root = find_agent_root(args.agent_root)
     target = Path(args.target) if args.target else root / "config"
-    manifest = install_agent(
+    cap_type = (args.type or "agent").lower()
+    manifest = install_capability(
         client,
         args.name,
+        cap_type=cap_type,
         version=args.version,
         target=target,
         dry_run=args.dry_run,
@@ -77,7 +79,14 @@ def cmd_install(args) -> int:
     if args.json:
         _print_json(manifest)
     elif not args.dry_run:
-        print(f"安装清单：{target / 'agents' / args.name / 'installed.json'}")
+        if cap_type == "agent":
+            print(f"安装清单：{target / 'agents' / args.name / 'installed.json'}")
+        elif cap_type == "skill":
+            print(f"安装清单：{target / 'skills' / args.name / 'installed.json'}")
+        elif cap_type == "mcp":
+            print(f"已合并：{target / 'mcp_servers.json'}")
+        elif cap_type == "plugin":
+            print(f"安装清单：{target / 'plugins' / args.name / 'installed.json'}")
     return 0
 
 
@@ -172,13 +181,19 @@ def build_parser() -> argparse.ArgumentParser:
     _common_args(p)
     p.add_argument("name", help="能力名称")
     p.add_argument("--version", "-v", default="", help="版本（默认最新）")
-    p.add_argument("--type", default="", help="能力类型（agent/tool/skill/mcp）")
+    p.add_argument("--type", default="", help="能力类型（agent/tool/skill/mcp/plugin，用于目录消歧）")
     p.add_argument("--output", "-o", default="", help="保存路径（默认 <name>-<version>.zip）")
     p.set_defaults(func=cmd_pull)
 
-    p = sub.add_parser("install", help="下载 Agent + 依赖并组装成本地 Agent")
+    p = sub.add_parser("install", help="下载并安装能力（agent/skill/mcp/plugin）")
     _common_args(p)
-    p.add_argument("name", help="Agent 名称")
+    p.add_argument("name", help="能力名称")
+    p.add_argument(
+        "--type",
+        default="agent",
+        choices=["agent", "skill", "mcp", "plugin"],
+        help="安装类型（默认 agent）",
+    )
     p.add_argument("--version", "-v", default="", help="版本（默认最新）")
     p.add_argument("--target", default="", help="目标配置目录（默认 <agent-root>/config）")
     p.add_argument("--agent-root", default="", help="本地 agent 仓库根目录（默认 AGENT_ROOT 或 E:\\ai\\agent）")

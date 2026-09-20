@@ -14,7 +14,7 @@
 
 接入 Claude Code：
     claude mcp add marketplace -- python E:/ai/market/backend/marketplace_mcp/server.py
-接入 Codex / Cursor：在 MCP 配置里指向同样命令即可。
+接入兼容 MCP 客户端：在 MCP 配置里指向同样命令即可。
 """
 
 import json

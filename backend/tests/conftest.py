@@ -1,15 +1,23 @@
-"""测试环境：使用内存 SQLite，避免污染开发数据库。"""
+"""测试环境：强制使用内存 SQLite，避免污染开发数据库。"""
 
 import os
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
-os.environ.setdefault("ARTIFACT_STORAGE", "local")
-os.environ.setdefault("ARTIFACT_DIR", "./data/test-artifacts")
-os.environ.setdefault("JWT_SECRET", "test-secret-key-with-at-least-32-bytes!!")
+# 必须在导入 app 之前强制覆盖（不可 setdefault：避免被本机环境变量带到文件库）
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
+os.environ["ARTIFACT_STORAGE"] = "local"
+os.environ["ARTIFACT_DIR"] = "./data/test-artifacts"
+os.environ["JWT_SECRET"] = "test-secret-key-with-at-least-32-bytes!!"
+
 import asyncio
 
 import httpx
 import pytest
+
+from app.config import get_settings
+
+get_settings.cache_clear()
+
+from app.database import Base, engine
 from app.main import app
 
 
@@ -22,6 +30,9 @@ def event_loop():
 
 @pytest.fixture
 async def client():
+    # 每个用例清空表，避免跨用例脏数据（同进程共用 :memory: StaticPool）
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
     transport = httpx.ASGITransport(app=app)
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:

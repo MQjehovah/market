@@ -17,11 +17,13 @@ from app.routers import (
     assemble,
     auth,
     bindings,
+    mcp_edit,
     my,
     portal,
     publish,
     runtime,
     skill_edit,
+    tool_edit,
     workflows,
     mcp_gateway,
 )
@@ -60,10 +62,20 @@ app = FastAPI(
     description="AI 能力公共市场平台 API：四大市场（Agent / 工具 / 技能 / MCP）、发布审核流程、版本管理、执行引擎。",
     lifespan=lifespan,
 )
+if (
+    not settings.debug
+    and settings.jwt_secret.startswith("dev-secret")
+):
+    import logging
 
+    logging.getLogger("market").warning(
+        "JWT_SECRET 仍为开发默认值，生产环境请通过环境变量覆盖"
+    )
+
+_cors = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=_cors or ["http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -80,6 +92,8 @@ app.include_router(bindings.router)
 app.include_router(my.router)
 app.include_router(agent_edit.router)
 app.include_router(skill_edit.router)
+app.include_router(tool_edit.router)
+app.include_router(mcp_edit.router)
 app.include_router(mcp_gateway.router)
 app.include_router(a2a_router)
 app.include_router(well_known_router)
@@ -97,9 +111,21 @@ async def root():
     }
 
 
-# 生产部署时若存在前端构建产物，则由后端直接托管
+# 生产部署时若存在前端构建产物，则由后端直接托管。
+# html=True 只处理目录 index，深链刷新（如 /capabilities/:id）仍会 404，需回退到 index.html。
 frontend_dist = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
 if frontend_dist.is_dir():
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+    from starlette.responses import Response
     from fastapi.staticfiles import StaticFiles
 
-    app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")
+    class SPAStaticFiles(StaticFiles):
+        async def get_response(self, path: str, scope) -> Response:
+            try:
+                return await super().get_response(path, scope)
+            except StarletteHTTPException as exc:
+                if exc.status_code != 404:
+                    raise
+                return await super().get_response("index.html", scope)
+
+    app.mount("/", SPAStaticFiles(directory=frontend_dist, html=True), name="frontend")

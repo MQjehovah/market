@@ -194,6 +194,15 @@ async def run_agent_task(name: str, data: RuntimeTaskRequest, db: DbSession, use
 
     cap = await resolve_capability(db, user, name)
     await require_runtime_access(user, cap, db)
+    if cap.type == "plugin":
+        comps = (cap.input_schema or {}).get("components") or []
+        primary = next((c for c in comps if c.get("role") == "primary"), None)
+        if primary is None:
+            primary = next((c for c in comps if c.get("type") == "agent"), None)
+        if primary is None:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"插件 {name} 没有可运行的 Agent")
+        cap = await resolve_capability(db, user, primary["name"], primary.get("version"))
+        await require_runtime_access(user, cap, db)
     if cap.type != "agent":
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{name} 不是 Agent 能力")
     result = await run_agent(db, user, cap, data.task)
