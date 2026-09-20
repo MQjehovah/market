@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     # 安全
     jwt_secret: str = "dev-secret-change-me-please-32-bytes-minimum"
     jwt_algorithm: str = "HS256"
-    jwt_expire_minutes: int = 60 * 24
+    jwt_expire_minutes: int = 720  # 本地会话 12h(默认),可用 JWT_EXPIRE_MINUTES 覆盖
     # 逗号分隔；生产请配置实际前端源。空则仅允许本机 Vite。
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     # MCP 网关：True 时 api_token 为空则拒绝外部调用（强制配置令牌）
