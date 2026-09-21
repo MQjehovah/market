@@ -5,6 +5,15 @@ import json
 import zipfile
 
 import pytest
+from fastapi import HTTPException
+from sqlalchemy import select
+from sqlalchemy.orm import joinedload
+
+from app.auth import hash_password
+from app.database import SessionLocal
+from app.models import Capability, User
+from app.services.marketplace import resolve_capability
+from app.services.visibility import is_capability_visible, visibility_condition
 
 
 def _tool_zip(name: str, version: str = "1.0.0") -> bytes:
@@ -235,3 +244,102 @@ async def test_visibility_private(client, publisher_headers, user_headers):
     assert r.status_code == 404
     r = await client.get(f"/api/capabilities/{cap_id}", headers=publisher_headers)
     assert r.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_team_visibility_resolvable_by_teammate(client):
+    """team 可见能力：同团队可解析；非同团队与匿名均 404。"""
+    async with SessionLocal() as db:
+        teammate = User(
+            username="mate",
+            email="mate@example.com",
+            password_hash=hash_password("teammate-secret-123"),
+            role="user",
+            team="中台团队",  # 与 publisher 同队
+        )
+        db.add(teammate)
+        await db.commit()
+        await db.refresh(teammate)
+        cap = await resolve_capability(db, teammate, "代码审查助手")
+        assert cap.name == "代码审查助手"
+
+    async with SessionLocal() as db:
+        outsider = await db.scalar(select(User).where(User.username == "user"))
+        with pytest.raises(HTTPException) as exc:
+            await resolve_capability(db, outsider, "代码审查助手")
+        assert exc.value.status_code == 404
+
+    async with SessionLocal() as db:
+        with pytest.raises(HTTPException) as exc:
+            await resolve_capability(db, None, "代码审查助手")
+        assert exc.value.status_code == 404
+
+
+VISIBILITY_MATRIX = {
+    "internal": {"author": True, "teammate": True, "outsider": True, "admin": True, "anonymous": True},
+    "public": {"author": True, "teammate": True, "outsider": True, "admin": True, "anonymous": True},
+    "private": {"author": True, "teammate": False, "outsider": False, "admin": True, "anonymous": False},
+    "team": {"author": True, "teammate": True, "outsider": False, "admin": True, "anonymous": False},
+}
+
+
+@pytest.mark.asyncio
+async def test_visibility_sql_condition_matches_python_predicate(client):
+    """SQL 过滤条件与 Python 谓词在 4 种可见性 × 5 类用户上逐格等价。"""
+    async with SessionLocal() as db:
+        publisher = await db.scalar(select(User).where(User.username == "publisher"))
+        admin = await db.scalar(select(User).where(User.username == "admin"))
+        outsider = await db.scalar(select(User).where(User.username == "user"))
+        teammate = User(
+            username="mate",
+            email="mate@example.com",
+            password_hash=hash_password("teammate-secret-123"),
+            role="user",
+            team="中台团队",
+        )
+        db.add(teammate)
+        names = {visibility: f"等价性-{visibility}" for visibility in VISIBILITY_MATRIX}
+        for visibility, name in names.items():
+            db.add(
+                Capability(
+                    name=name,
+                    description="等价性",
+                    type="tool",
+                    version="1.0.0",
+                    status="published",
+                    visibility=visibility,
+                    author_id=publisher.id,
+                    organization=publisher.organization,
+                )
+            )
+        await db.commit()
+        await db.refresh(teammate)
+
+        personas = {
+            "author": publisher,
+            "teammate": teammate,
+            "outsider": outsider,
+            "admin": admin,
+            "anonymous": None,
+        }
+        caps = {
+            c.name: c
+            for c in (
+                await db.scalars(select(Capability).options(joinedload(Capability.author)))
+            ).all()
+            if c.name in names.values()
+        }
+        for persona, user in personas.items():
+            condition = visibility_condition(user)
+            stmt = select(Capability.name)
+            if condition is not None:
+                stmt = stmt.where(condition)
+            sql_visible = set((await db.scalars(stmt)).all())
+            for visibility, name in names.items():
+                expected = VISIBILITY_MATRIX[visibility][persona]
+                assert is_capability_visible(caps[name], user) == expected, (
+                    f"Python 谓词不符: visibility={visibility}, persona={persona}"
+                )
+                assert (name in sql_visible) == expected, (
+                    f"SQL 条件不符: visibility={visibility}, persona={persona}"
+                )

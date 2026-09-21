@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import CurrentUser
 from app.config import get_settings
 from app.models import Capability, User, UserCapability
+from app.services.visibility import is_capability_visible
 
 
 def require_role(*roles: str) -> Callable:
@@ -44,18 +45,8 @@ def require_role(*roles: str) -> Callable:
 
 
 def can_view(capability: Capability, user: User | None) -> bool:
-    """可见性控制：private 仅作者；team 仅同团队；internal/public 全员可见。"""
-    if capability.visibility == "public" or capability.visibility == "internal":
-        return True
-    if user is None:
-        return False
-    if user.role == "admin":
-        return True
-    if capability.visibility == "private":
-        return capability.author_id == user.id
-    if capability.visibility == "team":
-        return capability.author.team == user.team and user.team != ""
-    return False
+    """可见性控制：private 仅作者；team 仅同团队；internal/public 全员可见；admin 全量。"""
+    return is_capability_visible(capability, user)
 
 
 def can_use(capability: Capability, user: User | None) -> bool:
