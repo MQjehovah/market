@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     seed_admin_username: str = "admin"
     seed_admin_password: str = "admin123"
     seed_admin_email: str = "admin@example.com"
+    seed_publisher_password: str = "change-me"
+    seed_user_password: str = "change-me"
 
     # 能力包上传限制
     max_artifact_size_mb: int = 50
@@ -99,6 +101,8 @@ def get_settings() -> Settings:
     # 启动即校验:生产环境缺失或仍为弱值则抛错,开发环境告警放行。
     require_secret("JWT_SECRET", settings.jwt_secret)
     require_secret("SEED_ADMIN_PASSWORD", settings.seed_admin_password)
+    require_secret("SEED_PUBLISHER_PASSWORD", settings.seed_publisher_password)
+    require_secret("SEED_USER_PASSWORD", settings.seed_user_password)
     # 确保数据目录存在
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     settings.artifact_path.mkdir(parents=True, exist_ok=True)

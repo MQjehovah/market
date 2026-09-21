@@ -212,6 +212,8 @@ ensure_secret() {{
 }}
 ensure_secret JWT_SECRET
 ensure_secret SEED_ADMIN_PASSWORD
+ensure_secret SEED_PUBLISHER_PASSWORD
+ensure_secret SEED_USER_PASSWORD
 if [ "$NEW_ENV" = "1" ]; then
   if grep -qE '^APP_ENV=' .env; then
     sed -i 's|^APP_ENV=.*|APP_ENV=production|' .env

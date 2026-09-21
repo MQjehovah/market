@@ -7,8 +7,10 @@ os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 os.environ["ARTIFACT_STORAGE"] = "local"
 os.environ["ARTIFACT_DIR"] = "./data/test-artifacts"
 os.environ["JWT_SECRET"] = "test-secret-key-with-at-least-32-bytes!!"
-# 开发态种子管理员:显式提供非弱口令,避免 env 守卫随机生成导致登录用例不确定
+# 开发态种子口令:显式提供非弱口令,避免 env 守卫随机生成导致登录用例不确定
 os.environ["SEED_ADMIN_PASSWORD"] = "test-seed-admin-password-32-bytes!!"
+os.environ["SEED_PUBLISHER_PASSWORD"] = "test-seed-publisher-password-32-bytes!!"
+os.environ["SEED_USER_PASSWORD"] = "test-seed-user-password-32-bytes!!"
 
 import asyncio
 
@@ -54,9 +56,9 @@ async def admin_headers(client):
 
 @pytest.fixture
 async def publisher_headers(client):
-    return await _login(client, "publisher", "publisher123")
+    return await _login(client, "publisher", "test-seed-publisher-password-32-bytes!!")
 
 
 @pytest.fixture
 async def user_headers(client):
-    return await _login(client, "user", "user123456")
+    return await _login(client, "user", "test-seed-user-password-32-bytes!!")

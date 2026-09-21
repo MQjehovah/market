@@ -14,24 +14,45 @@ from app.models import Capability, User
 logger = logging.getLogger(__name__)
 
 
-def resolve_seed_admin_password() -> str:
-    """解析种子管理员口令。
+def _resolve_seed_password(value: str | None, env_name: str, role_label: str) -> str:
+    """种子口令的统一解析规则。
 
     已显式配置且非弱值则沿用;生产缺省/弱值直接拒绝(守卫已在导入 config 时拦截,
     这里兜底);开发缺省/弱值时随机生成并只打印一次,绝不写入固定口令。
     """
-    configured = (get_settings().seed_admin_password or "").strip()
+    configured = (value or "").strip()
     if configured and configured not in WEAK_VALUES:
         return configured
     if is_production():
         raise RuntimeError(
-            "环境变量 SEED_ADMIN_PASSWORD 未配置或仍为不安全的默认值,生产环境拒绝创建管理员"
+            f"环境变量 {env_name} 未配置或仍为不安全的默认值,生产环境拒绝创建{role_label}"
         )
     generated = secrets.token_urlsafe(12)
     logger.warning(
-        "SEED_ADMIN_PASSWORD 未配置或为弱值,已生成一次性管理员口令:%s(仅本次打印)", generated
+        "%s 未配置或为弱值,已生成一次性%s口令:%s(仅本次打印)", env_name, role_label, generated
     )
     return generated
+
+
+def resolve_seed_admin_password() -> str:
+    """解析种子管理员口令(规则见 _resolve_seed_password)。"""
+    return _resolve_seed_password(
+        get_settings().seed_admin_password, "SEED_ADMIN_PASSWORD", "管理员"
+    )
+
+
+def resolve_seed_publisher_password() -> str:
+    """解析种子发布者口令(规则见 _resolve_seed_password)。"""
+    return _resolve_seed_password(
+        get_settings().seed_publisher_password, "SEED_PUBLISHER_PASSWORD", "发布者"
+    )
+
+
+def resolve_seed_user_password() -> str:
+    """解析种子普通用户口令(规则见 _resolve_seed_password)。"""
+    return _resolve_seed_password(
+        get_settings().seed_user_password, "SEED_USER_PASSWORD", "普通用户"
+    )
 
 
 async def seed_if_empty(db: AsyncSession) -> None:
@@ -51,7 +72,7 @@ async def seed_if_empty(db: AsyncSession) -> None:
     publisher = User(
         username="publisher",
         email="publisher@example.com",
-        password_hash=hash_password("publisher123"),
+        password_hash=hash_password(resolve_seed_publisher_password()),
         display_name="能力发布者",
         role="publisher",
         organization="数字中台部",
@@ -60,7 +81,7 @@ async def seed_if_empty(db: AsyncSession) -> None:
     user = User(
         username="user",
         email="user@example.com",
-        password_hash=hash_password("user123456"),
+        password_hash=hash_password(resolve_seed_user_password()),
         display_name="普通用户",
         role="user",
         organization="业务部",

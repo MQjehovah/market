@@ -78,7 +78,7 @@ cd backend && pip install -r requirements.txt && python run.py
 cd frontend && npm install && npm run dev
 ```
 
-或 `start-dev.bat` / `start-dev.ps1`。演示账号：`admin/admin123`、`publisher/publisher123`、`user/user123456`。
+或 `start-dev.bat` / `start-dev.ps1`。开发态未配置 `SEED_ADMIN_PASSWORD` / `SEED_PUBLISHER_PASSWORD` / `SEED_USER_PASSWORD` 时，启动日志会为 `admin` / `publisher` / `user` 各打印一次随机初始口令；生产环境必须先经环境变量配置强口令，否则拒绝启动。
 
 ## 小白发布可安装场景（推荐：安装包）
 
@@ -158,7 +158,7 @@ cd backend && python -m pytest tests -q
 ## Docker
 
 ```bash
-cp .env.example .env   # 至少 JWT_SECRET
+cp .env.example .env   # 至少 JWT_SECRET 与各 SEED_*_PASSWORD
 docker compose build market && docker compose up -d
 ```
 

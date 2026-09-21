@@ -25,7 +25,7 @@ pip install -r requirements.txt
 CAP_URL=http://127.0.0.1:8093
 CAP_TOKEN=...
 CAP_USER=admin
-CAP_PASSWORD=admin123
+CAP_PASSWORD=<你的市场账号口令>
 AGENT_ROOT=E:/ai/agent
 CAP_PYTHON=python
 ```
