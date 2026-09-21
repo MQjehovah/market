@@ -94,15 +94,15 @@ watch(isAdmin, loadAdminBadge)
       <router-link to="/" class="brand" title="发现 · 安装 · 发布 · 审核 · 治理">
         <span class="brand-logo">AI</span>
         <span class="brand-text">
-          <strong>能力目录</strong>
-          <small>企业内部能力目录</small>
+          <strong>企业AI能力平台</strong>
+          <small>统一纳管 · 分发 · 装配</small>
         </span>
       </router-link>
     </div>
 
     <div class="side-scroll">
       <div class="nav-group">
-        <div class="nav-label">市场</div>
+        <div class="nav-label">能力平台</div>
         <button
           type="button"
           class="nav-item"
@@ -224,7 +224,6 @@ watch(isAdmin, loadAdminBadge)
       </div>
       <div v-else class="guest-actions">
         <router-link to="/login" class="btn btn-primary btn-block btn-sm">登录</router-link>
-        <router-link to="/register" class="btn btn-block btn-sm mt-8">注册</router-link>
       </div>
 
       <div v-if="showNotify && isLoggedIn" class="notify-panel panel" @click.stop>

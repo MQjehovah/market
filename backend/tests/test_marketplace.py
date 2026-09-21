@@ -44,22 +44,18 @@ async def test_public_browse_returns_published(client):
 
 
 @pytest.mark.asyncio
-async def test_register_login_flow(client):
+async def test_register_disabled_login_still_works(client, user_headers):
+    """企业平台不再开放自助注册(由管理员或 SSO 开号), 登录仍然可用。"""
     r = await client.post(
         "/api/auth/register",
-        json={
-            "username": "newbie",
-            "email": "newbie@example.com",
-            "password": "secret123",
-            "display_name": "新人",
-        },
+        json={"username": "newbie", "email": "newbie@example.com", "password": "secret123"},
     )
-    assert r.status_code == 201, r.text
-    assert r.json()["user"]["role"] == "user"
-    token = r.json()["access_token"]
-    r = await client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code in (404, 405), r.text
+
+    r = await client.get("/api/auth/me", headers=user_headers)
     assert r.status_code == 200
-    assert r.json()["username"] == "newbie"
+    assert r.json()["username"]
+
 
 
 @pytest.mark.asyncio

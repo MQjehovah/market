@@ -1,4 +1,4 @@
-# AI 能力目录（公司内部）
+# 企业AI能力平台（公司内部）
 
 **定位：内部 AI 资产的系统记录与治理控制面**——注册、版本、审核、发现、分发、授权、计量。  
 **不是**对话产品、不是编排 PaaS、不是 IDE。零号员工 / IDE / Dify 等是消费者。
@@ -67,7 +67,7 @@ market/
 │   ├── app/services/taxonomy.py   # 货架与语义
 │   ├── marketplace_mcp/           # 市场 MCP 桥（IDE / Agent 客户端）
 │   └── ...
-├── frontend/                # Vue 3：能力目录 / 我的能力 / 治理后台
+├── frontend/                # Vue 3：能力平台 / 我的能力 / 治理后台
 └── consumer/                # cap CLI：sync / install / run
 ```
 

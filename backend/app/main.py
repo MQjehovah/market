@@ -59,7 +59,7 @@ settings = get_settings()
 app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
-    description="AI 能力公共市场平台 API：四大市场（Agent / 工具 / 技能 / MCP）、发布审核流程、版本管理、执行引擎。",
+    description="企业AI能力平台 API：四大市场（Agent / 工具 / 技能 / MCP）、发布审核流程、版本管理、执行引擎。",
     lifespan=lifespan,
 )
 if (

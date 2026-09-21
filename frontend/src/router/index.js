@@ -1,7 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 import LoginView from '../views/LoginView.vue'
-import RegisterView from '../views/RegisterView.vue'
 import BrowseView from '../views/BrowseView.vue'
 import CapabilityDetailView from '../views/CapabilityDetailView.vue'
 import AgentEditView from '../views/AgentEditView.vue'
@@ -43,7 +42,7 @@ function adminLanding(to) {
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
-    { path: '/', component: BrowseView, meta: { title: '能力目录' } },
+    { path: '/', component: BrowseView, meta: { title: '能力平台' } },
     { path: '/agents/:name/edit', component: AgentEditView, meta: { title: '编辑助手', auth: true } },
     { path: '/skills/:name/edit', component: SkillEditView, meta: { title: '编辑技能', auth: true } },
     { path: '/tools/:name/edit', component: ToolEditView, meta: { title: '编辑编排函数', auth: true } },
@@ -51,7 +50,6 @@ const router = createRouter({
     { path: '/workflows/new', component: WorkflowEditorView, meta: { title: '新建能力编排', auth: true, full: true } },
     { path: '/workflows/:id/edit', component: WorkflowEditorView, props: true, meta: { title: '能力编排', auth: true, full: true } },
     { path: '/login', component: LoginView, meta: { title: '登录', blank: true } },
-    { path: '/register', component: RegisterView, meta: { title: '注册', blank: true } },
     { path: '/capabilities/:id', component: CapabilityDetailView, props: true, meta: { title: '能力详情' } },
     { path: '/my', component: MyCapabilitiesView, meta: { title: '我的能力', auth: true } },
     { path: '/profile', component: ProfileView, meta: { title: '个人中心', auth: true } },
@@ -75,7 +73,7 @@ router.beforeEach((to) => {
   if (to.path === '/login' && typeof to.query.sso_token === 'string' && to.query.sso_token) {
     return true
   }
-  if (authState.token && (to.path === '/login' || to.path === '/register')) {
+  if (authState.token && to.path === '/login') {
     return typeof to.query.redirect === 'string' ? to.query.redirect : '/'
   }
   if (to.meta.auth && !authState.token) {
@@ -86,8 +84,8 @@ router.beforeEach((to) => {
   }
   const title = to.path.startsWith('/admin')
     ? ADMIN_TITLES[to.params.section] || '治理后台'
-    : to.meta.title || '能力目录'
-  document.title = `${title} · AI 能力目录`
+    : to.meta.title || '能力平台'
+  document.title = `${title} · 企业AI能力平台`
 })
 
 export default router

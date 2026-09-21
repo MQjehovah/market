@@ -1,3 +1,3 @@
-"""AI 能力公共市场平台 (AI Capability Marketplace Platform)."""
+"""企业AI能力平台 (Enterprise AI Capability Platform)."""
 
 __version__ = "0.1.0"

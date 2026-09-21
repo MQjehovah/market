@@ -56,7 +56,7 @@ class MarketClient:
             return self.token
         return self.login(username, password)
 
-    # ---------- 能力目录与下载 ----------
+    # ---------- 能力平台与下载 ----------
 
     def sync(self) -> list[dict[str, Any]]:
         """拉取各能力的最新发布版本目录。"""

@@ -11,7 +11,7 @@ from app.core.env_guard import require_secret
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    app_name: str = "AI 能力公共市场平台"
+    app_name: str = "企业AI能力平台"
     app_version: str = "0.1.0"
     debug: bool = False
 

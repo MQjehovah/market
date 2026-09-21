@@ -62,11 +62,11 @@ onMounted(handleSsoCallback)
     <div class="auth-box">
       <router-link to="/" class="brand">
         <span class="logo">AI</span>
-        <span>能力目录</span>
+        <span>企业AI能力平台</span>
       </router-link>
 
       <h1>登录</h1>
-      <p class="hint">使用企业账号进入能力目录</p>
+      <p class="hint">使用企业账号登录平台</p>
 
       <div v-if="error" class="alert alert-error">{{ error }}</div>
 
@@ -103,10 +103,6 @@ onMounted(handleSsoCallback)
       </button>
       <p class="sso-hint">将打开公司统一登录页，可用钉钉扫码或工号密码。</p>
 
-      <p class="foot">
-        还没有账号？
-        <router-link to="/register">立即注册</router-link>
-      </p>
     </div>
   </div>
 </template>
