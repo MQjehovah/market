@@ -80,25 +80,40 @@ async def sso_start():
     return RedirectResponse(url, status_code=302)
 
 
+def _sso_login_redirect(error: str = "") -> RedirectResponse:
+    """SSO 出错时回到前端登录页并带 error 文案，不把 JSON 错误丢给浏览器。
+
+    与成功路径同样把参数拼在 redirect_target 之后，前端 LoginView 读 route.query.error 展示。
+    """
+    target = (get_settings().sso_redirect_target or "/login").strip() or "/login"
+    if error:
+        sep = "&" if "?" in target else "?"
+        target = f"{target}{sep}error={urllib.parse.quote(error)}"
+    return RedirectResponse(target, status_code=302)
+
+
 @router.get("/oidc/callback")
 async def oidc_callback(db: DbSession, code: str = "", state: str = ""):
-    """SSO 回调:code→id_token→校验→查/建用户→签本地 JWT→302 回前端。"""
+    """SSO 回调:code→id_token→校验→查/建用户→签本系统 JWT→302 回前端。"""
     if not sso_auth.is_login_configured():
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "SSO not enabled")
+        return _sso_login_redirect("SSO 登录未启用")
     if not code or not state:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Missing code or state")
+        return _sso_login_redirect("SSO 回调参数缺失")
     if not sso_auth.validate_state(state):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired state")
+        return _sso_login_redirect("SSO 登录状态已失效，请重试")
     try:
         id_token = sso_auth.exchange_code(code)
     except sso_auth.SsoAuthError as e:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(e)) from e
+        return _sso_login_redirect(f"SSO 登录失败：{e}")
     credentials_exc = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="登录状态无效或已过期",
         headers={"WWW-Authenticate": "Bearer"},
     )
-    user = await _resolve_sso_user(db, id_token, credentials_exc)
+    try:
+        user = await _resolve_sso_user(db, id_token, credentials_exc)
+    except HTTPException as e:
+        return _sso_login_redirect(str(e.detail))
     await ensure_default_on_joins(db, user)
     token = create_access_token(user)
     target = (get_settings().sso_redirect_target or "/login").strip() or "/login"

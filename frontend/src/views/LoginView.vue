@@ -33,6 +33,8 @@ function loginWithSso() {
 }
 
 async function handleSsoCallback() {
+  const queryError = route.query.error
+  if (typeof queryError === 'string' && queryError) error.value = queryError
   const token = route.query.sso_token
   if (typeof token !== 'string' || !token) return
   ssoLoading.value = true

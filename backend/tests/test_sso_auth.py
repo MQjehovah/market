@@ -332,14 +332,40 @@ async def test_sso_start_redirects_when_configured(sso_env, client, monkeypatch)
 
 
 async def test_oidc_callback_rejects_bad_state(sso_env, client, monkeypatch):
+    """state 失效时跳回登录页并带 error,不把 JSON 错误丢给浏览器。"""
     settings = get_settings()
     monkeypatch.setattr(settings, "sso_redirect_uri", "http://127.0.0.1:8000/api/auth/oidc/callback")
+    monkeypatch.setattr(settings, "sso_redirect_target", "/market/login")
     r = await client.get(
         "/api/auth/oidc/callback",
         params={"code": "abc", "state": "bad"},
         follow_redirects=False,
     )
-    assert r.status_code == 401
+    assert r.status_code == 302
+    loc = r.headers["location"]
+    assert loc.startswith("/market/login?error=")
+    assert "sso_token=" not in loc
+
+
+async def test_oidc_callback_missing_params_redirects(client, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "sso_redirect_uri", "http://127.0.0.1:8000/api/auth/oidc/callback")
+    monkeypatch.setattr(settings, "sso_redirect_target", "/market/login")
+    r = await client.get("/api/auth/oidc/callback", follow_redirects=False)
+    assert r.status_code == 302
+    assert "error=" in r.headers["location"]
+
+
+async def test_oidc_callback_disabled_redirects(client, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "sso_issuer", "")
+    monkeypatch.setattr(settings, "sso_client_id", "")
+    monkeypatch.setattr(settings, "sso_redirect_uri", "")
+    r = await client.get(
+        "/api/auth/oidc/callback", params={"code": "a", "state": "b"}, follow_redirects=False
+    )
+    assert r.status_code == 302
+    assert "error=" in r.headers["location"]
 
 
 async def test_http_me_accepts_sso_token(sso_env, client):
