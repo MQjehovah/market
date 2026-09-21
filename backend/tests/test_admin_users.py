@@ -232,5 +232,5 @@ async def test_cannot_disable_or_demote_self(client, admin_headers):
     assert r.status_code == 409
 
     # 管理员账号仍可用
-    r = await client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
+    r = await client.post("/api/auth/login", json={"username": "admin", "password": "test-seed-admin-password-32-bytes!!"})
     assert r.status_code == 200

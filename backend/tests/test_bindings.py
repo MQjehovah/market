@@ -7,7 +7,7 @@ from test_workflow import _agent_zip, _publish_capability, _tool_zip
 
 @pytest.mark.asyncio
 async def test_binding_crud_and_runtime_assembly(client, publisher_headers, admin_headers):
-    r = await client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
+    r = await client.post("/api/auth/login", json={"username": "admin", "password": "test-seed-admin-password-32-bytes!!"})
     admin_headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
 
     persona = "bind-persona"

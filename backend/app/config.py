@@ -5,6 +5,8 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.core.env_guard import require_secret
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
@@ -94,7 +96,14 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     settings = Settings()
+    # 启动即校验:生产环境缺失或仍为弱值则抛错,开发环境告警放行。
+    require_secret("JWT_SECRET", settings.jwt_secret)
+    require_secret("SEED_ADMIN_PASSWORD", settings.seed_admin_password)
     # 确保数据目录存在
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     settings.artifact_path.mkdir(parents=True, exist_ok=True)
     return settings
+
+
+# 导入 app.config 即触发一次校验,保证生产环境在启动最早期失败。
+get_settings()

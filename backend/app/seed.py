@@ -1,11 +1,37 @@
 """种子数据：初始账号 + 各市场示例能力，便于首次体验。"""
 
+import logging
+import secrets
+
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import hash_password
 from app.config import get_settings
+from app.core.env_guard import WEAK_VALUES, is_production
 from app.models import Capability, User
+
+logger = logging.getLogger(__name__)
+
+
+def resolve_seed_admin_password() -> str:
+    """解析种子管理员口令。
+
+    已显式配置且非弱值则沿用;生产缺省/弱值直接拒绝(守卫已在导入 config 时拦截,
+    这里兜底);开发缺省/弱值时随机生成并只打印一次,绝不写入固定口令。
+    """
+    configured = (get_settings().seed_admin_password or "").strip()
+    if configured and configured not in WEAK_VALUES:
+        return configured
+    if is_production():
+        raise RuntimeError(
+            "环境变量 SEED_ADMIN_PASSWORD 未配置或仍为不安全的默认值,生产环境拒绝创建管理员"
+        )
+    generated = secrets.token_urlsafe(12)
+    logger.warning(
+        "SEED_ADMIN_PASSWORD 未配置或为弱值,已生成一次性管理员口令:%s(仅本次打印)", generated
+    )
+    return generated
 
 
 async def seed_if_empty(db: AsyncSession) -> None:
@@ -17,7 +43,7 @@ async def seed_if_empty(db: AsyncSession) -> None:
     admin = User(
         username=settings.seed_admin_username,
         email=settings.seed_admin_email,
-        password_hash=hash_password(settings.seed_admin_password),
+        password_hash=hash_password(resolve_seed_admin_password()),
         display_name="市场管理员",
         role="admin",
         organization="平台部",
