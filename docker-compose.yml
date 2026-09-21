@@ -11,9 +11,10 @@ services:
     volumes:
       - ./data:/app/backend/data
     environment:
+      - APP_ENV=${APP_ENV:-production}
       - PORT=8093
-      - JWT_SECRET=${JWT_SECRET}
-      - SEED_ADMIN_PASSWORD=${SEED_ADMIN_PASSWORD:-admin123}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
+      - SEED_ADMIN_PASSWORD=${SEED_ADMIN_PASSWORD:?SEED_ADMIN_PASSWORD is required}
       - DATABASE_URL=${DATABASE_URL:-sqlite+aiosqlite:///./data/marketplace.db}
       - ARTIFACT_STORAGE=${ARTIFACT_STORAGE:-local}
       - ARTIFACT_DIR=${ARTIFACT_DIR:-./data/artifacts}

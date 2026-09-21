@@ -105,11 +105,6 @@ onMounted(handleSsoCallback)
         还没有账号？
         <router-link to="/register">立即注册</router-link>
       </p>
-
-      <details class="demo">
-        <summary>演示账号</summary>
-        <p>admin / admin123 · publisher / publisher123 · user / user123456</p>
-      </details>
     </div>
   </div>
 </template>
@@ -196,28 +191,5 @@ h1 {
   text-align: center;
   color: var(--muted);
   font-size: 13px;
-}
-
-.demo {
-  margin-top: 28px;
-  padding-top: 16px;
-  border-top: 1px solid var(--border);
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.demo summary {
-  cursor: pointer;
-  user-select: none;
-  list-style: none;
-}
-
-.demo summary::-webkit-details-marker {
-  display: none;
-}
-
-.demo p {
-  margin: 10px 0 0;
-  line-height: 1.6;
 }
 </style>
