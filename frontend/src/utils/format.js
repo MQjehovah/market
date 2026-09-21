@@ -157,7 +157,7 @@ export const CONSUME_WAYS = [
   { id: 'trial', label: '云端试用', api: 'POST /api/runtime/*', who: '开发者调试' },
   { id: 'a2a', label: 'A2A 互调', api: 'Agent Card + tasks/send', who: 'Agent 之间' },
   { id: 'mcp_bridge', label: '市场 MCP 桥', api: 'marketplace_* tools', who: 'IDE / Agent 客户端' },
-  { id: 'gateway', label: 'MCP HTTP 网关', api: '/api/mcp-gateway/{name}', who: 'Dify 等' },
+  { id: 'gateway', label: 'MCP HTTP 网关', api: '/market/api/mcp-gateway/{name}', who: 'Dify 等' },
   { id: 'join', label: '加入我的能力', api: 'POST /api/my/capabilities', who: '人（调用授权前提）' }
 ]
 

@@ -21,6 +21,8 @@ import ConfirmActionModal from '../components/ConfirmActionModal.vue'
 const route = useRoute()
 const router = useRouter()
 
+const __API_BASE__ = (import.meta.env.BASE_URL || '/').replace(/\/$/, '') + '/api'
+
 const SECTIONS = ['review', 'listed', 'users', 'gateway']
 const SECTION_META = {
   review: { label: '审核', hint: '处理待审、拒绝与打回；通过后到「上架治理」做下架归档' },
@@ -549,15 +551,15 @@ async function testGateway(s) {
 }
 
 function gatewayUrl(s) {
-  return `${window.location.origin}/api/mcp-gateway/${s.name}/stream`
+  return `${window.location.origin}${__API_BASE__}/mcp-gateway/${s.name}/stream`
 }
 
 function gatewaySseUrl(s) {
-  return `${window.location.origin}/api/mcp-gateway/${s.name}/sse`
+  return `${window.location.origin}${__API_BASE__}/mcp-gateway/${s.name}/sse`
 }
 
 function gatewayPreviewUrl(name) {
-  return `${window.location.origin}/api/mcp-gateway/${name || '…'}/stream`
+  return `${window.location.origin}${__API_BASE__}/mcp-gateway/${name || '…'}/stream`
 }
 
 function copyText(text) {

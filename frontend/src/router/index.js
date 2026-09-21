@@ -41,7 +41,7 @@ function adminLanding(to) {
 }
 
 const router = createRouter({
-  history: createWebHistory(),
+  history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     { path: '/', component: BrowseView, meta: { title: '能力目录' } },
     { path: '/agents/:name/edit', component: AgentEditView, meta: { title: '编辑助手', auth: true } },

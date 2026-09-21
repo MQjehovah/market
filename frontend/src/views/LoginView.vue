@@ -29,7 +29,7 @@ function loginWithSso() {
   if (ssoLoading.value) return
   ssoLoading.value = true
   error.value = ''
-  window.location.href = '/api/auth/sso/start'
+  window.location.href = (import.meta.env.BASE_URL || '/').replace(/\/$/, '') + '/api/auth/sso/start'
 }
 
 async function handleSsoCallback() {

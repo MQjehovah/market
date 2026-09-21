@@ -2,6 +2,7 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
 export default defineConfig({
+  base: '/market/',
   plugins: [vue()],
   server: {
     host: '127.0.0.1',
@@ -10,6 +11,11 @@ export default defineConfig({
       '/api': {
         target: 'http://127.0.0.1:8093',
         changeOrigin: true
+      },
+      '/market/api': {
+        target: 'http://127.0.0.1:8093',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/market/, '')
       }
     }
   }

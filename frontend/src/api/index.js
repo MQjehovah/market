@@ -18,7 +18,7 @@ async function redirectToLogin() {
   }
 }
 
-const BASE = '/api'
+const BASE = (import.meta.env.BASE_URL || '/').replace(/\/$/, '') + '/api'
 
 export class ApiError extends Error {
   constructor(status, message, detail) {
