@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
 import { clearAuth, setAuth } from '../stores/auth'
+import logoUrl from '../assets/logo.svg'
 
 const router = useRouter()
 const route = useRoute()
@@ -61,7 +62,7 @@ onMounted(handleSsoCallback)
   <div class="auth-page">
     <div class="auth-box">
       <router-link to="/" class="brand">
-        <span class="logo">AI</span>
+        <img class="logo" :src="logoUrl" alt="Rosiwit" />
         <span>企业AI能力平台</span>
       </router-link>
 
@@ -139,12 +140,8 @@ onMounted(handleSsoCallback)
   width: 32px;
   height: 32px;
   border-radius: 8px;
-  display: grid;
-  place-items: center;
-  font-size: 12px;
-  font-weight: 700;
-  color: #fff;
-  background: var(--primary);
+  display: block;
+  object-fit: contain;
 }
 
 h1 {

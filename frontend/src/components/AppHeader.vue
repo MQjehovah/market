@@ -5,6 +5,7 @@ import { api } from '../api'
 import { authState, clearAuth } from '../stores/auth'
 import { adminState } from '../stores/admin'
 import { roleLabel } from '../utils/format'
+import logoUrl from '../assets/logo.svg'
 
 const router = useRouter()
 const route = useRoute()
@@ -92,7 +93,7 @@ watch(isAdmin, loadAdminBadge)
   <aside class="side-nav">
     <div class="side-top">
       <router-link to="/" class="brand" title="发现 · 安装 · 发布 · 审核 · 治理">
-        <span class="brand-logo">AI</span>
+        <img class="brand-logo" :src="logoUrl" alt="Rosiwit" />
         <span class="brand-text">
           <strong>企业AI能力平台</strong>
           <small>统一纳管 · 分发 · 装配</small>
@@ -273,13 +274,8 @@ watch(isAdmin, loadAdminBadge)
   width: 34px;
   height: 34px;
   border-radius: 10px;
-  background: linear-gradient(145deg, #2f6bff, #1f56e0);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 700;
-  font-size: 13px;
-  color: #fff;
+  display: block;
+  object-fit: contain;
   box-shadow: 0 4px 10px rgba(47, 107, 255, 0.25);
 }
 .brand-text { display: flex; flex-direction: column; line-height: 1.2; }
