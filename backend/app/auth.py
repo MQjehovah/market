@@ -72,14 +72,17 @@ async def get_current_user(
 
 
 async def _resolve_sso_user(
-    db: AsyncSession, token: str, credentials_exc: HTTPException
+    db: AsyncSession,
+    token: str,
+    credentials_exc: HTTPException,
+    audience: str | None = None,
 ) -> User:
     """SSO 轨：校验 RS256 token 后按 username=工号 查/建 User。
 
     校验失败 -> 401（与轨1同文案）；命中已禁用用户 -> 403。
     """
     try:
-        claims = verify_sso_token(token)
+        claims = verify_sso_token(token, audience=audience)
     except SsoAuthError:
         raise credentials_exc
     username = str(claims["sub"])

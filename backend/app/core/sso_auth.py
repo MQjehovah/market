@@ -139,7 +139,7 @@ def _public_key(kid: str | None):
     return jose_jwk.construct(jwk_dict, algorithm=ALGORITHM)
 
 
-def verify_sso_token(token: str) -> dict:
+def verify_sso_token(token: str, audience: str | None = None) -> dict:
     """校验 SSO 签发的 RS256 token,通过则返回 claims(含 sub 工号)。
 
     未配置 sso_issuer 视为 SSO 禁用;iss/aud 不匹配、签名无效、过期、
@@ -160,7 +160,7 @@ def verify_sso_token(token: str) -> dict:
             key,
             algorithms=[ALGORITHM],
             issuer=settings.sso_issuer,
-            audience=settings.sso_audience or None,
+            audience=audience or settings.sso_audience or None,
         )
     except SsoAuthError:
         raise
