@@ -416,3 +416,26 @@ async def test_capability_gateway_upstream_from_published_package(
     assert r.status_code == 401, "relay"
     r = await asyncio.wait_for(client.get(f"/api/mcp-gateway/cap/{name}/sse"), 8)
     assert r.status_code == 404, "cap alias removed"
+
+
+@pytest.mark.asyncio
+async def test_upstream_session_survives_beyond_connect_timeout(mcp_script, monkeypatch):
+    """回归：连接超时不得包住会话存活期。
+
+    曾把 30s 连接超时误当会话寿命（asyncio.timeout 包住 yield），超时后上游被杀、
+    网关会话崩溃，客户端后续 tools/call 全部 Session not found。
+    """
+    import app.services.mcp_gateway as gw
+
+    monkeypatch.setattr(gw, "CONNECT_TIMEOUT", 1.0)
+    config = {
+        "name": "keepalive",
+        "transport": "stdio",
+        "command": sys.executable,
+        "args": [mcp_script],
+    }
+    async with gw.connect_upstream(config) as session:
+        await asyncio.sleep(1.6)  # 超过 CONNECT_TIMEOUT，旧实现此时上游已被杀掉
+        result = await session.call_tool("echo", {"text": "alive"})
+    text = result.content[0].text if result.content else ""
+    assert "echo:alive" in text

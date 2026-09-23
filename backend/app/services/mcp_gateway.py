@@ -294,15 +294,26 @@ async def connect_upstream(
                     return ""
 
             try:
+                stdio = stdio_client(params, errlog=errlog)
+                # 连接超时只覆盖拉起与握手，绝不包住 yield——否则等于给会话设 30s 寿命，
+                # 超时后上游被杀、网关会话崩溃，客户端后续 tools/call 全部 Session not found。
                 async with asyncio.timeout(CONNECT_TIMEOUT):
-                    stdio = stdio_client(params, errlog=errlog)
                     read, write = await stdio.__aenter__()
-                    try:
-                        async with ClientSession(read, write) as session:
+                try:
+                    async with ClientSession(read, write) as session:
+                        async with asyncio.timeout(CONNECT_TIMEOUT):
                             await session.initialize()
-                            yield session
-                    finally:
+                        yield session
+                finally:
+                    try:
                         await stdio.__aexit__(*sys.exc_info())
+                    except (asyncio.CancelledError, GeneratorExit):
+                        raise
+                    except BaseException as exc:  # noqa: BLE001
+                        logger.warning(
+                            "关闭上游 stdio 失败(忽略): %s",
+                            format_connect_error(exc, _stderr_text())[:300],
+                        )
             except (asyncio.CancelledError, GeneratorExit):
                 raise
             except BaseException as exc:
@@ -316,30 +327,37 @@ async def connect_upstream(
             timeout = httpx.Timeout(
                 connect=CONNECT_TIMEOUT, read=CALL_TIMEOUT, write=CALL_TIMEOUT, pool=CALL_TIMEOUT
             )
-            async with asyncio.timeout(CONNECT_TIMEOUT):
-                client = httpx.AsyncClient(headers=headers, timeout=timeout)
-                try:
-                    async with streamable_http_client(url, http_client=client) as streams:
-                        read, write = streams[0], streams[1]
-                        async with ClientSession(read, write) as session:
+            client = httpx.AsyncClient(headers=headers, timeout=timeout)
+            try:
+                async with streamable_http_client(url, http_client=client) as streams:
+                    read, write = streams[0], streams[1]
+                    async with ClientSession(read, write) as session:
+                        # 仅握手计时；会话存活期不设总超时（同 stdio 注释）
+                        async with asyncio.timeout(CONNECT_TIMEOUT):
                             await session.initialize()
-                            yield session
-                finally:
+                        yield session
+            finally:
+                try:
                     await client.aclose()
+                except (asyncio.CancelledError, GeneratorExit):
+                    raise
+                except BaseException as exc:  # noqa: BLE001
+                    logger.warning("关闭上游 http client 失败(忽略): %s", str(exc)[:200])
 
         elif transport == "sse":
             url = config.get("url") or ""
             if not url:
                 raise RuntimeError("sse 传输需要配置 url")
             headers = resolve_placeholders(config.get("headers") or {}, user_env)
-            async with asyncio.timeout(CONNECT_TIMEOUT):
-                async with sse_client(
-                    url, headers=headers, timeout=CONNECT_TIMEOUT, sse_read_timeout=CALL_TIMEOUT
-                ) as streams:
-                    read, write = streams[0], streams[1]
-                    async with ClientSession(read, write) as session:
+            async with sse_client(
+                url, headers=headers, timeout=CONNECT_TIMEOUT, sse_read_timeout=CALL_TIMEOUT
+            ) as streams:
+                read, write = streams[0], streams[1]
+                async with ClientSession(read, write) as session:
+                    # 仅握手计时；会话存活期不设总超时（同 stdio 注释）
+                    async with asyncio.timeout(CONNECT_TIMEOUT):
                         await session.initialize()
-                        yield session
+                    yield session
         else:
             raise RuntimeError(f"未知传输类型 {transport}")
     finally:
