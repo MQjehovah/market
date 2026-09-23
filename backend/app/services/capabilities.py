@@ -32,6 +32,21 @@ from app.services.visibility import is_capability_visible
 
 SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
+
+def split_cap_ref(ref: str) -> tuple[str, str | None]:
+    """解析 name 或 name@version；版本须为合法 semver。"""
+    raw = (ref or "").strip()
+    if not raw:
+        return "", None
+    if "@" not in raw:
+        return raw, None
+    name, _, ver = raw.rpartition("@")
+    name, ver = name.strip(), ver.strip()
+    if name and ver and SEMVER_RE.match(ver):
+        return name, ver
+    return raw, None
+
+
 STATUS_FLOW: dict[str, set[str]] = {
     "draft": {"reviewing"},
     "reviewing": {"published", "rejected", "returned", "draft"},
@@ -212,6 +227,9 @@ def to_capability_out(
         "access_policy": cap.access_policy or "open",
         "allowed_users": list(cap.allowed_users or []),
         "install_policy": getattr(cap, "install_policy", None) or "optional",
+        "distribution": getattr(cap, "distribution", None) or "both",
+        "risk_default": getattr(cap, "risk_default", None) or "read",
+        "data_domain": getattr(cap, "data_domain", None) or "",
         "changelog": getattr(cap, "changelog", None) or "",
         "readme_md": getattr(cap, "readme_md", None) or "",
         "validation_report": getattr(cap, "validation_report", None) or {},
@@ -272,6 +290,9 @@ async def create_capability(
         access_policy=data.access_policy,
         allowed_users=list(data.allowed_users or []),
         install_policy=data.install_policy or "optional",
+        distribution=getattr(data, "distribution", None) or "both",
+        risk_default=getattr(data, "risk_default", None) or "read",
+        data_domain=(getattr(data, "data_domain", None) or "").strip(),
         author_id=user.id,
         organization=user.organization,
         status="draft",
@@ -352,6 +373,12 @@ async def update_capability(
         cap.allowed_users = [u.strip() for u in data.allowed_users if u.strip()]
     if data.install_policy is not None:
         cap.install_policy = data.install_policy
+    if data.distribution is not None:
+        cap.distribution = data.distribution
+    if data.risk_default is not None:
+        cap.risk_default = data.risk_default
+    if data.data_domain is not None:
+        cap.data_domain = data.data_domain.strip()
     await db.commit()
     await db.refresh(cap)
     return cap
@@ -576,6 +603,9 @@ async def create_new_version(
         access_policy=cap.access_policy,
         allowed_users=list(cap.allowed_users or []),
         install_policy=getattr(cap, "install_policy", None) or "optional",
+        distribution=getattr(cap, "distribution", None) or "both",
+        risk_default=getattr(cap, "risk_default", None) or "read",
+        data_domain=getattr(cap, "data_domain", None) or "",
         author_id=user.id,
         organization=cap.organization,
         status="draft",

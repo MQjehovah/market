@@ -106,16 +106,17 @@ MCP 注意：市场包必须是 `mcp.json` + `connection.json` + `tools.json` + 
 
 | 方式 | 接口 | 说明 |
 | --- | --- | --- |
-| 目录同步 | `GET /api/capabilities/sync` | 引擎 / CI |
+| 目录同步 | `GET /api/capabilities/sync`（`?since=` 增量） | 引擎 / CI |
 | 宿主同步 | `GET /api/my/host-sync` | 零号员工 / 桌面：已加入且启用 |
 | 下载制品 | `GET /api/capabilities/{name}/download` | SHA-256 校验 |
 | 本地组装 | `cap install` | 员工装机主路径；日常优先宿主同步 |
 | 本地运行 | `cap run --mode local` | 市场不执行 |
 | **模型线上网关** | `marketplace_mcp` → `/api/runtime/*` | **推荐**：模型/IDE 不装包，搜目录并线上调 |
-| 云端 runtime | `POST /api/runtime/*` | tool 沙箱 invoke、agent 任务、skill 返回 SKILL.md、mcp call |
+| 云端 runtime | `POST /api/runtime/*`（支持 `name@version`） | tool 沙箱 invoke、agent 任务、skill 返回 SKILL.md、mcp call |
 | A2A | Agent Card + `tasks/send` | Agent 协议委派 |
 | MCP HTTP 网关 | `/api/mcp-gateway/{name}` | 管理员登记的平台连接器 |
-| 能力 MCP 网关 | `/api/mcp-gateway/cap/{name}/sse` | 商品 MCP 代理（桌面 `gateway-sse`） |
+| 能力 MCP 网关 | `/api/mcp-gateway/cap/{name}/sse`（可 `name@version`） | 商品 MCP 代理（桌面 `gateway-sse`）；限流/熔断/审计 |
+| 服务令牌 | `POST /api/admin/service-tokens` | M2M Bearer（`mkt_svc_…`），替代交互式登录 |
 | 加入我的能力 | `/api/my/capabilities` | 调用授权前提之一 |
 
 线上可调边界：
@@ -124,9 +125,9 @@ MCP 注意：市场包必须是 `mcp.json` + `connection.json` + `tools.json` + 
 | --- | --- | --- |
 | **tool** | 是 | `POST /api/runtime/tools/{name}/invoke` |
 | **mcp** | 是 | 能力网关或 `POST /api/runtime/mcp/{name}/call` |
-| **agent** | 是 | runtime 任务或 A2A |
+| **agent** | 是 | 跑任务：`/api/runtime/agents/.../tasks` 或 A2A；**人设文本**：`GET /api/runtime/agents/{name}/persona`（PROMPT.md，对齐 skill activate） |
 | **workflow** | 是 | 仅云端 DAG |
-| **skill** | 按需文本 | 返回 `SKILL.md` 注入上下文，**不是**远程执行 |
+| **skill** | 按需文本 | `POST /api/runtime/skills/{name}/activate` 返回 `SKILL.md`，**不是**远程执行 |
 | rule / command / hook | 否 | 仍须本地安装 |
 
 授权：`RUNTIME_ACCESS_ROLES` ∪ 作者 ∪ 已加入者 ∪ `access_policy`（open / admin_only / restricted）。Bearer 支持市场 JWT 或 SSO access_token。

@@ -86,6 +86,9 @@ class CapabilityBase(BaseModel):
     access_policy: Literal["open", "admin_only", "restricted"] = "open"
     allowed_users: list[str] = Field(default_factory=list, description="restricted 时的白名单用户名")
     install_policy: Literal["optional", "default_on", "required"] = "optional"
+    distribution: Literal["local", "remote", "both"] = "both"
+    risk_default: Literal["read", "write", "destructive"] = "read"
+    data_domain: str = Field(default="", max_length=64)
 
     @field_validator("version")
     @classmethod
@@ -99,6 +102,11 @@ class CapabilityBase(BaseModel):
     @classmethod
     def validate_tags(cls, v: list[str]) -> list[str]:
         return [t.strip()[:32] for t in v if t.strip()][:20]
+
+    @field_validator("data_domain")
+    @classmethod
+    def validate_data_domain(cls, v: str) -> str:
+        return (v or "").strip()[:64]
 
 
 class CapabilityCreate(CapabilityBase):
@@ -115,6 +123,9 @@ class CapabilityUpdate(BaseModel):
     access_policy: Literal["open", "admin_only", "restricted"] | None = None
     allowed_users: list[str] | None = None
     install_policy: Literal["optional", "default_on", "required"] | None = None
+    distribution: Literal["local", "remote", "both"] | None = None
+    risk_default: Literal["read", "write", "destructive"] | None = None
+    data_domain: str | None = Field(default=None, max_length=64)
 
 
 class InstallPolicyUpdate(BaseModel):
@@ -265,10 +276,49 @@ class UsageEventOut(BaseModel):
     id: str
     user_id: str
     capability_id: str
+    capability_version: str = ""
     action: str
     params: dict
     result_status: str
+    duration_ms: int = 0
+    conversation_id: str = ""
+    source: str = "platform"
     created_at: datetime
+
+
+class ServiceTokenCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    scopes: list[str] = Field(default_factory=lambda: ["runtime", "gateway", "sync"])
+    expires_days: int | None = Field(default=365, ge=1, le=3650)
+    # 绑定已有用户；留空则自动创建 svc_<slug> 服务账号
+    user_id: str | None = None
+
+
+class ServiceTokenOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    token_prefix: str
+    user_id: str
+    username: str = ""
+    scopes: list[str] = Field(default_factory=list)
+    expires_at: datetime | None = None
+    last_used_at: datetime | None = None
+    revoked: bool = False
+    created_by: str
+    created_at: datetime
+
+
+class ServiceTokenCreated(ServiceTokenOut):
+    """创建时一次性返回明文 token。"""
+
+    token: str
+
+
+class AccessPolicyUpdate(BaseModel):
+    access_policy: Literal["open", "admin_only", "restricted"] = "open"
+    allowed_users: list[str] = Field(default_factory=list, description="restricted 时的白名单用户名")
 
 
 class RuntimeResult(BaseModel):
@@ -602,8 +652,3 @@ class HostSyncOut(BaseModel):
         "只含已加入且启用的项。宿主安装后应尊重 enabled："
         "停用后下次同步请忽略或卸载，不必再复制 cap install。"
     )
-
-
-class AccessPolicyUpdate(BaseModel):
-    access_policy: Literal["open", "admin_only", "restricted"] = "open"
-    allowed_users: list[str] = Field(default_factory=list, description="restricted 时的白名单用户名")

@@ -1,9 +1,10 @@
 """执行引擎：Agent 实例化 / 任务执行 / 工具调用 / 技能激活 / MCP 安装与发现。"""
 
+import time
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Header, HTTPException, status
 
 from app.auth import CurrentUser, DbSession
 from app.permissions import require_runtime_access
@@ -21,6 +22,7 @@ from app.schemas import (
 from app.services.marketplace import (
     activate_skill,
     discover_mcp,
+    fetch_agent_persona,
     install_mcp,
     instantiate_agent,
     invoke_tool,
@@ -89,10 +91,28 @@ async def invoke(name: str, data: RuntimeInvokeRequest, db: DbSession, user: Cur
 async def activate(name: str, data: RuntimeActivateRequest, db: DbSession, user: CurrentUser):
     cap = await resolve_capability(db, user, name)
     await require_runtime_access(user, cap, db)
+    if cap.type != "skill":
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{name} 不是 skill 能力")
     result = await activate_skill(db, user, cap, data.context)
     await db.commit()
     await db.refresh(cap)
     return _result(cap, "activate", f"技能「{cap.name}」激活成功", result)
+
+
+@router.get("/agents/{name}/persona", response_model=RuntimeResult)
+async def agent_persona(name: str, db: DbSession, user: CurrentUser):
+    """线上拉取助手人设 PROMPT.md（与 skill activate 对称；不走 /edit 编辑 API）。"""
+    cap = await resolve_capability(db, user, name)
+    await require_runtime_access(user, cap, db)
+    if cap.type != "agent":
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{name} 不是 agent 能力")
+    try:
+        result = await fetch_agent_persona(db, user, cap)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    await db.commit()
+    await db.refresh(cap)
+    return _result(cap, "persona", f"助手「{cap.name}」人设已返回", result)
 
 
 @router.post("/mcp/{name}/install", response_model=RuntimeResult)
@@ -145,7 +165,13 @@ async def mcp_connect(name: str, db: DbSession, user: CurrentUser):
 
 
 @router.post("/mcp/{name}/call")
-async def mcp_call(name: str, data: McpCallRequest, db: DbSession, user: CurrentUser):
+async def mcp_call(
+    name: str,
+    data: McpCallRequest,
+    db: DbSession,
+    user: CurrentUser,
+    x_conversation_id: str | None = Header(default=None, alias="X-Conversation-Id"),
+):
     """调用 MCP 能力包暴露的某个工具（调试/试用用，每次调用独立连接）。"""
     from app.services.mcp_bridge import MCPBridge
     from app.services.mcp_gateway import load_gateway_config_by_name
@@ -156,22 +182,60 @@ async def mcp_call(name: str, data: McpCallRequest, db: DbSession, user: Current
         except Exception:  # noqa: BLE001
             return None
 
+    conversation_id = (x_conversation_id or "")[:128]
     cap = await resolve_capability(db, user, name)
     await require_runtime_access(user, cap, db)
     if cap.type != "mcp":
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{name} 不是 MCP 能力")
     bridge = MCPBridge(gateway_loader=_gateway_loader)
+    t0 = time.monotonic()
+    result_status = "ok"
     try:
-        await bridge.connect_capability(name, cap)
+        await bridge.connect_capability(cap.name, cap)
         if not bridge.has_tool(data.tool):
             raise HTTPException(
                 status.HTTP_404_NOT_FOUND,
                 f"MCP「{name}」不存在工具 {data.tool}；可用工具：{', '.join(bridge.tool_names)}",
             )
         result = await bridge.call(data.tool, data.params)
-        await record_usage(db, user, cap, "mcp_call", {"tool": data.tool, "params": data.params})
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        await record_usage(
+            db,
+            user,
+            cap,
+            "mcp_call",
+            {"tool": data.tool, "params": data.params},
+            result_status=result_status,
+            duration_ms=duration_ms,
+            conversation_id=conversation_id,
+        )
         await db.commit()
-        return {"mcp": cap.name, "tool": data.tool, "result": result}
+        return {
+            "mcp": cap.name,
+            "version": cap.version,
+            "tool": data.tool,
+            "result": result,
+            "duration_ms": duration_ms,
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        try:
+            await record_usage(
+                db,
+                user,
+                cap,
+                "mcp_call",
+                {"tool": data.tool, "params": data.params},
+                result_status="error",
+                duration_ms=duration_ms,
+                conversation_id=conversation_id,
+            )
+            await db.commit()
+        except Exception:  # noqa: BLE001
+            pass
+        raise
     finally:
         await bridge.close()
 

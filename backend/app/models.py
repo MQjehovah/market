@@ -73,6 +73,12 @@ class Capability(Base):
     allowed_users: Mapped[list] = mapped_column(JSON, default=list)
     install_policy: Mapped[str] = mapped_column(String(20), default="optional")
     # optional | default_on | required
+    distribution: Mapped[str] = mapped_column(String(16), default="both")
+    # local | remote | both —— 本地安装 / 平台网关 / 双形态
+    risk_default: Mapped[str] = mapped_column(String(20), default="read")
+    # read | write | destructive
+    data_domain: Mapped[str] = mapped_column(String(64), default="")
+    # 设备/客户/财务/… 业务域标签
     validation_report: Mapped[dict] = mapped_column(JSON, default=dict)
     # 最近一次上传包的结构校验摘要：{ok, warnings, errors?, files}
     usage_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -176,11 +182,35 @@ class UsageEvent(Base):
     capability_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("capabilities.id"), index=True
     )
+    capability_version: Mapped[str] = mapped_column(String(50), default="")
     action: Mapped[str] = mapped_column(String(32), nullable=False)
-    # instantiate | invoke | activate | install | discover | fork
+    # instantiate | invoke | activate | install | discover | fork | mcp_connect | mcp_call | gateway_call
     params: Mapped[dict] = mapped_column(JSON, default=dict)
     result_status: Mapped[str] = mapped_column(String(16), default="ok")
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    conversation_id: Mapped[str] = mapped_column(String(128), default="", index=True)
+    source: Mapped[str] = mapped_column(String(16), default="platform")
+    # platform | local —— 平台轨 / 本地轨
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+
+
+class ServiceToken(Base):
+    """服务令牌（M2M）：Agent / CI / 网关消费方用 Bearer，不绑交互式登录。"""
+
+    __tablename__ = "service_tokens"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    token_prefix: Mapped[str] = mapped_column(String(16), default="")
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    scopes: Mapped[list] = mapped_column(JSON, default=list)
+    # runtime | gateway | sync | admin
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_by: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
 class Notification(Base):

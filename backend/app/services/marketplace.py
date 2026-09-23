@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
 from app.models import Capability, UsageEvent, User
-from app.services.capabilities import get_visible_capabilities, parse_semver
+from app.services.capabilities import get_visible_capabilities, parse_semver, split_cap_ref
 from app.services.visibility import is_capability_visible
 from app.storage import get_storage
 
@@ -19,6 +19,8 @@ from app.storage import get_storage
 async def resolve_capability(
     db: AsyncSession, user: User | None, name: str, version: str | None = None
 ) -> Capability:
+    name, ref_ver = split_cap_ref(name)
+    version = version or ref_ver
     stmt = select(Capability).options(
         selectinload(Capability.artifacts), joinedload(Capability.author)
     ).where(Capability.name == name)
@@ -42,6 +44,10 @@ async def record_usage(
     action: str,
     params: dict[str, Any] | None = None,
     result_status: str = "ok",
+    *,
+    duration_ms: int = 0,
+    conversation_id: str = "",
+    source: str = "platform",
 ) -> None:
     if cap.status not in ("published", "deprecated", "reviewing"):
         raise HTTPException(status.HTTP_409_CONFLICT, f"能力 {cap.name} 当前状态不可使用")
@@ -55,9 +61,13 @@ async def record_usage(
         UsageEvent(
             user_id=user.id,
             capability_id=cap.id,
+            capability_version=cap.version or "",
             action=action,
             params=params or {},
             result_status=result_status,
+            duration_ms=max(0, int(duration_ms or 0)),
+            conversation_id=(conversation_id or "")[:128],
+            source=source or "platform",
         )
     )
 
@@ -286,6 +296,8 @@ def read_skill_md(cap: Capability, *, max_chars: int = 50000) -> str:
 
 async def activate_skill(db: AsyncSession, user: User, cap: Capability, context: str) -> dict[str, Any]:
     """激活技能：返回 SKILL.md 正文供调用方注入上下文（不做远程执行）。"""
+    if cap.type != "skill":
+        raise ValueError(f"{cap.name} 不是 skill 能力")
     skill_md = read_skill_md(cap)
     await record_usage(
         db,
@@ -305,6 +317,52 @@ async def activate_skill(db: AsyncSession, user: User, cap: Capability, context:
         "activated": bool(skill_md),
         "context": context,
         "skill_md": skill_md,
+        "note": note,
+    }
+
+
+def read_agent_prompt(cap: Capability, *, max_chars: int = 50000) -> str:
+    """从能力包读取 PROMPT.md（桌面人设 / 模型按需注入，非远程执行）。"""
+    from app.services.mcp_gateway import read_package_files
+
+    raw = read_package_files(cap).get("PROMPT.md")
+    if not raw:
+        return ""
+    text = raw.decode("utf-8", errors="replace")
+    return text[:max_chars] if max_chars > 0 else text
+
+
+async def fetch_agent_persona(db: AsyncSession, user: User, cap: Capability) -> dict[str, Any]:
+    """线上拉取助手人设：返回 PROMPT.md + 可加入的依赖清单（不下载 zip、不跑任务）。"""
+    if cap.type != "agent":
+        raise ValueError(f"{cap.name} 不是 agent 能力")
+    prompt = read_agent_prompt(cap)
+    deps = [
+        {
+            "name": str(d.get("name") or ""),
+            "type": str(d.get("type") or ""),
+            "version": str(d.get("version") or ""),
+        }
+        for d in _read_agent_join_manifest(cap)
+        if d.get("name") and d.get("type")
+    ]
+    await record_usage(
+        db,
+        user,
+        cap,
+        "persona",
+        {"prompt_chars": len(prompt), "deps": len(deps)},
+    )
+    note = (
+        "请将 PROMPT.md 用作本地人设；依赖 skill/mcp/tool 需另装或走线上网关。"
+        if prompt
+        else "助手包缺少 PROMPT.md，无法提供人设。"
+    )
+    return {
+        "agent": cap.name,
+        "version": cap.version,
+        "prompt": prompt,
+        "dependencies": deps,
         "note": note,
     }
 

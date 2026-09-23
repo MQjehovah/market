@@ -9,7 +9,7 @@ import pytest
 
 from app.services.dashboard_consume import dashboard_projection
 from marketplace_mcp import server as mcp_bridge
-from test_workflow import _publish_capability
+from test_workflow import _agent_zip, _publish_capability
 
 
 def _skill_zip(name: str, body: str = "步骤一：写测试\n") -> bytes:
@@ -78,6 +78,17 @@ def test_dashboard_projection_tool_and_skill_online_fields():
     assert skill["online"] == "/api/runtime/skills/TDD/activate"
     assert "SKILL.md" in skill.get("note", "")
 
+    class AgentCap:
+        type = "agent"
+        name = "ops-bot"
+        input_schema = {}
+
+    agent = dashboard_projection(AgentCap())
+    assert agent["mode"] == "persona"
+    assert agent["online"] == "/api/runtime/agents/ops-bot/persona"
+    assert "PROMPT.md" in agent.get("note", "")
+    assert "勿用" in agent.get("note", "")
+
     class McpCap:
         type = "mcp"
         name = "pkg-mcp"
@@ -92,6 +103,21 @@ def test_dashboard_projection_tool_and_skill_online_fields():
     assert mcp["mode"] == "gateway-sse"
     assert mcp["sse_url"] == "/api/mcp-gateway/cap/pkg-mcp/sse"
     assert "Bearer" in str(mcp["mcp"].get("headers") or {})
+
+
+@pytest.mark.asyncio
+async def test_agent_persona_returns_prompt(client, publisher_headers, admin_headers):
+    name = "线上人设助手"
+    await _publish_capability(
+        client, publisher_headers, admin_headers, name, "agent", _agent_zip(name)
+    )
+    r = await client.get(f"/api/runtime/agents/{name}/persona", headers=admin_headers)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    result = body["result"]
+    assert result["agent"] == name
+    assert "你是" in result["prompt"] or name in result["prompt"] or len(result["prompt"]) > 0
+    assert "dependencies" in result
 
 
 def test_marketplace_mcp_activate_skill_surfaces_md():
@@ -114,6 +140,27 @@ def test_marketplace_mcp_activate_skill_surfaces_md():
     assert "TDD" in text
 
 
+def test_marketplace_mcp_fetch_persona_surfaces_prompt():
+    fake = {
+        "capability": {"name": "运维助手"},
+        "result": {
+            "agent": "运维助手",
+            "prompt": "你是运维助手。",
+            "dependencies": [{"name": "x", "type": "skill"}],
+            "note": "ok",
+        },
+    }
+    with patch.object(mcp_bridge, "_api", return_value=fake) as api:
+        out = mcp_bridge._handle_tool(
+            "marketplace_fetch_agent_persona",
+            {"name": "运维助手"},
+        )
+    assert api.call_args[0][0] == "GET"
+    assert "/persona" in api.call_args[0][1]
+    text = out["content"][0]["text"]
+    assert "你是运维助手" in text
+
+
 def test_marketplace_mcp_call_mcp_forwards():
     fake = {"mcp": "doc-mcp", "tool": "echo", "result": {"ok": True}}
     with patch.object(mcp_bridge, "_api", return_value=fake) as api:
@@ -134,3 +181,4 @@ def test_marketplace_mcp_tools_include_call_mcp():
     assert "marketplace_call_mcp" in names
     assert "marketplace_use_tool" in names
     assert "marketplace_activate_skill" in names
+    assert "marketplace_fetch_agent_persona" in names

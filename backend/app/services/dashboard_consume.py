@@ -13,8 +13,11 @@ from urllib.parse import quote
 _SCRIPT_ARG = re.compile(r"\.(py|js|mjs|cjs|ts)$", re.I)
 
 
-def dashboard_mcp_urls(name: str) -> dict[str, str]:
-    enc = quote(name, safe="")
+def dashboard_mcp_urls(name: str, version: str | None = None) -> dict[str, str]:
+    ref = name
+    if version:
+        ref = f"{name}@{version}"
+    enc = quote(ref, safe="")
     return {
         "sse_url": f"/api/mcp-gateway/cap/{enc}/sse",
         "stream_url": f"/api/mcp-gateway/cap/{enc}/stream",
@@ -125,7 +128,15 @@ def dashboard_projection(cap) -> dict[str, Any]:
     if cap_type == "mcp":
         conn = _mcp_conn_from_schema(schema)
         mode = classify_dashboard_mcp(conn)
-        urls = dashboard_mcp_urls(name)
+        # distribution 元数据可强制走网关或本地
+        dist = getattr(cap, "distribution", None) or "both"
+        if dist == "remote" and mode.startswith("local-"):
+            mode = "gateway-sse"
+        if dist == "local" and mode == "gateway-sse":
+            # 仅本地：仍给出网关 URL 作参考，但 mode 标注 local-preferred
+            mode = "local-stdio" if (conn.get("command") or "") else mode
+        version = getattr(cap, "version", None) or ""
+        urls = dashboard_mcp_urls(name, version if dist == "remote" else None)
         mcp_frag: dict[str, Any] = {"name": name}
         if mode == "local-stdio":
             mcp_frag["command"] = conn.get("command") or ""
@@ -138,6 +149,9 @@ def dashboard_projection(cap) -> dict[str, Any]:
             mcp_frag["headers"] = {"Authorization": "Bearer ${SSO_ACCESS_TOKEN}"}
         return {
             "mode": mode,
+            "distribution": dist,
+            "risk_default": getattr(cap, "risk_default", None) or "read",
+            "data_domain": getattr(cap, "data_domain", None) or "",
             "tools": _tools_from_schema(schema),
             "mcp": mcp_frag,
             **urls,
@@ -175,7 +189,11 @@ def dashboard_projection(cap) -> dict[str, Any]:
         return {
             "mode": "persona",
             "path": f"localagent/agents/{name}/",
-            "note": "桌面只用人设 PROMPT.md；依赖 skill/mcp 需另装或走安装包。",
+            "online": f"/api/runtime/agents/{quote(name, safe='')}/persona",
+            "note": (
+                "员工装机可走 path 或 online 拉 PROMPT.md（勿用 /api/agents/.../edit）；"
+                "依赖 skill/mcp 需另装或走安装包/线上网关。"
+            ),
         }
 
     if cap_type == "tool":

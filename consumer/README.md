@@ -29,9 +29,12 @@ Claude Code / Cursor 等把上述命令配成一条 MCP server 即可。工具�
 - `marketplace_use_tool` — 云端沙箱 invoke（无本地 zip）  
 - `marketplace_call_mcp` — 调商品 MCP 暴露的 tool  
 - `marketplace_activate_skill` — 返回 SKILL.md 正文  
+- `marketplace_fetch_agent_persona` — 返回助手 PROMPT.md（人设，不跑任务）  
 - `marketplace_run_agent` / `marketplace_run_workflow` — 云端执行  
 
 调用前须已加入「我的能力」（或作者 / `RUNTIME_ACCESS_ROLES`）。授权由市场 runtime 门禁统一校验。
+
+桌面装人设请用 `GET /api/runtime/agents/{name}/persona`（或 MCP 上表工具），**不要**用 `/api/agents/{name}/edit`（那是作者编辑草稿接口）。
 
 | 模式 | 说明 | 命令 |
 | --- | --- | --- |

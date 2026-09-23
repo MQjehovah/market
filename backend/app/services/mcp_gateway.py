@@ -12,9 +12,10 @@
     GET  /{name}/sse        SSE 传输的 MCP 服务（GET 建立连接）——管理员登记表
     POST /{name}/messages   SSE 客户端回传 JSON-RPC 消息
     GET/POST/DELETE /{name}/stream   Streamable HTTP 传输的 MCP 服务
-    GET  /cap/{name}/sse    已发布 MCP 能力的桌面入口（Bearer = 市场/SSO token）
+    GET  /cap/{name}/sse    已发布 MCP 能力的桌面入口（Bearer = 市场/SSO/服务令牌）
     POST /cap/{name}/messages
     GET/POST/DELETE /cap/{name}/stream
+    能力名支持 name@version 钉版本；鉴权后限流/熔断；调用写 UsageEvent（含 conversation_id/耗时）
 """
 
 import asyncio
@@ -27,6 +28,7 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -53,6 +55,68 @@ CALL_TIMEOUT = 120
 _GENERIC_PYTHON = {"python", "python3", "py"}
 
 ConfigLoader = Callable[[str], Awaitable[dict[str, Any] | None]]
+
+
+def _conversation_id_from_scope(scope) -> str:
+    request = Request(scope, None)  # type: ignore[arg-type]
+    for key in ("x-conversation-id", "x-session-id"):
+        val = (request.headers.get(key) or "").strip()
+        if val:
+            return val[:128]
+    qs = scope.get("query_string") or b""
+    if b"conversation_id=" in qs:
+        from urllib.parse import parse_qs
+
+        params = parse_qs(qs.decode("utf-8", errors="ignore"))
+        vals = params.get("conversation_id") or []
+        if vals and vals[0].strip():
+            return vals[0].strip()[:128]
+    return ""
+
+
+async def persist_gateway_usage(
+    *,
+    user_id: str,
+    capability_id: str,
+    capability_version: str,
+    action: str,
+    params: dict[str, Any],
+    result_status: str,
+    duration_ms: int,
+    conversation_id: str,
+) -> None:
+    """网关路径异步落审计（独立会话，避免占用请求会话）。"""
+    from sqlalchemy import update
+
+    from app.database import SessionLocal
+    from app.models import Capability, UsageEvent
+
+    try:
+        async with SessionLocal() as db:
+            cap = await db.get(Capability, capability_id)
+            if cap is None:
+                return
+            await db.execute(
+                update(Capability)
+                .where(Capability.id == capability_id)
+                .values(usage_count=Capability.usage_count + 1)
+            )
+            db.add(
+                UsageEvent(
+                    user_id=user_id,
+                    capability_id=capability_id,
+                    capability_version=capability_version or cap.version or "",
+                    action=action,
+                    params=params,
+                    result_status=result_status,
+                    duration_ms=max(0, int(duration_ms or 0)),
+                    conversation_id=(conversation_id or "")[:128],
+                    source="platform",
+                )
+            )
+            await db.commit()
+    except Exception:  # noqa: BLE001
+        logger.exception("网关审计写入失败 action=%s cap=%s", action, capability_id)
 
 
 def format_connect_error(exc: BaseException, stderr: str = "") -> str:
@@ -314,29 +378,32 @@ def _bearer_token(scope) -> str | None:
     return None
 
 
-async def find_published_mcp(db, name: str):
-    """最新已发布/弃用期内的 MCP 能力（含制品，供解包 connection.json）。"""
+async def find_published_mcp(db, name: str, version: str | None = None):
+    """已发布/弃用期内的 MCP 能力（含制品）；version 为空取最新。"""
     from sqlalchemy import select
     from sqlalchemy.orm import joinedload, selectinload
 
     from app.models import Capability
-    from app.services.capabilities import parse_semver
+    from app.services.capabilities import parse_semver, split_cap_ref
 
-    rows = list(
-        (
-            await db.scalars(
-                select(Capability)
-                .options(selectinload(Capability.artifacts), joinedload(Capability.author))
-                .where(
-                    Capability.name == name,
-                    Capability.type == "mcp",
-                    Capability.status.in_(("published", "deprecated")),
-                )
-            )
-        ).all()
+    name, ref_ver = split_cap_ref(name)
+    version = version or ref_ver
+    stmt = (
+        select(Capability)
+        .options(selectinload(Capability.artifacts), joinedload(Capability.author))
+        .where(
+            Capability.name == name,
+            Capability.type == "mcp",
+            Capability.status.in_(("published", "deprecated")),
+        )
     )
+    if version:
+        stmt = stmt.where(Capability.version == version)
+    rows = list((await db.scalars(stmt)).all())
     if not rows:
         return None
+    if version:
+        return rows[0]
     return max(rows, key=lambda c: parse_semver(c.version))
 
 
@@ -379,16 +446,27 @@ async def upstream_config_from_capability(db, cap) -> dict[str, Any] | None:
 async def authorize_capability_gateway(
     scope, name: str
 ) -> tuple[dict[str, Any] | None, int | None, dict | None]:
-    """能力级网关鉴权：Bearer（HS256|SSO）+ runtime 门禁。返回 (config, err_status, err_body)。"""
+    """能力级网关鉴权：Bearer（HS256|SSO|服务令牌）+ runtime 门禁 + 限流/熔断。
+
+    返回 (config, err_status, err_body)。config 含 `_audit` 元数据供调用审计。
+    """
     from fastapi import HTTPException
 
     from app.auth import get_current_user
     from app.database import SessionLocal
     from app.permissions import require_runtime_access
+    from app.services.capabilities import split_cap_ref
+    from app.services.gateway_governance import check_circuit, check_rate_limit
 
     token = _bearer_token(scope)
     if not token:
         return None, 401, {"detail": "请先完成企业 SSO 登录（访问能力 MCP 网关需要 Bearer）"}
+
+    cap_name, _ = split_cap_ref(name)
+    circuit_key = f"mcp:{cap_name}"
+    ok, reason = check_circuit(circuit_key)
+    if not ok:
+        return None, 503, {"detail": reason}
 
     async with SessionLocal() as db:
         try:
@@ -396,9 +474,17 @@ async def authorize_capability_gateway(
         except HTTPException as exc:
             detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
             return None, int(exc.status_code), {"detail": detail}
+
+        ok, reason = check_rate_limit(f"user:{user.id}")
+        if not ok:
+            return None, 429, {"detail": reason}
+
         cap = await find_published_mcp(db, name)
         if cap is None:
             return None, 404, {"detail": f"已发布 MCP {name} 不存在"}
+        dist = getattr(cap, "distribution", None) or "both"
+        if dist == "local":
+            return None, 403, {"detail": f"能力 {cap.name} 仅支持本地分发（distribution=local）"}
         try:
             await require_runtime_access(user, cap, db)
         except HTTPException as exc:
@@ -410,13 +496,23 @@ async def authorize_capability_gateway(
             return None, 502, {"detail": str(exc)[:300]}
         if config is None:
             return None, 404, {"detail": f"MCP {name} 缺少 connection.json"}
+        config = dict(config)
+        config["_audit"] = {
+            "user_id": user.id,
+            "capability_id": cap.id,
+            "capability_version": cap.version,
+            "capability_name": cap.name,
+            "conversation_id": _conversation_id_from_scope(scope),
+            "circuit_key": circuit_key,
+        }
         return config, None, None
 
 
-def make_forward_server(name: str, upstream: ClientSession) -> MCPServer:
+def make_forward_server(name: str, upstream: ClientSession, audit: dict[str, Any] | None = None) -> MCPServer:
     """构建转发型低层 MCP server：tools/list 与 tools/call 全部转发到上游。"""
 
     server = MCPServer(f"gateway-{name}")
+    audit = audit or {}
 
     @server.list_tools()
     async def list_tools():
@@ -425,10 +521,38 @@ def make_forward_server(name: str, upstream: ClientSession) -> MCPServer:
 
     @server.call_tool()
     async def call_tool(tool_name: str, arguments: dict[str, Any]):
-        return await upstream.call_tool(tool_name, arguments or {})
+        from app.services.gateway_governance import record_failure, record_success
+
+        t0 = time.monotonic()
+        result_status = "ok"
+        try:
+            result = await upstream.call_tool(tool_name, arguments or {})
+            if audit.get("circuit_key"):
+                record_success(audit["circuit_key"])
+            return result
+        except Exception:
+            result_status = "error"
+            if audit.get("circuit_key"):
+                record_failure(audit["circuit_key"])
+            raise
+        finally:
+            if audit.get("user_id") and audit.get("capability_id"):
+                await persist_gateway_usage(
+                    user_id=audit["user_id"],
+                    capability_id=audit["capability_id"],
+                    capability_version=audit.get("capability_version") or "",
+                    action="gateway_call",
+                    params={
+                        "tool": tool_name,
+                        "capability": audit.get("capability_name") or name,
+                        "version": audit.get("capability_version") or "",
+                    },
+                    result_status=result_status,
+                    duration_ms=int((time.monotonic() - t0) * 1000),
+                    conversation_id=audit.get("conversation_id") or "",
+                )
 
     return server
-
 
 class _ServerProxy:
     """StreamableHTTPSessionManager 使用的“按会话建上游”的 server 代理。
@@ -462,7 +586,9 @@ class _ServerProxy:
         if config is None or not config.get("enabled", True):
             raise RuntimeError(f"网关服务 {self._ep.name} 不存在或已停用")
         async with connect_upstream(config) as upstream:
-            server = make_forward_server(self._ep.name, upstream)
+            server = make_forward_server(
+                self._ep.name, upstream, audit=config.get("_audit")
+            )
             await server.run(
                 read_stream,
                 write_stream,
@@ -514,9 +640,27 @@ class GatewayEndpoints:
 
     async def handle_sse(self, scope, receive, send, config: dict[str, Any]) -> None:
         self.cache_config(config)
+        audit = config.get("_audit") or {}
+        if audit.get("user_id") and audit.get("capability_id"):
+            await persist_gateway_usage(
+                user_id=audit["user_id"],
+                capability_id=audit["capability_id"],
+                capability_version=audit.get("capability_version") or "",
+                action="mcp_connect",
+                params={
+                    "transport": "sse",
+                    "capability": audit.get("capability_name") or self.name,
+                    "version": audit.get("capability_version") or "",
+                },
+                result_status="ok",
+                duration_ms=0,
+                conversation_id=audit.get("conversation_id") or "",
+            )
         async with self.sse.connect_sse(scope, receive, send) as streams:
             async with connect_upstream(config) as upstream:
-                server = make_forward_server(self.name, upstream)
+                server = make_forward_server(
+                    self.name, upstream, audit=config.get("_audit")
+                )
                 await server.run(
                     streams[0], streams[1], server.create_initialization_options()
                 )
@@ -527,6 +671,22 @@ class GatewayEndpoints:
     async def handle_stream(self, scope, receive, send, config: dict[str, Any] | None = None) -> None:
         if config is not None:
             self.cache_config(config)
+            audit = config.get("_audit") or {}
+            if audit.get("user_id") and audit.get("capability_id"):
+                await persist_gateway_usage(
+                    user_id=audit["user_id"],
+                    capability_id=audit["capability_id"],
+                    capability_version=audit.get("capability_version") or "",
+                    action="mcp_connect",
+                    params={
+                        "transport": "stream",
+                        "capability": audit.get("capability_name") or self.name,
+                        "version": audit.get("capability_version") or "",
+                    },
+                    result_status="ok",
+                    duration_ms=0,
+                    conversation_id=audit.get("conversation_id") or "",
+                )
         await self.ensure_stream_manager()
         await self._stream_manager.handle_request(scope, receive, send)
 

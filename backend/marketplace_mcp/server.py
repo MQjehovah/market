@@ -6,6 +6,7 @@
     marketplace_call_mcp       调用商品 MCP 暴露的 tool
     marketplace_run_agent      云端 Agent 任务
     marketplace_activate_skill 返回 SKILL.md 正文（注入上下文，非远程执行）
+    marketplace_fetch_agent_persona 返回助手 PROMPT.md（人设，不跑任务）
     marketplace_discover_mcp   发现 MCP 能力
     marketplace_run_workflow   云端工作流
 
@@ -166,6 +167,20 @@ TOOLS = [
         },
     },
     {
+        "name": "marketplace_fetch_agent_persona",
+        "description": (
+            "按需获取市场助手的 PROMPT.md 人设正文（不下载 zip、不跑任务）。"
+            "桌面/宿主用人设落盘时用此接口，勿走编辑 API。"
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "助手名称"},
+            },
+            "required": ["name"],
+        },
+    },
+    {
         "name": "marketplace_discover_mcp",
         "description": "动态发现市场上已发布的 MCP 能力（数据库连接、DevOps 工具等）。",
         "inputSchema": {"type": "object", "properties": {}},
@@ -266,6 +281,21 @@ def _handle_tool(name: str, arguments: dict) -> dict:
         if not skill_md:
             return _text(header + (body.get("note") or "技能包缺少 SKILL.md。"))
         return _text(header + skill_md)
+
+    if name == "marketplace_fetch_agent_persona":
+        agent_name = arguments.get("name")
+        result = _api(
+            "GET",
+            f"/api/runtime/agents/{quote(agent_name, safe='')}/persona",
+        )
+        body = result.get("result") or {}
+        prompt = body.get("prompt") or ""
+        cap_name = (result.get("capability") or {}).get("name") or body.get("agent") or agent_name
+        deps = body.get("dependencies") or []
+        header = f"助手「{cap_name}」PROMPT.md（人设；依赖 {len(deps)} 项）\n\n"
+        if not prompt:
+            return _text(header + (body.get("note") or "助手包缺少 PROMPT.md。"))
+        return _text(header + prompt)
 
     if name == "marketplace_discover_mcp":
         result = _api("GET", "/api/runtime/mcp/discover")

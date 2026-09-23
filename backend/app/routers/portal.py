@@ -257,24 +257,57 @@ async def task_search_capabilities(
 
 
 @router.get("/capabilities/sync", response_model=list[dict])
-async def sync_capabilities(db: DbSession, user: OptionalUser):
+async def sync_capabilities(
+    db: DbSession,
+    user: OptionalUser,
+    since: str | None = Query(
+        default=None,
+        description="ISO8601 增量同步：返回 updated_at > since 的已发布能力（含全部变更版本）",
+    ),
+):
     """同步接口：返回各能力的最新发布版本/商业包，供 Agent 等消费者拉取目录。
 
     含已发布的 plugin 拆出组件（skill/mcp 等），便于其他 Agent 依赖复用。
+    传 since 时改为增量：返回该时刻之后更新的全部 published/deprecated 行（不折叠为最新版）。
     """
+    from datetime import datetime
+
     visible = await get_visible_capabilities(db, user)
     published = [c for c in visible if c.status in ("published", "deprecated")]
-    latest: dict[tuple[str, str], Capability] = {}
-    for cap in published:
-        key = (cap.name, cap.type)
-        cur = latest.get(key)
-        if cur is None or parse_semver(cap.version) > parse_semver(cur.version):
-            latest[key] = cap
+
+    since_dt = None
+    if since:
+        raw = since.strip().replace("Z", "+00:00")
+        try:
+            since_dt = datetime.fromisoformat(raw)
+        except ValueError as exc:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "since 须为 ISO8601 时间"
+            ) from exc
+        if since_dt.tzinfo is not None:
+            since_dt = since_dt.replace(tzinfo=None)
+        published = [
+            c
+            for c in published
+            if c.updated_at and c.updated_at.replace(tzinfo=None) > since_dt
+        ]
+
+    if since_dt is None:
+        latest: dict[tuple[str, str], Capability] = {}
+        for cap in published:
+            key = (cap.name, cap.type)
+            cur = latest.get(key)
+            if cur is None or parse_semver(cap.version) > parse_semver(cur.version):
+                latest[key] = cap
+        caps_out = sorted(latest.values(), key=lambda c: (c.type, c.name))
+    else:
+        caps_out = sorted(published, key=lambda c: (c.updated_at or c.created_at, c.name))
 
     items = []
-    for cap in sorted(latest.values(), key=lambda c: (c.type, c.name)):
+    for cap in caps_out:
         items.append(
             {
+                "id": cap.id,
                 "name": cap.name,
                 "type": cap.type,
                 "version": cap.version,
@@ -282,8 +315,15 @@ async def sync_capabilities(db: DbSession, user: OptionalUser):
                 "category": cap.category or "",
                 "description": cap.description or "",
                 "tags": cap.tags or [],
+                "distribution": getattr(cap, "distribution", None) or "both",
+                "risk_default": getattr(cap, "risk_default", None) or "read",
+                "data_domain": getattr(cap, "data_domain", None) or "",
+                "visibility": cap.visibility,
                 "usage_count": cap.usage_count,
                 "has_artifact": bool(cap.artifacts),
+                "updated_at": (cap.updated_at or cap.created_at).isoformat()
+                if (cap.updated_at or cap.created_at)
+                else "",
                 "download_url": (
                     f"/api/capabilities/{quote(cap.name, safe='')}/download"
                     f"?version={cap.version}"

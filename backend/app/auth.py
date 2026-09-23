@@ -60,7 +60,10 @@ async def get_current_user(
     try:
         payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
     except jwt.PyJWTError:
-        # 轨1失败：尝试 SSO 轨
+        # 轨1失败：先试服务令牌，再试 SSO
+        svc_user = await _resolve_service_token_user(db, token)
+        if svc_user is not None:
+            return svc_user
         return await _resolve_sso_user(db, token, credentials_exc)
     user_id = payload.get("sub")
     if not user_id:
@@ -69,6 +72,12 @@ async def get_current_user(
     if user is None or not user.is_active:
         raise credentials_exc
     return user
+
+
+async def _resolve_service_token_user(db: AsyncSession, token: str) -> User | None:
+    from app.services.service_tokens import resolve_service_token
+
+    return await resolve_service_token(db, token)
 
 
 async def _resolve_sso_user(
