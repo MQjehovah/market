@@ -19,9 +19,9 @@ def dashboard_mcp_urls(name: str, version: str | None = None) -> dict[str, str]:
         ref = f"{name}@{version}"
     enc = quote(ref, safe="")
     return {
-        "sse_url": f"/api/mcp-gateway/{enc}/sse",
-        "stream_url": f"/api/mcp-gateway/{enc}/stream",
-        "messages_url": f"/api/mcp-gateway/{enc}/messages",
+        "sse_url": f"/api/mcp-gateway/relay/{enc}/sse",
+        "stream_url": f"/api/mcp-gateway/relay/{enc}/stream",
+        "messages_url": f"/api/mcp-gateway/relay/{enc}/messages",
     }
 
 

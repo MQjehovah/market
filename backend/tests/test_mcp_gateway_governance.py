@@ -23,7 +23,7 @@ from app.services.mcp_gateway import (
     parse_mcp_calls,
 )
 
-URL = "/api/mcp-gateway/relay/{name}/stream"
+URL = "/api/mcp-gateway/{name}/stream"
 
 
 def _scope(headers: dict[str, str] | None = None, client=("127.0.0.1", 1234)) -> dict:
@@ -344,25 +344,25 @@ def test_parse_mcp_calls_maps_methods_and_tool():
     assert parse_mcp_calls(b"not-json") == []
 
 
-# ---------- 路由判定：能力级裸路径 主入口 / 服务级 /relay ----------
+# ---------- 路由判定：能力级 /relay（主入口）与 /cap 别名 / 服务级裸路径 ----------
 
 
 @pytest.mark.asyncio
-async def test_bare_route_is_capability_requires_bearer(client, stream_stub):
-    """裸 /{name}/stream 走能力级：未登录 401；登记服务令牌不是能力级凭据。"""
+async def test_relay_route_is_capability_requires_bearer(client, stream_stub):
+    """/relay/{name}/stream 走能力级：未登录 401；登记服务令牌不是能力级凭据。"""
     await _insert_server("route-shadow", api_token="shadow-token")
     payload = {"jsonrpc": "2.0", "id": 1, "method": "initialize"}
 
     r = await asyncio.wait_for(
-        client.post("/api/mcp-gateway/route-shadow/stream", json=payload), timeout=15
+        client.post("/api/mcp-gateway/relay/route-shadow/stream", json=payload), timeout=15
     )
     assert r.status_code == 401, r.text
     assert "SSO" in r.json()["detail"]
 
-    # 服务级登记令牌在裸路径上不再生效（若按服务级路由会 200）
+    # 服务级登记令牌在能力级路径上不生效（若按服务级路由会 200）
     r = await asyncio.wait_for(
         client.post(
-            "/api/mcp-gateway/route-shadow/stream",
+            "/api/mcp-gateway/relay/route-shadow/stream",
             json=payload,
             headers={"X-Gateway-Token": "shadow-token"},
         ),
@@ -373,12 +373,12 @@ async def test_bare_route_is_capability_requires_bearer(client, stream_stub):
 
 
 @pytest.mark.asyncio
-async def test_bare_route_fake_bearer_enters_capability_parsing(client, stream_stub):
+async def test_relay_route_fake_bearer_enters_capability_parsing(client, stream_stub):
     """带假 Bearer 时进入能力解析（市场令牌校验），而不是服务级登记令牌匹配。"""
     await _insert_server("route-fake")
     r = await asyncio.wait_for(
         client.post(
-            "/api/mcp-gateway/route-fake/stream",
+            "/api/mcp-gateway/relay/route-fake/stream",
             json={"jsonrpc": "2.0", "id": 2, "method": "initialize"},
             headers={"Authorization": "Bearer fake-market-token"},
         ),
@@ -391,25 +391,25 @@ async def test_bare_route_fake_bearer_enters_capability_parsing(client, stream_s
 
 
 @pytest.mark.asyncio
-async def test_relay_route_keeps_service_level(client, stream_stub):
-    """服务级改走 /relay/{name}/{kind}：登记令牌直接生效，无令牌仍 401。"""
-    await _insert_server("relay-svc", api_token="relay-token")
+async def test_bare_route_is_service_level(client, stream_stub):
+    """服务级回到裸 /{name}/{kind}：登记令牌直接生效，无令牌仍 401。"""
+    await _insert_server("bare-svc", api_token="bare-token")
     payload = {"jsonrpc": "2.0", "id": 3, "method": "tools/list"}
 
-    r = await _post_jsonrpc(client, "relay-svc", payload, {"X-Gateway-Token": "relay-token"})
+    r = await _post_jsonrpc(client, "bare-svc", payload, {"X-Gateway-Token": "bare-token"})
     assert r.status_code == 200, r.text
     assert r.json()["result"]["content"][0]["text"] == "ok"
 
-    r = await _post_jsonrpc(client, "relay-svc", payload)
+    r = await _post_jsonrpc(client, "bare-svc", payload)
     assert r.status_code == 401, r.text
     assert "网关令牌无效" in r.json()["detail"]
 
 
 @pytest.mark.asyncio
-async def test_cap_alias_equivalent_to_bare_capability_route(
+async def test_cap_alias_equivalent_to_relay_capability_route(
     client, publisher_headers, admin_headers, stream_stub
 ):
-    """/cap/{name} 别名与新裸路由等价：同一能力解析、同样放行。"""
+    """/cap/{name} 别名与 /relay/{name} 主入口等价：同一能力解析、同样放行。"""
     from test_mcp_debug import _mcp_zip
     from test_workflow import _publish_capability
 
@@ -419,16 +419,16 @@ async def test_cap_alias_equivalent_to_bare_capability_route(
     )
     payload = {"jsonrpc": "2.0", "id": 4, "method": "tools/list"}
 
-    bare = await asyncio.wait_for(
-        client.post(f"/api/mcp-gateway/{name}/stream", json=payload, headers=admin_headers),
+    relay = await asyncio.wait_for(
+        client.post(f"/api/mcp-gateway/relay/{name}/stream", json=payload, headers=admin_headers),
         timeout=15,
     )
     alias = await asyncio.wait_for(
         client.post(f"/api/mcp-gateway/cap/{name}/stream", json=payload, headers=admin_headers),
         timeout=15,
     )
-    assert bare.status_code == alias.status_code == 200, bare.text
-    assert bare.json() == alias.json()
+    assert relay.status_code == alias.status_code == 200, relay.text
+    assert relay.json() == alias.json()
 
 
 @pytest.mark.asyncio
@@ -444,12 +444,14 @@ async def test_reserved_namespace_two_segment_paths_rejected(client):
 
 
 def test_sse_message_endpoint_follows_route_namespace():
-    """SSE 回传消息端点跟随命名空间：能力级 /cap/{name}/messages/，服务级 /relay/{name}/messages/。"""
+    """SSE 回传端点跟随访问命名空间：/relay/{name} 与 /cap/{name} 能力级、裸路径服务级。"""
 
     async def loader(_name):
         return None
 
+    relay_ep = GatewayEndpoints("relay/demo", loader)
     alias_ep = GatewayEndpoints("cap/demo", loader)
-    service_ep = GatewayEndpoints("demo", loader, route_path="relay/demo")
+    service_ep = GatewayEndpoints("demo", loader)
+    assert relay_ep.sse._endpoint == "/relay/demo/messages/"
     assert alias_ep.sse._endpoint == "/cap/demo/messages/"
-    assert service_ep.sse._endpoint == "/relay/demo/messages/"
+    assert service_ep.sse._endpoint == "/demo/messages/"

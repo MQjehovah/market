@@ -61,7 +61,7 @@ def test_dashboard_projection_mcp_urls():
 
     proj = dashboard_projection(Cap())
     assert proj["mode"] == "gateway-sse"
-    assert proj["sse_url"] == "/api/mcp-gateway/doc-mcp/sse"
+    assert proj["sse_url"] == "/api/mcp-gateway/relay/doc-mcp/sse"
     assert proj["mcp"]["url"] == proj["sse_url"]
     assert proj["tools"] == [{"name": "echo", "description": "回显"}]
 
@@ -75,7 +75,7 @@ async def test_browse_and_detail_expose_consumers_dashboard(client):
     assert mcp is not None
     dash = mcp["consumers"]["dashboard"]
     assert dash["mode"] in ("local-stdio", "local-sse", "gateway-sse")
-    assert dash["sse_url"].startswith("/api/mcp-gateway/")
+    assert dash["sse_url"].startswith("/api/mcp-gateway/relay/")
     assert "/api/mcp-gateway/cap/" not in dash["sse_url"]
 
     r = await client.get(f"/api/capabilities/{mcp['id']}")

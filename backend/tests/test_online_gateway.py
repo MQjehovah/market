@@ -110,7 +110,7 @@ def test_dashboard_projection_tool_and_skill_online_fields():
 
     mcp = dashboard_projection(McpCap())
     assert mcp["mode"] == "gateway-sse"
-    assert mcp["sse_url"] == "/api/mcp-gateway/pkg-mcp/sse"
+    assert mcp["sse_url"] == "/api/mcp-gateway/relay/pkg-mcp/sse"
     assert "Bearer" in str(mcp["mcp"].get("headers") or {})
     assert mcp.get("needs_credentials") is True
     assert "ERP_API_BASE_URL" in (mcp.get("required_env") or [])

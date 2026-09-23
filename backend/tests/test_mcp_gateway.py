@@ -214,7 +214,7 @@ async def test_gateway_streamable_http_inbound(client, admin_headers, mcp_script
     server, task, port = await _start_uvicorn()
     try:
         base = f"http://127.0.0.1:{port}"
-        gw_url = f"{base}/api/mcp-gateway/relay/stream-mcp/stream"
+        gw_url = f"{base}/api/mcp-gateway/stream-mcp/stream"
         headers = {"X-Gateway-Token": "gw-test-token"}
 
         # 无令牌 → 401
@@ -259,7 +259,7 @@ async def test_gateway_sse_inbound(client, admin_headers, mcp_script):
     try:
         headers = {"X-Gateway-Token": "gw-test-token"}
         async with sse_client(
-            f"http://127.0.0.1:{port}/api/mcp-gateway/relay/sse-mcp/sse",
+            f"http://127.0.0.1:{port}/api/mcp-gateway/sse-mcp/sse",
             headers=headers,
             timeout=10,
             sse_read_timeout=60,
@@ -341,8 +341,8 @@ async def test_capability_gateway_requires_bearer_and_runtime(
             "asgi": {"version": "3.0"},
             "method": "GET",
             "scheme": "http",
-            "path": f"/api/mcp-gateway/{name}/sse",
-            "raw_path": f"/api/mcp-gateway/{name}/sse".encode(),
+            "path": f"/api/mcp-gateway/relay/{name}/sse",
+            "raw_path": f"/api/mcp-gateway/relay/{name}/sse".encode(),
             "root_path": "",
             "query_string": b"",
             "headers": raw,
@@ -385,8 +385,8 @@ async def test_capability_gateway_upstream_from_published_package(
         "asgi": {"version": "3.0"},
         "method": "GET",
         "scheme": "http",
-        "path": f"/api/mcp-gateway/{name}/sse",
-        "raw_path": f"/api/mcp-gateway/{name}/sse".encode(),
+        "path": f"/api/mcp-gateway/relay/{name}/sse",
+        "raw_path": f"/api/mcp-gateway/relay/{name}/sse".encode(),
         "root_path": "",
         "query_string": b"",
         "headers": [
@@ -403,7 +403,7 @@ async def test_capability_gateway_upstream_from_published_package(
     assert "echo" in {t.name for t in tools.tools}
     assert "echo:desk" in (result.content[0].text if result.content else "")
 
-    # 裸路径（新主入口）与 /cap 别名等价：未登录都 401
-    for url in (f"/api/mcp-gateway/{name}/sse", f"/api/mcp-gateway/cap/{name}/sse"):
+    # 能力级主入口 /relay 与 /cap 别名等价：未登录都 401
+    for url in (f"/api/mcp-gateway/relay/{name}/sse", f"/api/mcp-gateway/cap/{name}/sse"):
         r = await asyncio.wait_for(client.get(url), 8)
         assert r.status_code == 401, url

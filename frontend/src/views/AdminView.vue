@@ -128,7 +128,7 @@ const gatewayTest = ref({})
 
 const TOKEN_SCOPE_OPTS = [
   { key: 'runtime', label: 'runtime', desc: '云端 invoke / persona / mcp call' },
-  { key: 'gateway', label: 'gateway', desc: '能力级 MCP 网关 /cap/…' },
+  { key: 'gateway', label: 'gateway', desc: '能力级 MCP 网关 /relay/…' },
   { key: 'sync', label: 'sync', desc: '目录同步 host-sync / capabilities/sync' },
   { key: 'admin', label: 'admin', desc: '管理接口（慎用）' }
 ]
@@ -597,15 +597,15 @@ function gatewayBindingLabel(s) {
 }
 
 function gatewayUrl(s) {
-  return `${window.location.origin}${__API_BASE__}/mcp-gateway/relay/${s.name}/stream`
+  return `${window.location.origin}${__API_BASE__}/mcp-gateway/${s.name}/stream`
 }
 
 function gatewaySseUrl(s) {
-  return `${window.location.origin}${__API_BASE__}/mcp-gateway/relay/${s.name}/sse`
+  return `${window.location.origin}${__API_BASE__}/mcp-gateway/${s.name}/sse`
 }
 
 function gatewayPreviewUrl(name) {
-  return `${window.location.origin}${__API_BASE__}/mcp-gateway/relay/${name || '…'}/stream`
+  return `${window.location.origin}${__API_BASE__}/mcp-gateway/${name || '…'}/stream`
 }
 
 function copyText(text, noticeRef) {
