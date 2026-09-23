@@ -9,9 +9,12 @@
    可以像连接普通 MCP server 一样调用，stdio 服务自动转成 HTTP（mcp-proxy 模式）。
 
 端点约定（挂在 /api/mcp-gateway 下）：
-    GET  /{name}/sse        SSE 传输的 MCP 服务（GET 建立连接）
+    GET  /{name}/sse        SSE 传输的 MCP 服务（GET 建立连接）——管理员登记表
     POST /{name}/messages   SSE 客户端回传 JSON-RPC 消息
     GET/POST/DELETE /{name}/stream   Streamable HTTP 传输的 MCP 服务
+    GET  /cap/{name}/sse    已发布 MCP 能力的桌面入口（Bearer = 市场/SSO token）
+    POST /cap/{name}/messages
+    GET/POST/DELETE /cap/{name}/stream
 """
 
 import asyncio
@@ -184,6 +187,9 @@ async def connect_upstream(
     transport = (config.get("transport") or "stdio").lower()
     cleanup: list[Path] = []
     errlog = None
+    if package_files is None:
+        raw_files = config.get("package_files")
+        package_files = raw_files if isinstance(raw_files, dict) else None
 
     try:
         if transport == "stdio":
@@ -299,6 +305,114 @@ async def load_gateway_config_by_name(db, name: str) -> dict[str, Any] | None:
     return row_to_config(row) if row is not None else None
 
 
+def _bearer_token(scope) -> str | None:
+    request = Request(scope, None)  # type: ignore[arg-type]
+    auth = request.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        token = auth[7:].strip()
+        return token or None
+    return None
+
+
+async def find_published_mcp(db, name: str):
+    """最新已发布/弃用期内的 MCP 能力（含制品，供解包 connection.json）。"""
+    from sqlalchemy import select
+    from sqlalchemy.orm import joinedload, selectinload
+
+    from app.models import Capability
+    from app.services.capabilities import parse_semver
+
+    rows = list(
+        (
+            await db.scalars(
+                select(Capability)
+                .options(selectinload(Capability.artifacts), joinedload(Capability.author))
+                .where(
+                    Capability.name == name,
+                    Capability.type == "mcp",
+                    Capability.status.in_(("published", "deprecated")),
+                )
+            )
+        ).all()
+    )
+    if not rows:
+        return None
+    return max(rows, key=lambda c: parse_semver(c.version))
+
+
+async def upstream_config_from_capability(db, cap) -> dict[str, Any] | None:
+    """已发布 MCP → connect_upstream 配置（stdio 带 package_files；gateway 解析登记表）。"""
+    files = read_package_files(cap)
+    raw = files.get("connection.json")
+    if not raw:
+        return None
+    try:
+        conn = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        raise RuntimeError("connection.json 解析失败") from None
+    if not isinstance(conn, dict):
+        raise RuntimeError("connection.json 顶层必须是对象")
+    transport = str(conn.get("transport") or conn.get("type") or "stdio").strip().lower()
+    if transport == "gateway":
+        cfg = await load_gateway_config_by_name(db, conn.get("server") or "")
+        if cfg is None:
+            raise RuntimeError(f"网关服务 {conn.get('server') or ''} 不存在")
+        cfg = dict(cfg)
+        cfg["enabled"] = True
+        return cfg
+    if transport not in ("http", "streamable_http", "sse", "stdio"):
+        raise RuntimeError(f"不支持 transport={transport}")
+    return {
+        "name": cap.name,
+        "transport": "streamable_http" if transport == "http" else transport,
+        "url": conn.get("url") or "",
+        "headers": conn.get("headers") or {},
+        "command": conn.get("command") or "python",
+        "args": list(conn.get("args") or []),
+        "env": conn.get("env") or {},
+        "cwd": conn.get("cwd") or "",
+        "enabled": True,
+        "package_files": files,
+    }
+
+
+async def authorize_capability_gateway(
+    scope, name: str
+) -> tuple[dict[str, Any] | None, int | None, dict | None]:
+    """能力级网关鉴权：Bearer（HS256|SSO）+ runtime 门禁。返回 (config, err_status, err_body)。"""
+    from fastapi import HTTPException
+
+    from app.auth import get_current_user
+    from app.database import SessionLocal
+    from app.permissions import require_runtime_access
+
+    token = _bearer_token(scope)
+    if not token:
+        return None, 401, {"detail": "请先完成企业 SSO 登录（访问能力 MCP 网关需要 Bearer）"}
+
+    async with SessionLocal() as db:
+        try:
+            user = await get_current_user(token, db)
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+            return None, int(exc.status_code), {"detail": detail}
+        cap = await find_published_mcp(db, name)
+        if cap is None:
+            return None, 404, {"detail": f"已发布 MCP {name} 不存在"}
+        try:
+            await require_runtime_access(user, cap, db)
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+            return None, int(exc.status_code), {"detail": detail}
+        try:
+            config = await upstream_config_from_capability(db, cap)
+        except RuntimeError as exc:
+            return None, 502, {"detail": str(exc)[:300]}
+        if config is None:
+            return None, 404, {"detail": f"MCP {name} 缺少 connection.json"}
+        return config, None, None
+
+
 def make_forward_server(name: str, upstream: ClientSession) -> MCPServer:
     """构建转发型低层 MCP server：tools/list 与 tools/call 全部转发到上游。"""
 
@@ -321,15 +435,16 @@ class _ServerProxy:
 
     manager 每个客户端会话会调用一次 run()，我们在该会话内连接独立的上游，
     保证 stdio 子进程 / HTTP 会话的生命周期与客户端会话一致。
+    配置优先用 GatewayEndpoints 在鉴权后缓存的 config（能力级 /cap/{name}），
+    否则回退登记表 loader。
     """
 
-    def __init__(self, name: str, loader: ConfigLoader) -> None:
-        self.name = name
-        self._loader = loader
+    def __init__(self, endpoints: "GatewayEndpoints") -> None:
+        self._ep = endpoints
 
     def create_initialization_options(self, **kwargs) -> InitializationOptions:
         return InitializationOptions(
-            server_name=f"gateway-{self.name}",
+            server_name=f"gateway-{self._ep.name}",
             server_version="1.0.0",
             capabilities=ServerCapabilities(tools={}),
         )
@@ -343,11 +458,11 @@ class _ServerProxy:
         raise_exceptions: bool = False,
         stateless: bool = False,
     ) -> None:
-        config = await self._loader(self.name)
+        config = await self._ep.resolve_config()
         if config is None or not config.get("enabled", True):
-            raise RuntimeError(f"网关服务 {self.name} 不存在或已停用")
+            raise RuntimeError(f"网关服务 {self._ep.name} 不存在或已停用")
         async with connect_upstream(config) as upstream:
-            server = make_forward_server(self.name, upstream)
+            server = make_forward_server(self._ep.name, upstream)
             await server.run(
                 read_stream,
                 write_stream,
@@ -363,10 +478,19 @@ class GatewayEndpoints:
     def __init__(self, name: str, loader: ConfigLoader) -> None:
         self.name = name
         self._loader = loader
+        self._cached_config: dict[str, Any] | None = None
         self.sse = SseServerTransport(endpoint=f"/{name}/messages/")
         self._stream_manager: StreamableHTTPSessionManager | None = None
         self._stream_task: asyncio.Task | None = None
         self._stream_ready = asyncio.Event()
+
+    def cache_config(self, config: dict[str, Any] | None) -> None:
+        self._cached_config = config
+
+    async def resolve_config(self) -> dict[str, Any] | None:
+        if self._cached_config is not None:
+            return self._cached_config
+        return await self._loader(self.name)
 
     async def ensure_stream_manager(self) -> None:
         if self._stream_task is None:
@@ -375,7 +499,7 @@ class GatewayEndpoints:
 
     async def _run_stream_manager(self) -> None:
         manager = StreamableHTTPSessionManager(
-            _ServerProxy(self.name, self._loader), json_response=True
+            _ServerProxy(self), json_response=True
         )
         self._stream_manager = manager
         try:
@@ -389,6 +513,7 @@ class GatewayEndpoints:
             self._stream_ready.set()
 
     async def handle_sse(self, scope, receive, send, config: dict[str, Any]) -> None:
+        self.cache_config(config)
         async with self.sse.connect_sse(scope, receive, send) as streams:
             async with connect_upstream(config) as upstream:
                 server = make_forward_server(self.name, upstream)
@@ -399,7 +524,9 @@ class GatewayEndpoints:
     async def handle_messages(self, scope, receive, send) -> None:
         await self.sse.handle_post_message(scope, receive, send)
 
-    async def handle_stream(self, scope, receive, send) -> None:
+    async def handle_stream(self, scope, receive, send, config: dict[str, Any] | None = None) -> None:
+        if config is not None:
+            self.cache_config(config)
         await self.ensure_stream_manager()
         await self._stream_manager.handle_request(scope, receive, send)
 
@@ -458,7 +585,7 @@ async def send_json(scope, receive, send, status: int, body: dict) -> None:
 
 
 class GatewayASGIApp:
-    """挂在 /api/mcp-gateway 下的分发器：/{name}/{sse|messages|stream}。"""
+    """挂在 /api/mcp-gateway 下的分发器：/{name}/{sse|messages|stream} 与 /cap/{name}/…。"""
 
     def __init__(self, registry: GatewayRegistry, loader: ConfigLoader) -> None:
         self._registry = registry
@@ -469,39 +596,54 @@ class GatewayASGIApp:
             await send_json(scope, receive, send, 404, {"detail": "Not Found"})
             return
         # 挂载在 /api/mcp-gateway 下时，scope["path"] 仍是完整路径，
-        # 需要去掉 root_path（挂载前缀）后再解析 /{name}/{kind}
+        # 需要去掉 root_path（挂载前缀）后再解析 /{name}/{kind} 或 /cap/{name}/{kind}
         root = scope.get("root_path") or ""
         raw_path = scope.get("path") or ""
         if root and raw_path.startswith(root):
             raw_path = raw_path[len(root):]
-        parts = [p for p in raw_path.split("/") if p]
-        if len(parts) != 2:
+        from urllib.parse import unquote
+
+        parts = [unquote(p) for p in raw_path.split("/") if p]
+        cap_route = len(parts) == 3 and parts[0] == "cap"
+        if cap_route:
+            name, kind = parts[1], parts[2]
+            registry_key = f"cap/{name}"
+            config, err_status, err_body = await authorize_capability_gateway(scope, name)
+            if err_status is not None:
+                await send_json(scope, receive, send, err_status, err_body or {"detail": "未授权"})
+                return
+            if config is None:
+                await send_json(scope, receive, send, 502, {"detail": "无法构建上游配置"})
+                return
+        elif len(parts) == 2:
+            name, kind = parts
+            registry_key = name
+            config = await self._loader(name)
+            if config is None or not config.get("enabled", True):
+                await send_json(scope, receive, send, 404, {"detail": f"网关服务 {name} 不存在或已停用"})
+                return
+            if not await check_token(config, scope):
+                await send_json(
+                    scope, receive, send, 401, {"detail": "网关令牌无效（X-Gateway-Token 或 Bearer）"}
+                )
+                return
+        else:
             await send_json(scope, receive, send, 404, {"detail": "网关端点不存在"})
             return
-        name, kind = parts
-        config = await self._loader(name)
-        if config is None or not config.get("enabled", True):
-            await send_json(scope, receive, send, 404, {"detail": f"网关服务 {name} 不存在或已停用"})
-            return
-        if not await check_token(config, scope):
-            await send_json(
-                scope, receive, send, 401, {"detail": "网关令牌无效（X-Gateway-Token 或 Bearer）"}
-            )
-            return
-        ep = self._registry.get(name)
+        ep = self._registry.get(registry_key)
         try:
             if kind == "sse":
                 await ep.handle_sse(scope, receive, send, config)
             elif kind == "messages":
                 await ep.handle_messages(scope, receive, send)
             elif kind == "stream":
-                await ep.handle_stream(scope, receive, send)
+                await ep.handle_stream(scope, receive, send, config)
             else:
                 await send_json(scope, receive, send, 404, {"detail": "网关端点不存在"})
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
-            logger.exception("网关服务 %s 处理失败", name)
+            logger.exception("网关服务 %s 处理失败", registry_key)
             try:
                 await send_json(scope, receive, send, 502, {"detail": str(exc)[:300]})
             except Exception:  # noqa: BLE001

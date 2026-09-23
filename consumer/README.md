@@ -7,7 +7,7 @@
 | --- | --- | --- |
 | 同步 | 拉取能力目录（Agent / 积木 / 配方 / 安装包） | `cap sync` |
 | 下载 | 下载单个能力包（zip + 校验和） | `cap pull` |
-| 本地组装 | 下载 Agent / skill / mcp / plugin（tool、workflow 不支持本地装） | `cap install` |
+| 本地组装 | 下载 Agent / skill / mcp / plugin / rule / command / hook（tool、workflow 不支持本地装） | `cap install` |
 | 本地运行 | 用本地 agent 引擎执行任务 | `cap run --mode local` |
 | 云端运行 | 能力层云端试用（沙箱 + 用量） | `cap run --mode cloud` |
 | A2A 委派 | 委派任务给云端 Agent | `cap run --mode a2a` / `cap delegate` |

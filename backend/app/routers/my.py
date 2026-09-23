@@ -6,19 +6,20 @@ from sqlalchemy.orm import joinedload, selectinload
 
 from app.auth import CurrentUser, DbSession
 from app.models import Capability, UserCapability
-from app.schemas import MessageOut, MyCapabilityAdd
+from app.schemas import MessageOut, MyCapabilityAdd, MyCapabilityPatch
 from app.services.capabilities import parse_semver, to_capability_out
 from app.services.install_policy import ensure_default_on_joins, is_required_policy
 
 router = APIRouter(prefix="/api/my", tags=["my"])
 
 
-def _out(cap: Capability, *, added: bool, owned: bool) -> dict:
+def _out(cap: Capability, *, added: bool, owned: bool, enabled: bool = True) -> dict:
     data = to_capability_out(
         cap, author_name=cap.author.username if cap.author else ""
     ).model_dump()
     data["added"] = added
     data["owned"] = owned
+    data["enabled"] = bool(enabled)
     data["has_artifact"] = bool(getattr(cap, "artifacts", None))
     data["removable"] = not is_required_policy(cap)
     return data
@@ -47,6 +48,7 @@ async def my_capabilities(
             .where(UserCapability.user_id == user.id)
         )
     ).all()
+    enabled_by_id = {row.capability_id: bool(getattr(row, "enabled", True)) for row in rows}
     owned = (
         await db.scalars(
             select(Capability)
@@ -80,11 +82,20 @@ async def my_capabilities(
         key = cap.name
         if key in items:
             if parse_semver(cap.version) > parse_semver(items[key]["version"]):
-                items[key] = _out(cap, added=True, owned=items[key]["owned"])
+                owned_flag = items[key]["owned"]
+                items[key] = _out(
+                    cap,
+                    added=True,
+                    owned=owned_flag,
+                    enabled=enabled_by_id.get(cap.id, True),
+                )
             else:
                 items[key]["added"] = True
+                items[key]["enabled"] = enabled_by_id.get(items[key]["id"], True)
         else:
-            items[key] = _out(cap, added=True, owned=False)
+            items[key] = _out(
+                cap, added=True, owned=False, enabled=enabled_by_id.get(cap.id, True)
+            )
 
     # 附带同名下最新草稿/被打回版本信息（用于「编辑草稿 / 提交审核」）
     drafts_by_name: dict[str, Capability] = {}
@@ -164,6 +175,53 @@ async def add_capability(data: MyCapabilityAdd, db: DbSession, user: CurrentUser
     if cap.type == "plugin" and len(ids) > 1:
         return MessageOut(message=f"已加入插件及其 {len(ids) - 1} 个组件")
     return MessageOut(message="已加入我的能力")
+
+
+@router.patch("/capabilities/{capability_id}", response_model=MessageOut)
+async def patch_capability(
+    capability_id: str, data: MyCapabilityPatch, db: DbSession, user: CurrentUser
+):
+    row = await db.scalar(
+        select(UserCapability).where(
+            and_(
+                UserCapability.user_id == user.id,
+                UserCapability.capability_id == capability_id,
+            )
+        )
+    )
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "该能力不在你的能力中")
+    cap = await db.get(Capability, capability_id)
+    if data.enabled is False and is_required_policy(cap):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"「{cap.name}」为必装能力（install_policy=required），不能停用",
+        )
+    ids = [capability_id]
+    if cap is not None and cap.type == "plugin":
+        from app.services.plugins import plugin_component_ids
+
+        ids.extend(plugin_component_ids(cap))
+    updated = 0
+    for cid in ids:
+        link = await db.scalar(
+            select(UserCapability).where(
+                and_(
+                    UserCapability.user_id == user.id,
+                    UserCapability.capability_id == cid,
+                )
+            )
+        )
+        if link is None:
+            continue
+        child = await db.get(Capability, cid)
+        if data.enabled is False and is_required_policy(child):
+            continue
+        link.enabled = data.enabled
+        updated += 1
+    await db.commit()
+    state = "启用" if data.enabled else "停用"
+    return MessageOut(message=f"已{state}（{updated} 项）")
 
 
 @router.delete("/capabilities/{capability_id}", response_model=MessageOut)

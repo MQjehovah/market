@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import { api } from '../api'
 import { formatSize } from '../utils/format'
 import StatusBadge from '../components/StatusBadge.vue'
+import MarkdownEditor from '../components/MarkdownEditor.vue'
 
 const route = useRoute()
 const name = route.params.name
@@ -90,7 +91,7 @@ onMounted(load)
       <div>
         <div class="panel">
           <h3>SKILL.md（Markdown）</h3>
-          <textarea v-model="skillMd" class="textarea md-editor" rows="24" spellcheck="false"></textarea>
+          <MarkdownEditor v-model="skillMd" />
         </div>
 
         <div class="panel mt-16">
@@ -122,12 +123,8 @@ onMounted(load)
 </template>
 
 <style scoped>
-.editor { max-width: 1080px; }
+.editor { max-width: 1520px; }
 h3 { margin: 0 0 12px; }
-.md-editor {
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-  font-size: 13px; line-height: 1.6;
-}
 .file-item {
   display: flex; justify-content: space-between; align-items: center;
   padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px;

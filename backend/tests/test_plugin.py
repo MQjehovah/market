@@ -264,3 +264,61 @@ async def test_wrapped_plugin_folder_accepted(client, publisher_headers):
     assert r.status_code == 200, r.text
     types = {c["type"] for c in r.json()["input_schema"]["components"]}
     assert "agent" in types and "skill" in types
+
+
+def _cursor_plugin_zip(*, name: str = "cursor-kit", version: str = "1.0.0") -> bytes:
+    files: dict[str, bytes] = {
+        ".cursor-plugin/plugin.json": json.dumps(
+            {"name": name, "description": "Cursor 风格安装包", "version": version},
+            ensure_ascii=False,
+        ).encode("utf-8"),
+        "skills/kit-skill/SKILL.md": b"# kit-skill\n\nsteps\n",
+        "rules/prefer-const.mdc": (
+            "---\ndescription: Prefer const\nalwaysApply: true\n---\n\nUse const.\n"
+        ).encode("utf-8"),
+        "commands/ship.md": (
+            "---\nname: ship\ndescription: Ship current change\n---\n\n# Ship\n"
+        ).encode("utf-8"),
+        "hooks/hooks.json": json.dumps(
+            {"version": 1, "hooks": {"sessionStart": [{"command": "./scripts/hi.sh"}]}},
+            ensure_ascii=False,
+        ).encode("utf-8"),
+        "scripts/hi.sh": b"#!/bin/sh\necho hi\n",
+        "agents/security-reviewer.md": (
+            "---\nname: security-reviewer\ndescription: Security review subagent\n---\n\n"
+            "You are a security reviewer.\n"
+        ).encode("utf-8"),
+        "mcp.json": json.dumps(
+            {"mcpServers": {"kit-mcp": {"command": "python", "args": ["-m", "demo"]}}},
+            ensure_ascii=False,
+        ).encode("utf-8"),
+    }
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for path, data in files.items():
+            zf.writestr(path, data)
+    return buf.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_cursor_plugin_unpacks_rules_commands_hooks(client, publisher_headers):
+    r = await client.post(
+        "/api/publish/capabilities",
+        headers=publisher_headers,
+        json={"name": "cursor-kit", "type": "plugin", "version": "1.0.0", "description": "c"},
+    )
+    assert r.status_code == 201, r.text
+    plugin_id = r.json()["id"]
+    r = await client.post(
+        f"/api/publish/capabilities/{plugin_id}/artifact",
+        headers=publisher_headers,
+        files={"file": ("kit.zip", _cursor_plugin_zip(), "application/zip")},
+    )
+    assert r.status_code == 200, r.text
+    comps = r.json()["input_schema"]["components"]
+    types = {c["type"] for c in comps}
+    assert {"skill", "rule", "command", "hook", "agent", "mcp"} <= types
+    assert any(c["type"] == "rule" and c["name"] == "prefer-const" for c in comps)
+    assert any(c["type"] == "command" and c["name"] == "ship" for c in comps)
+    assert any(c["type"] == "hook" and c["name"].endswith("-hooks") for c in comps)
+    assert any(c["type"] == "agent" and c["name"] == "security-reviewer" for c in comps)

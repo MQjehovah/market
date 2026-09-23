@@ -39,7 +39,7 @@ def cmd_sync(args) -> int:
         by_type: dict[str, list[dict]] = {}
         for item in items:
             by_type.setdefault(item["type"], []).append(item)
-        for cap_type in ("agent", "tool", "skill", "mcp", "workflow", "plugin"):
+        for cap_type in ("agent", "tool", "skill", "mcp", "workflow", "plugin", "rule", "command", "hook"):
             group = by_type.get(cap_type)
             if not group:
                 continue
@@ -181,17 +181,17 @@ def build_parser() -> argparse.ArgumentParser:
     _common_args(p)
     p.add_argument("name", help="能力名称")
     p.add_argument("--version", "-v", default="", help="版本（默认最新）")
-    p.add_argument("--type", default="", help="能力类型（agent/tool/skill/mcp/plugin，用于目录消歧）")
+    p.add_argument("--type", default="", help="能力类型（agent/tool/skill/mcp/plugin/rule/command/hook，用于目录消歧）")
     p.add_argument("--output", "-o", default="", help="保存路径（默认 <name>-<version>.zip）")
     p.set_defaults(func=cmd_pull)
 
-    p = sub.add_parser("install", help="下载并安装能力（agent/skill/mcp/plugin）")
+    p = sub.add_parser("install", help="下载并安装能力（agent/skill/mcp/plugin/rule/command/hook）")
     _common_args(p)
     p.add_argument("name", help="能力名称")
     p.add_argument(
         "--type",
         default="agent",
-        choices=["agent", "skill", "mcp", "plugin"],
+        choices=["agent", "skill", "mcp", "plugin", "rule", "command", "hook"],
         help="安装类型（默认 agent）",
     )
     p.add_argument("--version", "-v", default="", help="版本（默认最新）")

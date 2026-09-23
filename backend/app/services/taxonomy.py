@@ -11,8 +11,8 @@ SHELVES: dict[str, dict[str, Any]] = {
     "brick": {
         "key": "brick",
         "label": "组件",
-        "description": "技能 / 连接器 / 编排函数。发布与高级筛选用。",
-        "kinds": ["skill", "mcp", "tool"],
+        "description": "技能 / 连接器 / 规则 / 命令 / Hooks / 编排函数。发布与高级筛选用。",
+        "kinds": ["skill", "mcp", "tool", "rule", "command", "hook"],
     },
     "recipe": {
         "key": "recipe",
@@ -34,9 +34,9 @@ KIND_SHELF: dict[str, str] = {
     for kind in shelf["kinds"]
 }
 
-# 浏览默认：技能 + 安装包 + 助手（连接器/编排进「更多」）
+# 浏览默认：技能 + 安装包 + 助手（连接器/规则/命令/Hooks/编排进「更多」）
 DEFAULT_BROWSE_KINDS = ("skill", "plugin", "agent")
-MORE_BROWSE_KINDS = ("mcp", "workflow", "tool")
+MORE_BROWSE_KINDS = ("mcp", "workflow", "tool", "rule", "command", "hook")
 KIND_META: dict[str, dict[str, str]] = {
     "skill": {
         "shelf": "brick",
@@ -48,8 +48,8 @@ KIND_META: dict[str, dict[str, str]] = {
     "mcp": {
         "shelf": "brick",
         "what": "连接器；真正可调的是发现出的 tools（≠ 市场 tool kind）",
-        "install": "mcp_servers.json（cap install --type mcp）",
-        "runs_in": "MCPManager / 网关 / IDE",
+        "install": "mcp_servers.json（cap install --type mcp）；桌面走 /api/mcp-gateway/cap/{name}/sse",
+        "runs_in": "MCPManager / 能力级 HTTP 网关 / IDE",
         "local_install": "yes",
     },
     "tool": {
@@ -58,6 +58,27 @@ KIND_META: dict[str, dict[str, str]] = {
         "install": "无本地安装；仅 POST /api/runtime/tools/{name}/invoke",
         "runs_in": "runtime 沙箱 / workflow 节点",
         "local_install": "no",
+    },
+    "rule": {
+        "shelf": "brick",
+        "what": "持久指导（RULE.mdc）；alwaysApply / globs 控制何时生效",
+        "install": "config/rules/<name>/（cap install --type rule）",
+        "runs_in": "IDE / Agent 读入上下文",
+        "local_install": "yes",
+    },
+    "command": {
+        "shelf": "brick",
+        "what": "可复用提示（COMMAND.md）；对话里用 / 唤起",
+        "install": "config/commands/<name>/（cap install --type command）",
+        "runs_in": "IDE / Agent 斜杠命令",
+        "local_install": "yes",
+    },
+    "hook": {
+        "shelf": "brick",
+        "what": "生命周期脚本（hooks.json）；观察、拦截或跟进 Agent 事件",
+        "install": "config/hooks/<name>/（cap install --type hook）",
+        "runs_in": "IDE / 宿主 hook 运行时",
+        "local_install": "yes",
     },
     "agent": {
         "shelf": "recipe",
@@ -75,7 +96,7 @@ KIND_META: dict[str, dict[str, str]] = {
     },
     "plugin": {
         "shelf": "install",
-        "what": "分发袋：拆 skill/mcp/可选 agent/tool",
+        "what": "分发袋：拆 skill/mcp/rule/command/hook/可选 agent/tool",
         "install": "config/plugins/<name>/（cap install --type plugin）",
         "runs_in": "IDE / 本地引擎执行子组件",
         "local_install": "yes",
@@ -127,7 +148,12 @@ CONSUME_WAYS = [
     {"id": "trial", "label": "云端试用", "api": "POST /api/runtime/*"},
     {"id": "a2a", "label": "A2A 互调", "api": "Agent Card + tasks/send"},
     {"id": "mcp_bridge", "label": "市场 MCP 桥", "api": "marketplace_*"},
-    {"id": "gateway", "label": "MCP HTTP 网关", "api": "/api/mcp-gateway/{name}"},
+    {"id": "gateway", "label": "MCP HTTP 网关（管理员登记）", "api": "/api/mcp-gateway/{name}"},
+    {
+        "id": "cap_gateway",
+        "label": "能力 MCP 网关（桌面）",
+        "api": "/api/mcp-gateway/cap/{name}/sse",
+    },
     {"id": "join", "label": "加入我的能力", "api": "POST /api/my/capabilities"},
 ]
 
@@ -178,8 +204,9 @@ def taxonomy_payload() -> dict[str, Any]:
                 "type 字段即 kind；不必先拆表。"
                 "逛店默认 skill+plugin+agent；"
                 "agent 日常 = skill 说明书 + MCP 发现的 tools；"
+                "rule/command/hook 进「更多」且可 cap install；"
                 "市场 tool ≠ MCP tools ≠ 宿主 src/tools；"
-                "cap install 仅 agent/skill/mcp/plugin。"
+                "cap install：agent/skill/mcp/plugin/rule/command/hook。"
             ),
         },
     }

@@ -28,10 +28,12 @@ import {
   isLocalInstallKind,
   ownerProgressIndex,
   editRouteFor,
-  canOnlineEdit
+  canOnlineEdit,
+  mcpTrialMode
 } from '../utils/format'
 import StatusBadge from '../components/StatusBadge.vue'
 import PackagePreview from '../components/PackagePreview.vue'
+import DebugCapabilityModal from '../components/DebugCapabilityModal.vue'
 
 const props = defineProps({ id: { type: String, required: true } })
 const router = useRouter()
@@ -114,7 +116,7 @@ const isPublished = computed(() => ['published', 'deprecated'].includes(cap.valu
 const kindHint = computed(() => (cap.value ? KIND_HINTS[cap.value.type] : null))
 const shelfName = computed(() => (cap.value ? shelfLabel(cap.value.type) : ''))
 const showTemplateDownload = computed(
-  () => showPackageUpload.value && ['skill', 'mcp', 'tool', 'agent', 'plugin'].includes(cap.value?.type)
+  () => showPackageUpload.value && ['skill', 'mcp', 'tool', 'agent', 'plugin', 'rule', 'command', 'hook'].includes(cap.value?.type)
 )
 const progressIndex = computed(() =>
   ownerProgressIndex(cap.value, { joined: myIds.value.has(props.id) })
@@ -137,6 +139,10 @@ const embeddedMcp = computed(() => {
   return Array.isArray(schema.embedded_mcp) ? schema.embedded_mcp : []
 })
 const usedBy = computed(() => Array.isArray(cap.value?.used_by) ? cap.value.used_by : [])
+const usedByAgents = computed(() =>
+  usedBy.value.filter((u) => u.type === 'agent' && (u.capability_id || u.name))
+)
+const debugCap = ref(null)
 const parentPluginId = computed(() => cap.value?.parent_plugin_id || null)
 const isSkillOrMcp = computed(() => ['skill', 'mcp'].includes(cap.value?.type))
 const hasSiblings = computed(() => (versions.value || []).some((v) => v.id !== cap.value?.id))
@@ -150,7 +156,6 @@ const packageSizeLabel = computed(() =>
 
 const installCommand = computed(() => (cap.value ? installCommandFor(cap.value) : ''))
 const canLocalInstall = computed(() => (cap.value ? isLocalInstallKind(cap.value.type) : false))
-const consumeActionLabel = computed(() => (canLocalInstall.value ? '安装' : '消费'))
 const scenarioList = computed(() => {
   if (!cap.value) return []
   const schema = cap.value.input_schema || {}
@@ -217,9 +222,13 @@ const mcpTransport = computed(() => {
   )
 })
 
+const dashboardConsume = computed(() => cap.value?.consumers?.dashboard || null)
+
 const mcpToolRows = computed(() => {
   if (mcpTools.value.length) return mcpTools.value
-  return normalizeMcpTools(mcpSchema.value?.tools)
+  const fromSchema = normalizeMcpTools(mcpSchema.value?.tools)
+  if (fromSchema.length) return fromSchema
+  return normalizeMcpTools(dashboardConsume.value?.tools)
 })
 
 const mcpEnvRows = computed(() => {
@@ -237,6 +246,30 @@ const mcpEnvRows = computed(() => {
     hint: publicEnvHint(k, env[k]),
     required: true
   }))
+})
+
+const mcpTrial = computed(() =>
+  mcpTrialMode({
+    transport: mcpTransport.value,
+    envKeys: mcpEnvRows.value.map((r) => r.key)
+  })
+)
+const joined = computed(() => Boolean(cap.value && myIds.value.has(cap.value.id)))
+const canRuntime = computed(() => isOwner.value || isAdmin.value || joined.value)
+const canTrialMcp = computed(() => {
+  if (!isMcp.value || !isPublished.value || !authState.token) return false
+  if (isOwner.value || isAdmin.value) return true
+  return joined.value && mcpTrial.value.canOneClick
+})
+const canTrialCurrent = computed(() => {
+  if (!isPublished.value || !authState.token) return false
+  if (isMcp.value) return canTrialMcp.value
+  if (isAgent.value) return canRuntime.value
+  return false
+})
+const consumeActionLabel = computed(() => {
+  if (isMcp.value) return '使用'
+  return canLocalInstall.value ? '安装' : '消费'
 })
 
 const mcpClientConfigJson = computed(() => {
@@ -383,6 +416,27 @@ async function loadMcpPackageMeta() {
     }
   } finally {
     mcpMetaLoading.value = false
+  }
+}
+
+function stubFromCap(c) {
+  return {
+    name: c.name,
+    type: c.type,
+    version: c.latest_version || c.version || ''
+  }
+}
+
+function openTrial() {
+  if (!cap.value) return
+  debugCap.value = stubFromCap(cap.value)
+}
+
+function openTrialAgent(u) {
+  debugCap.value = {
+    name: u.name,
+    type: u.type || 'agent',
+    version: u.version || ''
   }
 }
 
@@ -772,6 +826,11 @@ onMounted(() => {
           <span class="badge">{{ TYPE_LABELS[cap.type] }}</span>
           <span v-if="shelfName" class="badge badge-primary">{{ shelfName }}</span>
           <span v-if="isMcp" class="badge">{{ mcpTransport }}</span>
+          <span
+            v-if="isMcp && isPublished"
+            class="badge"
+            :class="mcpTrial.canOneClick ? 'badge-success' : 'badge-warning'"
+          >{{ mcpTrial.label }}</span>
           <span v-if="isMcp && mcpToolRows.length" class="badge badge-primary">{{ mcpToolRows.length }} 工具</span>
         </div>
         <h1 class="detail-title">
@@ -860,6 +919,29 @@ onMounted(() => {
               >查看全部工具</button>
             </div>
 
+            <div v-if="isMcp && dashboardConsume" class="guide-block">
+              <h3 class="guide-title">桌面工作台</h3>
+              <p class="muted" style="font-size: 13px">
+                本机无法直接拉起时，可连市场能力网关（Authorization: Bearer 员工 SSO）。
+              </p>
+              <table class="table">
+                <tbody>
+                  <tr>
+                    <td>模式</td>
+                    <td><code>{{ dashboardConsume.mode }}</code></td>
+                  </tr>
+                  <tr>
+                    <td>SSE</td>
+                    <td><code>{{ dashboardConsume.sse_url }}</code></td>
+                  </tr>
+                  <tr>
+                    <td>Streamable HTTP</td>
+                    <td><code>{{ dashboardConsume.stream_url }}</code></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
             <div v-if="isMcp" class="guide-block">
               <h3 class="guide-title">配置参数</h3>
               <table class="table">
@@ -904,22 +986,54 @@ onMounted(() => {
               </table>
             </div>
 
-            <div v-if="isMcp && mcpClientConfigJson" class="guide-block">
-              <div class="flex-between flex-wrap" style="align-items: center; gap: 8px">
-                <h3 class="guide-title" style="margin: 0">快速配置（MCP 客户端）</h3>
+            <div v-if="isMcp && isPublished" class="guide-block trial-block">
+              <h3 class="guide-title">试用连接器</h3>
+              <p class="guide-lead">{{ mcpTrial.hint }}</p>
+              <p v-if="usedByAgents.length" class="muted" style="font-size: 13px; margin: 0 0 10px">
+                单独调用工具只验证「手」能抓。要看到问答效果，请试用依赖它的助手。
+              </p>
+              <div class="trial-actions">
+                <button
+                  v-if="usedByAgents.length && authState.token"
+                  class="btn btn-primary"
+                  type="button"
+                  @click="openTrialAgent(usedByAgents[0])"
+                >试用助手 · {{ usedByAgents[0].name }}</button>
+                <button
+                  v-if="canTrialMcp"
+                  class="btn"
+                  :class="usedByAgents.length ? '' : 'btn-primary'"
+                  type="button"
+                  @click="openTrial"
+                >试用连接器</button>
+                <router-link
+                  v-else-if="!authState.token"
+                  :to="{ path: '/login', query: { redirect: route.fullPath } }"
+                  class="btn btn-primary"
+                >登录后试用</router-link>
+                <span v-else-if="!joined" class="muted" style="font-size: 13px">先「加入」授权，再试用。</span>
+              </div>
+            </div>
+
+            <details v-if="isMcp && mcpClientConfigJson" class="guide-block mcp-advanced">
+              <summary class="mcp-advanced-summary">高级 · MCP 客户端 JSON</summary>
+              <p class="muted" style="font-size: 12px; margin: 8px 0 10px">
+                给调试或兼容客户端粘贴 <code>mcpServers</code>。员工日常请加入后随助手安装，不要把这段当主路径。
+              </p>
+              <div class="flex" style="gap: 8px; margin-bottom: 8px">
                 <button class="btn btn-sm" type="button" @click="copyMcpClientConfig">复制 JSON</button>
               </div>
-              <p class="muted" style="font-size: 12px; margin: 8px 0 10px">
-                可粘贴到兼容 MCP 客户端的 <code>mcpServers</code>；生产仍推荐先「加入」再 <code>cap install</code>。
-              </p>
               <pre class="mcp-config-pre">{{ mcpClientConfigJson }}</pre>
               <p v-if="mcpConfigNotice" class="muted" style="font-size: 12px; margin: 8px 0 0">{{ mcpConfigNotice }}</p>
-            </div>
+            </details>
 
             <div v-if="exampleList.length" class="guide-block">
               <h3 class="guide-title">示例用法</h3>
               <ul class="guide-list">
-                <li v-for="(s, i) in exampleList" :key="'ex-'+i"><code>{{ s }}</code></li>
+                <li v-for="(s, i) in exampleList" :key="'ex-'+i">
+                  <span v-if="['skill', 'mcp', 'agent', 'plugin'].includes(cap.type)">{{ s }}</span>
+                  <code v-else>{{ s }}</code>
+                </li>
               </ul>
             </div>
             <div v-if="validationReport" class="guide-block">
@@ -949,8 +1063,14 @@ onMounted(() => {
               <div class="guide-body">
                 <p class="guide-lead">{{ TYPE_LABELS[cap.type] }}（{{ shelfName }}）：{{ kindHint.what }}</p>
                 <ul class="guide-list">
-                  <li><strong>装到哪</strong>：{{ kindHint.where }}</li>
-                  <li><strong>谁执行</strong>：{{ kindHint.whoRuns }}</li>
+                  <li>
+                    <strong>{{ ['skill', 'mcp', 'agent', 'plugin'].includes(cap.type) ? '怎么用' : '装到哪' }}</strong>
+                    ：{{ kindHint.where }}
+                  </li>
+                  <li>
+                    <strong>{{ ['skill', 'mcp', 'agent', 'plugin'].includes(cap.type) ? '谁来答' : '谁执行' }}</strong>
+                    ：{{ kindHint.whoRuns }}
+                  </li>
                   <li v-if="PACKAGE_HINTS[cap.type]"><strong>包规范</strong>：{{ PACKAGE_HINTS[cap.type] }}</li>
                 </ul>
                 <div v-if="isAgent" class="guide-note">
@@ -964,7 +1084,7 @@ onMounted(() => {
             <div class="guide-block">
               <h3 class="guide-title">怎么用 · 消费矩阵</h3>
               <div class="guide-body">
-                <p class="guide-lead muted">市场是控制面目录；试用不是门户主路径。</p>
+                <p class="guide-lead muted">市场是控制面目录。日常在零号员工问答里用；试用只验证连接，不是生产主路径。</p>
                 <table class="table">
                   <thead><tr><th>方式</th><th>接口</th><th>适用</th></tr></thead>
                   <tbody>
@@ -986,9 +1106,9 @@ onMounted(() => {
           </div>
 
           <div v-if="usedBy.length" class="panel">
-            <h3>被以下能力使用</h3>
+            <h3>{{ usedByAgents.length && usedByAgents.length === usedBy.length ? '被以下助手使用' : '被以下能力使用' }}</h3>
             <div class="muted" style="font-size: 13px">
-              来自 Agent 内嵌声明或 Plugin 组件引用。
+              {{ isMcp ? '挂到这些助手后，对话里才会动手。' : '来自助手内嵌声明或安装包组件引用。' }}
               <router-link :to="`/?${cap.type}=${encodeURIComponent(cap.name)}&shelf=all`">在目录中筛选</router-link>
             </div>
             <table class="table mt-16">
@@ -998,7 +1118,15 @@ onMounted(() => {
                   <td>{{ TYPE_LABELS[u.type] || u.type }}</td>
                   <td>{{ u.name }}</td>
                   <td>v{{ u.version }}</td>
-                  <td><router-link v-if="u.capability_id" :to="`/capabilities/${u.capability_id}`">查看</router-link></td>
+                  <td class="used-by-actions">
+                    <router-link v-if="u.capability_id" :to="`/capabilities/${u.capability_id}`">查看</router-link>
+                    <button
+                      v-if="u.type === 'agent' && authState.token && isPublished"
+                      class="btn btn-sm"
+                      type="button"
+                      @click="openTrialAgent(u)"
+                    >试用助手</button>
+                  </td>
                 </tr>
               </tbody>
             </table>
@@ -1383,16 +1511,39 @@ onMounted(() => {
                 }}
               </button>
               <button
+                v-if="usedByAgents.length && authState.token"
+                class="btn btn-block"
+                :class="myIds.has(cap.id) ? 'btn-primary' : ''"
+                type="button"
+                @click="openTrialAgent(usedByAgents[0])"
+              >试用助手 · {{ usedByAgents[0].name }}</button>
+              <button
+                v-if="canTrialCurrent"
+                class="btn btn-block"
+                :class="usedByAgents.length || !myIds.has(cap.id) ? '' : 'btn-primary'"
+                type="button"
+                @click="openTrial"
+              >{{ isAgent ? '试用助手' : '试用连接器' }}</button>
+              <router-link
+                v-else-if="(isMcp || isAgent) && !authState.token"
+                :to="{ path: '/login', query: { redirect: route.fullPath } }"
+                class="btn btn-block btn-primary"
+              >登录后试用</router-link>
+              <button
                 class="btn btn-block"
                 type="button"
                 @click="downloadArtifact"
               >下载 zip{{ packageSizeLabel ? ` · ${packageSizeLabel}` : '' }}</button>
               <button v-if="authState.token && cap.status === 'published'" class="btn btn-block" type="button" @click="subscribe">订阅更新</button>
-              <router-link v-if="authState.token" to="/my" class="btn btn-block">去我的能力（云端调试）</router-link>
+              <router-link v-if="authState.token" to="/my" class="btn btn-block">去我的能力</router-link>
               <span v-if="myNotice" class="muted" style="font-size: 12px; display: block; margin-top: 8px">{{ myNotice }}</span>
             </div>
             <p class="aside-hint muted">
-              <template v-if="canLocalInstall">
+              <template v-if="isMcp">
+                {{ mcpTrial.hint }}
+                {{ JOIN_VS_INSTALL_HINT }}
+              </template>
+              <template v-else-if="canLocalInstall">
                 {{ JOIN_VS_INSTALL_HINT }}
               </template>
               <template v-else>
@@ -1438,6 +1589,7 @@ onMounted(() => {
             <div v-if="cap.category"><dt>分类</dt><dd>{{ cap.category }}</dd></div>
             <div><dt>作者</dt><dd>{{ cap.author_name || '-' }}</dd></div>
             <div v-if="isMcp"><dt>传输</dt><dd>{{ mcpTransport }}</dd></div>
+            <div v-if="isMcp && isPublished"><dt>试用</dt><dd>{{ mcpTrial.label }}</dd></div>
             <div v-if="isMcp && mcpToolRows.length"><dt>工具</dt><dd>{{ mcpToolRows.length }} 个</dd></div>
             <div v-if="isMcp && mcpEnvRows.length"><dt>环境变量</dt><dd>{{ mcpEnvRows.length }} 项</dd></div>
             <div><dt>更新</dt><dd>{{ formatDate(cap.updated_at) }}</dd></div>
@@ -1464,6 +1616,12 @@ onMounted(() => {
         </div>
       </aside>
     </div>
+    <DebugCapabilityModal
+      :show="!!debugCap"
+      :cap="debugCap"
+      :title="debugCap?.type === 'agent' ? '试用助手' : (debugCap?.type === 'mcp' ? '试用连接器' : '云端试用')"
+      @close="debugCap = null"
+    />
   </div>
 </template>
 
@@ -1637,6 +1795,14 @@ onMounted(() => {
   font-size: 12px; line-height: 1.55; overflow: auto; max-height: 320px;
   color: var(--text); white-space: pre;
 }
+.trial-block .guide-lead { margin-bottom: 10px; }
+.trial-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.mcp-advanced { border: 1px dashed var(--border); border-radius: 12px; padding: 12px 14px; }
+.mcp-advanced-summary {
+  cursor: pointer; font-size: 13px; font-weight: 600; color: var(--muted);
+}
+.mcp-advanced-summary:hover { color: var(--text); }
+.used-by-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field label { font-size: 13px; color: var(--muted); }
 .package-tree { list-style: none; margin: 0; padding: 0; }

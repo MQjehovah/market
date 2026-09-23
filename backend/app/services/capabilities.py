@@ -232,6 +232,9 @@ def to_capability_out(
         data["artifacts"] = [ArtifactOut.model_validate(a) for a in cap.artifacts]
     if versions is not None:
         data["latest"] = is_latest(cap, versions)
+    from app.services.dashboard_consume import attach_consumer_fields
+
+    attach_consumer_fields(data, cap)
     return CapabilityOut(**data)
 
 

@@ -200,6 +200,19 @@ def install_agent(
             record["installed"] = True
             print(f"  [ok] skill:{dep_name} -> skills/{dep_name}/")
 
+        elif dep_type in ("rule", "command", "hook"):
+            folder = {"rule": "rules", "command": "commands", "hook": "hooks"}[dep_type]
+            skip = {"rule": "rule.json", "command": "command.json", "hook": "hook.json"}[dep_type]
+            dest = agent_dir / folder / dep_name
+            for rel, content in dep_files.items():
+                if rel == skip:
+                    continue
+                out = dest / rel
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_bytes(content)
+            record["installed"] = True
+            print(f"  [ok] {dep_type}:{dep_name} -> {folder}/{dep_name}/")
+
         elif dep_type == "mcp":
             conn_file = dep_files.get("connection.json")
             if conn_file is not None:
@@ -350,6 +363,65 @@ def install_mcp(
     return manifest
 
 
+def _install_dir_kind(
+    client: MarketClient,
+    name: str,
+    *,
+    cap_type: str,
+    subdir: str,
+    version: str = "",
+    target: str | Path,
+    dry_run: bool = False,
+    skip_meta: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """把 zip 展开到 target/<subdir>/<name>/。"""
+    target_path = Path(target).resolve()
+    dest = target_path / subdir / name
+    if dry_run:
+        print(f"[dry-run] 将下载 {cap_type}「{name}」v{version or 'latest'} 到 {dest}")
+        return {"name": name, "type": cap_type, "dry_run": True}
+
+    content, headers = client.download(name, version, cap_type=cap_type)
+    files = extract_zip(content)
+    dest.mkdir(parents=True, exist_ok=True)
+    for rel, data in files.items():
+        if rel in skip_meta:
+            continue
+        out = dest / rel
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(data)
+    manifest = {
+        "name": name,
+        "type": cap_type,
+        "version": headers.get("x-capability-version") or version or "latest",
+        "installed_at": datetime.now(timezone.utc).isoformat(),
+        "path": str(dest),
+    }
+    (dest / "installed.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    print(f"[install] {cap_type}:{name} -> {dest}")
+    return manifest
+
+
+def install_rule(client, name, *, version="", target, dry_run=False):
+    return _install_dir_kind(
+        client, name, cap_type="rule", subdir="rules", version=version, target=target, dry_run=dry_run, skip_meta=("rule.json",)
+    )
+
+
+def install_command(client, name, *, version="", target, dry_run=False):
+    return _install_dir_kind(
+        client, name, cap_type="command", subdir="commands", version=version, target=target, dry_run=dry_run, skip_meta=("command.json",)
+    )
+
+
+def install_hook(client, name, *, version="", target, dry_run=False):
+    return _install_dir_kind(
+        client, name, cap_type="hook", subdir="hooks", version=version, target=target, dry_run=dry_run, skip_meta=("hook.json",)
+    )
+
+
 def install_plugin(
     client: MarketClient,
     name: str,
@@ -389,6 +461,18 @@ def install_plugin(
                 skill_name = path[len("skills/") : -len("/SKILL.md")]
                 if skill_name and "/" not in skill_name:
                     components.append({"type": "skill", "name": skill_name})
+            if path.startswith("rules/") and path.lower().endswith((".mdc", ".md", ".markdown")):
+                rest = path[len("rules/") :]
+                if rest and "/" not in rest:
+                    stem = rest.rsplit(".", 1)[0]
+                    components.append({"type": "rule", "name": stem})
+            if path.startswith("commands/") and path.lower().endswith((".md", ".mdc", ".markdown", ".txt")):
+                rest = path[len("commands/") :]
+                if rest and "/" not in rest:
+                    stem = rest.rsplit(".", 1)[0]
+                    components.append({"type": "command", "name": stem})
+        if "hooks/hooks.json" in files:
+            components.append({"type": "hook", "name": f"{name}-hooks"})
         mcp_cfg = files.get("mcp.json")
         if mcp_cfg:
             try:
@@ -416,6 +500,12 @@ def install_plugin(
                 child = install_mcp(
                     client, cname, target=target_path, dry_run=False
                 )
+            elif ctype == "rule":
+                child = install_rule(client, cname, target=target_path, dry_run=False)
+            elif ctype == "command":
+                child = install_command(client, cname, target=target_path, dry_run=False)
+            elif ctype == "hook":
+                child = install_hook(client, cname, target=target_path, dry_run=False)
             else:
                 continue
             installed_children.append(child)
@@ -449,7 +539,7 @@ def install_capability(
     target: str | Path,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    """按类型安装能力：agent / skill / mcp / plugin。"""
+    """按类型安装能力：agent / skill / mcp / plugin / rule / command / hook。"""
     t = (cap_type or "agent").lower()
     if t == "agent":
         return install_agent(client, name, version=version, target=target, dry_run=dry_run)
@@ -459,4 +549,10 @@ def install_capability(
         return install_mcp(client, name, version=version, target=target, dry_run=dry_run)
     if t == "plugin":
         return install_plugin(client, name, version=version, target=target, dry_run=dry_run)
+    if t == "rule":
+        return install_rule(client, name, version=version, target=target, dry_run=dry_run)
+    if t == "command":
+        return install_command(client, name, version=version, target=target, dry_run=dry_run)
+    if t == "hook":
+        return install_hook(client, name, version=version, target=target, dry_run=dry_run)
     raise ValueError(f"不支持的安装类型：{cap_type}")

@@ -197,6 +197,9 @@ async def _stop_uvicorn(server, task):
             await task
         except (asyncio.CancelledError, Exception):  # noqa: BLE001
             pass
+    from app.main import gateway_registry
+
+    await gateway_registry.shutdown()
 
 
 @pytest.mark.asyncio
@@ -315,3 +318,90 @@ async def test_mcp_bridge_gateway_transport(
     )
     assert r.status_code == 200, r.text
     assert r.json()["result"] == "13"
+
+
+@pytest.mark.asyncio
+async def test_capability_gateway_requires_bearer_and_runtime(
+    client, publisher_headers, admin_headers, user_headers
+):
+    from test_mcp_debug import _mcp_zip
+    from app.services.mcp_gateway import authorize_capability_gateway
+
+    name = "cap-gw-auth"
+    await _publish_capability(
+        client, publisher_headers, admin_headers, name, "mcp", _mcp_zip(name)
+    )
+
+    def scope(headers: dict[str, str] | None = None):
+        raw = []
+        for k, v in (headers or {}).items():
+            raw.append((k.lower().encode("latin-1"), v.encode("latin-1")))
+        return {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "method": "GET",
+            "scheme": "http",
+            "path": f"/api/mcp-gateway/cap/{name}/sse",
+            "raw_path": f"/api/mcp-gateway/cap/{name}/sse".encode(),
+            "root_path": "",
+            "query_string": b"",
+            "headers": raw,
+            "client": ("127.0.0.1", 1),
+            "server": ("test", 80),
+        }
+
+    cfg, status, body = await authorize_capability_gateway(scope(), name)
+    assert status == 401
+    assert cfg is None
+    assert "Bearer" in (body or {}).get("detail", "")
+
+    cfg, status, _body = await authorize_capability_gateway(scope(user_headers), name)
+    assert status == 403
+    assert cfg is None
+
+    cfg, status, _body = await authorize_capability_gateway(scope(admin_headers), name)
+    assert status is None
+    assert cfg is not None
+    assert cfg.get("package_files")
+
+    cfg, status, _body = await authorize_capability_gateway(scope(admin_headers), "不存在的mcp")
+    assert status == 404
+
+
+@pytest.mark.asyncio
+async def test_capability_gateway_upstream_from_published_package(
+    client, publisher_headers, admin_headers
+):
+    """能力级网关与 runtime 共用 connection.json + implementation 解包，不经 uvicorn。"""
+    from test_mcp_debug import _mcp_zip
+    from app.services.mcp_gateway import authorize_capability_gateway, connect_upstream
+
+    name = "cap-gw-up"
+    await _publish_capability(
+        client, publisher_headers, admin_headers, name, "mcp", _mcp_zip(name)
+    )
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "method": "GET",
+        "scheme": "http",
+        "path": f"/api/mcp-gateway/cap/{name}/sse",
+        "raw_path": f"/api/mcp-gateway/cap/{name}/sse".encode(),
+        "root_path": "",
+        "query_string": b"",
+        "headers": [
+            (b"authorization", admin_headers["Authorization"].encode("latin-1"))
+        ],
+        "client": ("127.0.0.1", 1),
+        "server": ("test", 80),
+    }
+    cfg, status, _body = await authorize_capability_gateway(scope, name)
+    assert status is None and cfg is not None
+    async with connect_upstream(cfg) as session:
+        tools = await session.list_tools()
+        result = await session.call_tool("echo", {"text": "desk"})
+    assert "echo" in {t.name for t in tools.tools}
+    assert "echo:desk" in (result.content[0].text if result.content else "")
+
+    r = await asyncio.wait_for(client.get(f"/api/mcp-gateway/cap/{name}/sse"), 8)
+    assert r.status_code == 401

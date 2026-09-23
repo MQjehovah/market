@@ -171,7 +171,7 @@ async function create() {
 
       <template v-if="step === 'intent'">
         <div class="muted" style="font-size: 13px; line-height: 1.5; margin-bottom: 12px">
-          本站负责能力沉淀与分发；执行在零号员工 / IDE。
+          本站是零号员工问答助手的控制面；技能是说明书，连接器是手。
           想一次装齐场景能力？优先选「发安装包」。
         </div>
         <div class="intent-grid">

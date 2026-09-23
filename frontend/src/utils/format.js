@@ -5,7 +5,10 @@ export const TYPE_LABELS = {
   skill: '技能',
   mcp: '连接器',
   workflow: '能力编排',
-  plugin: '安装包'
+  plugin: '安装包',
+  rule: '规则',
+  command: '命令',
+  hook: 'Hooks'
 }
 
 /** 三货架：API key 不变，中文对用户可读 */
@@ -14,8 +17,8 @@ export const SHELVES = {
     key: 'brick',
     label: '组件',
     short: '组件',
-    description: '技能 / 连接器 / 编排函数。发布与高级筛选用；逛店请用「技能」或「更多」。',
-    kinds: ['skill', 'mcp', 'tool']
+    description: '技能 / 连接器 / 规则 / 命令 / Hooks / 编排函数。发布与高级筛选用；逛店请用「技能」或「更多」。',
+    kinds: ['skill', 'mcp', 'tool', 'rule', 'command', 'hook']
   },
   recipe: {
     key: 'recipe',
@@ -28,7 +31,7 @@ export const SHELVES = {
     key: 'install',
     label: '安装包',
     short: '安装包',
-    description: '一次分发技能 + 连接器（可选助手）。装到零号员工 / IDE，不是钉钉/飞书通道插件。',
+    description: '一次分发技能 + 连接器（可选助手）。装到零号员工后，在问答里生效。',
     kinds: ['plugin']
   }
 }
@@ -37,7 +40,7 @@ export const SHELVES = {
 export const DEFAULT_BROWSE_KINDS = ['skill', 'plugin', 'agent']
 
 /** 「更多」里的高级类型 */
-export const MORE_BROWSE_KINDS = ['mcp', 'workflow', 'tool']
+export const MORE_BROWSE_KINDS = ['mcp', 'workflow', 'tool', 'rule', 'command', 'hook']
 export const KIND_SHELF = Object.fromEntries(
   Object.values(SHELVES).flatMap((s) => s.kinds.map((k) => [k, s.key]))
 )
@@ -45,15 +48,15 @@ export const KIND_SHELF = Object.fromEntries(
 export const KIND_HINTS = {
   skill: {
     shelf: 'brick',
-    what: 'SOP 说明书（SKILL.md）；自己不执行，由 Agent 的 skill 元工具读入上下文',
-    where: 'cap install --type skill → config/.../skills/',
-    whoRuns: '零号员工 / IDE（不单独「干活」）'
+    what: '问答说明书（SKILL.md）。自己不执行，助手按需读入后按步骤回答。',
+    where: '随助手装到零号员工；在对话里提问即可触发',
+    whoRuns: '问答助手（零号员工）'
   },
   mcp: {
     shelf: 'brick',
-    what: '连接器；真正可调的是发现出的 tools（≠ 市场 tool kind，≠ 宿主 src/tools）',
-    where: 'cap install --type mcp → 合并进 mcp_servers.json（常先 enabled:false）',
-    whoRuns: '零号员工 MCPManager / IDE / 市场网关'
+    what: '连接器：给助手接外部系统。真正可调的是连上后发现的工具，单独下载不是一项服务。',
+    where: '随助手装到零号员工；桌面可连 /api/mcp-gateway/cap/{name}/sse（SSO Bearer）',
+    whoRuns: '问答助手通过连接器调用外部系统'
   },
   tool: {
     shelf: 'brick',
@@ -61,11 +64,29 @@ export const KIND_HINTS = {
     where: '仅 POST /api/runtime/tools/{name}/invoke；不写 src/tools',
     whoRuns: '市场 runtime 沙箱 / Workflow 节点'
   },
+  rule: {
+    shelf: 'brick',
+    what: '持久指导（RULE.mdc）；alwaysApply / globs 控制何时生效',
+    where: 'cap install --type rule → config/rules/<name>/',
+    whoRuns: 'IDE / Agent 读入上下文'
+  },
+  command: {
+    shelf: 'brick',
+    what: '可复用提示（COMMAND.md）；对话里用 / 唤起',
+    where: 'cap install --type command → config/commands/<name>/',
+    whoRuns: 'IDE / Agent 斜杠命令'
+  },
+  hook: {
+    shelf: 'brick',
+    what: '生命周期脚本（hooks.json）；观察、拦截或跟进 Agent 事件',
+    where: 'cap install --type hook → config/hooks/<name>/',
+    whoRuns: 'IDE / 宿主 hook 运行时'
+  },
   agent: {
     shelf: 'recipe',
     what: '人设 + 依赖容器；日常靠 skill 说明书 + MCP 发现的 tools',
-    where: 'cap install → config/agents/<name>/',
-    whoRuns: '零号员工 Agent.initialize / A2A；试用走云端 runtime'
+    where: 'cap install 后在零号员工打开该助手并提问',
+    whoRuns: '零号员工问答 / A2A；详情页可云端试用'
   },
   workflow: {
     shelf: 'recipe',
@@ -75,14 +96,14 @@ export const KIND_HINTS = {
   },
   plugin: {
     shelf: 'install',
-    what: '分发袋（skills + mcp + 可选 agents/tools）；上传后拆子能力',
-    where: 'cap install --type plugin → config/plugins/<name>/',
-    whoRuns: '安装后由 IDE 或零号员工执行子组件'
+    what: '分发袋（skills + mcp + rules/commands/hooks + 可选 agents/tools）；上传后拆子能力',
+    where: 'cap install --type plugin 后拆到零号员工，对话里按子能力生效',
+    whoRuns: '问答助手（零号员工）执行子组件'
   }
 }
 
 /** 可本地 cap install 的 kind（与 taxonomy.local_install_kinds 对齐） */
-export const LOCAL_INSTALL_KINDS = ['agent', 'skill', 'mcp', 'plugin']
+export const LOCAL_INSTALL_KINDS = ['agent', 'skill', 'mcp', 'plugin', 'rule', 'command', 'hook']
 
 /** 按 kind 生成真实消费命令；workflow/tool 不假装 cap install */
 export function installCommandFor(cap) {
@@ -98,6 +119,12 @@ export function installCommandFor(cap) {
       return `cap install ${name} --type mcp`
     case 'plugin':
       return `cap install ${name} --type plugin`
+    case 'rule':
+      return `cap install ${name} --type rule`
+    case 'command':
+      return `cap install ${name} --type command`
+    case 'hook':
+      return `cap install ${name} --type hook`
     case 'tool':
       return `POST /api/runtime/tools/${cap.name}/invoke`
     case 'workflow':
@@ -114,20 +141,26 @@ export function isLocalInstallKind(kind) {
 /** 双编排用词：避免都叫「工作流」 */
 /** 适用场景（详情页默认文案；可由 input_schema.scenarios 覆盖） */
 export const SCENARIO_HINTS = {
-  skill: ['把团队 SOP 沉淀为可复用说明书', '在 Agent 对话中按需激活特定流程', '跨项目共享同一套操作规范'],
-  mcp: ['连接内部系统 / 数据库 / 第三方 API', '给 Agent 或 IDE 提供可调 tools', '统一管理连接配置与密钥占位'],
+  skill: ['把团队 SOP 沉淀为可复用说明书', '在问答助手对话中按需激活特定流程', '跨项目共享同一套操作规范'],
+  mcp: ['给问答助手接内部系统 / 工单 / 知识库', '连上后助手才能查、改真实数据', '密钥用占位，启用后才在对话里动手'],
   tool: ['作为能力编排（Workflow）节点执行', '云端沙箱调试函数逻辑', '被 Agent 配方间接引用'],
+  rule: ['把团队编码规范沉淀为可复用规则', '按 globs 只对特定文件生效', 'alwaysApply 作为全局约束'],
+  command: ['把高频操作做成 / 斜杠命令', '跨项目复用同一套操作提示', '装进助手或安装包后一键唤起'],
+  hook: ['在 Agent 生命周期跑校验或审计脚本', '拦截危险 shell / MCP 调用', '会话开始时注入环境'],
   agent: ['面向业务场景的助手人设与依赖锁定', '带 TEAM.md 时做多角色协作流水线', '通过 A2A / 市场 MCP 被其他 Agent 调用'],
   workflow: ['把已上架能力串成固定 DAG', '云端批处理 / 自动化流水线', '与 TEAM.md 团队流水线分工并行'],
-  plugin: ['一次分发 skills + mcp（+ 可选 agents）', '给零号员工 / IDE 做场景安装包', '把相关能力打成可一键安装的合集']
+  plugin: ['一次分发技能 + 连接器（+ 可选助手）', '给零号员工做场景安装包，装完即可问答', '把相关能力打成可一键安装的合集']
 }
 
 /** 示例用法（命令或提示级，非对话内唤起） */
 export const EXAMPLE_PROMPTS = {
-  skill: ['先加载该 skill，再按 SKILL.md 步骤处理当前任务', 'cap install <name> --type skill 后在 Agent 中激活'],
-  mcp: ['cap install <name> --type mcp 后启用对应 mcp server', '在 MCP 客户端配置中引用本连接器'],
+  skill: ['帮我按该技能的流程处理这件事', '先加入并装到助手，再在对话里描述任务'],
+  mcp: ['加入后随助手安装；在零号员工启用连接器，再问「帮我查一条示例数据」', '详情页可云端试用：连接并调用只读工具'],
   tool: ['在 Workflow 中添加 tool 节点并选择本能力', 'POST /api/runtime/tools/{name}/invoke 调试'],
-  agent: ['cap install <name> 后在零号员工中打开该 Agent', '用自然语言描述任务，由该 Agent 按人设执行'],
+  rule: ['cap install <name> --type rule 后由 Agent 按 alwaysApply/globs 加载', '作为安装包组件随 plugin 分发'],
+  command: ['cap install <name> --type command 后在对话中输入 /<name>', '把固定操作步骤写成 COMMAND.md'],
+  hook: ['cap install <name> --type hook 后由宿主按事件触发 scripts', '在 hooks.json 声明 matcher 与 fail 策略'],
+  agent: ['打开该助手，用自然语言描述任务', 'cap install 后在零号员工中提问'],
   workflow: ['在市场运行本 Workflow 并查看节点日志', 'marketplace_run_workflow 通过 MCP 桥触发'],
   plugin: ['加入我的能力后同步到本地引擎', 'cap install <plugin> --type plugin 拆出子能力']
 }
@@ -154,7 +187,7 @@ export const CONSUME_WAYS = [
   { id: 'download', label: '下载制品', api: 'GET /api/capabilities/{name}/download', who: 'cap / 人工' },
   { id: 'install', label: '本地组装', api: 'cap install', who: '零号员工' },
   { id: 'local', label: '本地运行', api: 'cap run --mode local', who: '零号员工（市场不执行）' },
-  { id: 'trial', label: '云端试用', api: 'POST /api/runtime/*', who: '开发者调试' },
+  { id: 'trial', label: '云端试用', api: 'POST /api/runtime/*', who: '详情页 / 我的能力（问答验证）' },
   { id: 'a2a', label: 'A2A 互调', api: 'Agent Card + tasks/send', who: 'Agent 之间' },
   { id: 'mcp_bridge', label: '市场 MCP 桥', api: 'marketplace_* tools', who: 'IDE / Agent 客户端' },
   { id: 'gateway', label: 'MCP HTTP 网关', api: '/api/mcp-gateway/{name}', who: 'Dify 等' },
@@ -169,6 +202,7 @@ export const REVIEW_CHECKLIST = [
   'Tool 包通过 AST 安全审计（禁危险导入/调用）',
   '依赖的积木存在且版本可解析',
   'Plugin 子组件命名不冲突；component 默认不单独上架浏览',
+  'Rule/Command/Hook 包结构合法（RULE.mdc / COMMAND.md / hooks.json）',
   '可见性与许可证符合组织策略（private/team/internal/public）'
 ]
 
@@ -204,6 +238,9 @@ export const TYPE_CATEGORIES = {
   tool: ['文件操作', '数据查询', 'API调用', '代码分析', '文档处理', '消息通知', '系统管理', '安全审计'],
   skill: ['开发流程', '测试', '文档', '数据分析', '通用效率', '沟通协作'],
   mcp: ['数据库连接', 'DevOps工具', '项目管理', '消息通知', '数据分析', '内部系统'],
+  rule: ['编码规范', '安全合规', '文档风格', '测试约定', '通用约束'],
+  command: ['开发流程', '发布部署', '代码审查', '文档', '通用效率'],
+  hook: ['安全拦截', '格式化', '审计', '会话初始化', '工具门禁'],
   workflow: ['自动化', '数据分析', '开发流程', '通用效率'],
   plugin: ['工单场景', '业务分析', '开发助手', '运维管理', '通用场景']
 }
@@ -213,8 +250,11 @@ export const PACKAGE_HINTS = {
   tool: 'tool.json + schema.json + implementation/tool.py（供能力编排节点；非宿主 src/tools）',
   skill: 'skill.json + SKILL.md',
   mcp: 'mcp.json + connection.json + tools.json + security.json（可含 implementation/*.py）',
+  rule: 'rule.json + RULE.mdc（frontmatter：alwaysApply / globs）',
+  command: 'command.json + COMMAND.md',
+  hook: 'hook.json + hooks.json（可选 scripts/）',
   workflow: 'workflow.json（nodes/edges 引用已上架能力；与 TEAM.md 平行，不进 Agent 目录）',
-  plugin: 'plugin.json（或兼容插件清单）+ skills/ + mcp.json（拆包子能力；浏览默认隐藏子项）'
+  plugin: 'plugin.json 或 .cursor-plugin/plugin.json + skills/ rules/ commands/ hooks/ mcp.json（拆包子能力；浏览默认隐藏子项）'
 }
 
 /** 角色展示 */
@@ -233,7 +273,34 @@ export const INSTALL_POLICY_LABELS = {
 
 /** 加入≠安装：统一文案，避免 Browse / My / Detail 各写一套 */
 export const JOIN_VS_INSTALL_HINT =
-  '「加入」只完成授权收录（加入≠安装）；生产请用 cap install 装到零号员工 / IDE。'
+  '「加入」只完成授权（加入≠安装）。生产请用 cap install 装到零号员工里的助手，对话才会用到。'
+
+/** 连接器线上试用方式：演示免密 / 平台网关 / 需自备凭证 */
+export function mcpTrialMode({ transport = 'stdio', envKeys = [] } = {}) {
+  const needsCreds = (envKeys || []).length > 0
+  if (transport === 'gateway') {
+    return {
+      id: 'gateway',
+      label: '网关（平台密钥）',
+      canOneClick: true,
+      hint: '走市场 MCP 网关，试用由平台侧连接，无需你提供密钥。'
+    }
+  }
+  if (!needsCreds) {
+    return {
+      id: 'demo',
+      label: '演示（免密）',
+      canOneClick: true,
+      hint: '无需密钥即可在本页连接并发现工具。'
+    }
+  }
+  return {
+    id: 'credentials',
+    label: '需自备凭证',
+    canOneClick: false,
+    hint: '连接需要密钥占位。员工请通过已配置的助手使用；作者/管理员可试用（密钥取自市场服务器环境变量）。'
+  }
+}
 
 export const TYPE_LETTER = {
   agent: 'A',
@@ -241,7 +308,10 @@ export const TYPE_LETTER = {
   skill: 'S',
   mcp: 'M',
   workflow: 'W',
-  plugin: 'P'
+  plugin: 'P',
+  rule: 'R',
+  command: 'C',
+  hook: 'H'
 }
 
 export const TYPE_COLORS = {
@@ -250,7 +320,10 @@ export const TYPE_COLORS = {
   skill: '#f5a524',
   mcp: '#7c3aed',
   workflow: '#0ea5e9',
-  plugin: '#e5484d'
+  plugin: '#e5484d',
+  rule: '#0f766e',
+  command: '#c2410c',
+  hook: '#4f46e5'
 }
 
 /** 发布三意图：小白默认 Path B = 发安装包优先 */
@@ -258,7 +331,7 @@ export const PUBLISH_INTENTS = [
   {
     key: 'install',
     label: '发安装包',
-    blurb: '推荐：一次装齐技能+连接器（可选助手）。审核通过后 cap install 即可。',
+    blurb: '推荐：一次装齐技能+连接器（可选助手）。审核通过后装到零号员工即可问答。',
     defaultType: 'plugin'
   },
   {
@@ -270,7 +343,7 @@ export const PUBLISH_INTENTS = [
   {
     key: 'brick',
     label: '发组件',
-    blurb: '技能 / 连接器 / 编排函数。可网页在线编辑；可复用零件，给助手与安装包引用。',
+    blurb: '技能 / 连接器 / 规则 / 命令 / Hooks / 编排函数。可网页在线编辑；可复用零件，给助手与安装包引用。',
     defaultType: 'skill'
   }
 ]
@@ -309,7 +382,7 @@ export function ownerProgressIndex(cap, { joined = false } = {}) {
 }
 
 /** 支持网页在线编辑的类型（保存可生成/更新能力包） */
-export const ONLINE_EDITABLE_KINDS = ['skill', 'mcp', 'tool', 'agent', 'workflow']
+export const ONLINE_EDITABLE_KINDS = ['skill', 'mcp', 'tool', 'agent', 'workflow', 'rule', 'command', 'hook']
 
 /** 非 zip 主路径的 kind（内容在编辑器/定义里） */
 export const ZIP_OPTIONAL_KINDS = ['workflow']
@@ -337,6 +410,12 @@ export function editRouteFor(cap) {
       return `/tools/${name}/edit`
     case 'agent':
       return `/agents/${name}/edit`
+    case 'rule':
+      return `/rules/${name}/edit`
+    case 'command':
+      return `/commands/${name}/edit`
+    case 'hook':
+      return `/hooks/${name}/edit`
     default:
       return null
   }

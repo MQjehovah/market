@@ -60,7 +60,7 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "q": {"type": "string", "description": "搜索关键词（名称/描述/标签）"},
-                "type": {"type": "string", "enum": ["agent", "tool", "skill", "mcp"], "description": "能力类型"},
+                "type": {"type": "string", "enum": ["agent", "tool", "skill", "mcp", "plugin", "rule", "command", "hook"], "description": "能力类型"},
                 "category": {"type": "string", "description": "分类"},
                 "limit": {"type": "integer", "description": "返回条数，默认 10", "default": 10},
             },

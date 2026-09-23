@@ -24,7 +24,7 @@ const isDiscoverActive = computed(
 )
 const isMyActive = computed(() => {
   if (route.path === '/my') return true
-  return ['/agents/', '/skills/', '/tools/', '/mcp/', '/workflows/'].some((p) =>
+  return ['/agents/', '/skills/', '/tools/', '/mcp/', '/workflows/', '/rules/', '/commands/', '/hooks/'].some((p) =>
     route.path.startsWith(p)
   )
 })

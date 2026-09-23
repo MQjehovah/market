@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
 import {
   TYPE_LABELS,
+  TYPE_COLORS,
   VISIBILITY_LABELS,
   JOIN_VS_INSTALL_HINT,
   INSTALL_POLICY_LABELS,
@@ -11,7 +12,9 @@ import {
   shelfLabel,
   ownedTodoBucket,
   editRouteFor,
-  canOnlineEdit
+  canOnlineEdit,
+  isLocalInstallKind,
+  installCommandFor
 } from '../utils/format'
 import StatusBadge from '../components/StatusBadge.vue'
 import CreateCapabilityModal from '../components/CreateCapabilityModal.vue'
@@ -20,7 +23,7 @@ import ConfirmActionModal from '../components/ConfirmActionModal.vue'
 
 const route = useRoute()
 const router = useRouter()
-/** mainTab: owned | added — 对齐截图「审核 / 已上架」双页签，对应「我创建的 / 已加入」 */
+/** mainTab: owned | added — 「我发布的 / 自定义」 */
 const mainTab = ref('owned')
 const caps = ref([])
 const loading = ref(false)
@@ -34,15 +37,9 @@ const filters = reactive({ q: '' })
 const page = ref(1)
 const pageSize = ref(20)
 const confirmAction = ref(null)
+const copiedId = ref('')
 
-const TYPE_COLORS = {
-  plugin: '#2f6bff',
-  agent: '#12b76a',
-  workflow: '#7a5cff',
-  skill: '#f5a524',
-  mcp: '#0ea5e9',
-  tool: '#64748b'
-}
+const CUSTOMIZE_TYPES = ['plugin', 'skill', 'mcp', 'rule', 'command', 'hook', 'agent']
 
 const scopedCaps = computed(() => {
   if (mainTab.value === 'owned') return caps.value.filter((c) => c.owned)
@@ -68,10 +65,12 @@ const sourceChips = computed(() => {
       }
     )
   } else {
-    Object.entries(TYPE_LABELS).forEach(([key, label]) => {
+    CUSTOMIZE_TYPES.forEach((key) => {
       const count = list.filter((c) => c.type === key).length
-      if (count) chips.push({ key: `type:${key}`, label, count })
+      if (count) chips.push({ key: `type:${key}`, label: TYPE_LABELS[key], count })
     })
+    const rest = list.filter((c) => !CUSTOMIZE_TYPES.includes(c.type)).length
+    if (rest) chips.push({ key: 'type:other', label: '其他', count: rest })
   }
   return chips
 })
@@ -84,7 +83,10 @@ const filteredCaps = computed(() => {
     if (sourceFilter.value === 'todo' && !['draft', 'returned', 'rejected'].includes(c.status)) return false
     if (sourceFilter.value === 'offline' && !['deprecated', 'archived'].includes(c.status)) return false
     if (sourceFilter.value.startsWith('type:')) {
-      if (c.type !== sourceFilter.value.slice(5)) return false
+      const t = sourceFilter.value.slice(5)
+      if (t === 'other') {
+        if (CUSTOMIZE_TYPES.includes(c.type)) return false
+      } else if (c.type !== t) return false
     }
     if (q) {
       const hay = `${c.name} ${c.description || ''} ${(c.tags || []).join(' ')}`.toLowerCase()
@@ -219,10 +221,41 @@ function askRemoveFromMy(cap) {
   confirmAction.value = {
     kind: 'remove',
     title: '确定移除？',
-    body: `移除后，「${cap.name}」将不再出现在我的能力中，不影响目录上架状态。`,
+    body: `移除后，「${cap.name}」将不再出现在自定义列表中，不影响目录上架状态。`,
     okText: '移除',
     danger: false,
     cap
+  }
+}
+
+async function toggleEnabled(cap) {
+  if (cap.install_policy === 'required') {
+    error.value = `「${cap.name}」为必装能力，不能停用`
+    return
+  }
+  error.value = ''
+  try {
+    const next = cap.enabled === false
+    const r = await api.patch(`/my/capabilities/${cap.id}`, { enabled: next })
+    notice.value = r.message
+    await load()
+  } catch (e) {
+    error.value = e.message
+  }
+}
+
+async function copyInstall(cap) {
+  const cmd = installCommandFor(cap)
+  if (!cmd) return
+  try {
+    await navigator.clipboard.writeText(cmd)
+    copiedId.value = cap.id
+    notice.value = `已复制：${cmd}`
+    setTimeout(() => {
+      if (copiedId.value === cap.id) copiedId.value = ''
+    }, 1600)
+  } catch {
+    notice.value = cmd
   }
 }
 
@@ -278,7 +311,7 @@ onMounted(() => {
       <div>
         <h1 class="page-title">我的能力</h1>
         <p class="page-desc muted">
-          技能/助手等可在线编辑；安装包以上传 zip 为主。{{ JOIN_VS_INSTALL_HINT }}
+          「自定义」管理已加入能力的启用状态；「我发布的」走草稿与审核。{{ JOIN_VS_INSTALL_HINT }}
         </p>
       </div>
       <button class="btn btn-primary" type="button" @click="openCreate()">发布能力</button>
@@ -289,11 +322,11 @@ onMounted(() => {
 
     <div class="main-tabs">
       <button type="button" class="main-tab" :class="{ active: mainTab === 'owned' }" @click="switchTab('owned')">
-        我创建的
+        我发布的
         <span class="count">{{ tabCounts.owned }}</span>
       </button>
       <button type="button" class="main-tab" :class="{ active: mainTab === 'added' }" @click="switchTab('added')">
-        已加入
+        自定义
         <span class="count">{{ tabCounts.added }}</span>
       </button>
     </div>
@@ -333,7 +366,70 @@ onMounted(() => {
           <a href="/" style="margin-left: 12px; color: var(--primary)">去发现逛逛</a>
         </div>
       </div>
+      <div v-else-if="filteredCaps.length === 0 && mainTab === 'added'" class="empty">
+        还没有加入任何能力。去发现页加入后，可在此启用/停用。
+        <div style="margin-top: 12px"><a href="/">去发现逛逛</a></div>
+      </div>
       <div v-else-if="filteredCaps.length === 0" class="empty">没有符合筛选条件的能力</div>
+      <table v-else-if="mainTab === 'added'" class="skill-table customize-table">
+        <thead>
+          <tr>
+            <th style="width: 72px">启用</th>
+            <th>能力</th>
+            <th>类型</th>
+            <th>更新</th>
+            <th style="width: 200px">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="cap in pagedCaps" :key="cap.id" :class="{ dim: cap.enabled === false }">
+            <td>
+              <button
+                type="button"
+                class="toggle"
+                :class="{ on: cap.enabled !== false, locked: cap.install_policy === 'required' }"
+                :disabled="cap.install_policy === 'required'"
+                :title="cap.install_policy === 'required' ? '必装，不能停用' : (cap.enabled === false ? '点击启用' : '点击停用')"
+                @click="toggleEnabled(cap)"
+              >
+                <span class="toggle-knob" />
+              </button>
+            </td>
+            <td>
+              <div class="skill-cell">
+                <div class="skill-icon" :style="{ background: typeColor(cap.type) }">{{ typeInitial(cap.type) }}</div>
+                <div class="skill-meta">
+                  <div class="skill-name-row">
+                    <router-link class="skill-name" :to="`/capabilities/${cap.id}`">{{ cap.name }}</router-link>
+                    <span class="ver-tag">v{{ cap.version }}</span>
+                  </div>
+                  <div class="skill-desc muted">{{ cap.description || TYPE_LABELS[cap.type] }}</div>
+                </div>
+              </div>
+            </td>
+            <td><span class="vis-pill">{{ TYPE_LABELS[cap.type] }}</span></td>
+            <td class="muted time">{{ formatDate(cap.updated_at) }}</td>
+            <td>
+              <div class="ops">
+                <button
+                  v-if="isLocalInstallKind(cap.type)"
+                  class="op-link"
+                  type="button"
+                  @click="copyInstall(cap)"
+                >{{ copiedId === cap.id ? '已复制' : '复制安装命令' }}</button>
+                <router-link :to="`/capabilities/${cap.id}`" class="op-link">详情</router-link>
+                <button
+                  v-if="cap.removable !== false && cap.install_policy !== 'required'"
+                  class="op-link danger"
+                  type="button"
+                  @click="askRemoveFromMy(cap)"
+                >移除</button>
+                <span v-else class="muted" style="font-size: 12px">必装</span>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
       <table v-else class="skill-table">
         <thead>
           <tr>
@@ -379,7 +475,7 @@ onMounted(() => {
                   class="op-link"
                   type="button"
                   @click="debugCap = cap"
-                >试用</button>
+                >{{ cap.type === 'mcp' ? '试用连接器' : cap.type === 'agent' ? '试用助手' : '试用' }}</button>
                 <template v-if="cap.has_draft">
                   <router-link v-if="editPath(cap)" :to="editPath(cap)" class="op-link">在线编辑</router-link>
                   <button
@@ -464,7 +560,12 @@ onMounted(() => {
       @close="showCreate = false"
       @created="onCreated"
     />
-    <DebugCapabilityModal :show="!!debugCap" :cap="debugCap" @close="debugCap = null" />
+    <DebugCapabilityModal
+      :show="!!debugCap"
+      :cap="debugCap"
+      :title="debugCap?.type === 'agent' ? '试用助手' : (debugCap?.type === 'mcp' ? '试用连接器' : '云端试用')"
+      @close="debugCap = null"
+    />
   </div>
 </template>
 
@@ -565,6 +666,23 @@ onMounted(() => {
   display: inline-flex; align-items: center; justify-content: center; font-size: 13px;
 }
 .page-size { max-width: 110px; }
+
+.toggle {
+  width: 40px; height: 22px; border-radius: 999px; border: none;
+  background: #cfd6e0; position: relative; cursor: pointer; padding: 0;
+  transition: background .15s ease;
+}
+.toggle.on { background: var(--primary); }
+.toggle.locked { opacity: 0.55; cursor: not-allowed; }
+.toggle-knob {
+  position: absolute; top: 2px; left: 2px;
+  width: 18px; height: 18px; border-radius: 50%; background: #fff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.2);
+  transition: left .15s ease;
+}
+.toggle.on .toggle-knob { left: 20px; }
+.dim { opacity: 0.55; }
+.customize-table td { padding-top: 12px; padding-bottom: 12px; }
 
 .confirm-mask {
   position: fixed; inset: 0; background: var(--overlay);

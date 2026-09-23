@@ -55,7 +55,7 @@ class Capability(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     description: Mapped[str] = mapped_column(Text, default="")
-    type: Mapped[str] = mapped_column(String(16), index=True, nullable=False)  # agent|tool|skill|mcp|workflow|plugin
+    type: Mapped[str] = mapped_column(String(16), index=True, nullable=False)  # agent|tool|skill|mcp|workflow|plugin|rule|command|hook
     version: Mapped[str] = mapped_column(String(50), nullable=False)
     changelog: Mapped[str] = mapped_column(Text, default="")
     readme_md: Mapped[str] = mapped_column(Text, default="")
@@ -300,6 +300,7 @@ class UserCapability(Base):
     capability_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("capabilities.id"), index=True
     )
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     capability: Mapped["Capability"] = relationship()

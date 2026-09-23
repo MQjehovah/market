@@ -17,6 +17,9 @@ REQUIRED_FILES: dict[str, list[str]] = {
     "mcp": ["mcp.json", "connection.json", "tools.json", "security.json"],
     "workflow": ["workflow.json"],
     "plugin": [],
+    "rule": ["rule.json", "RULE.mdc"],
+    "command": ["command.json", "COMMAND.md"],
+    "hook": ["hook.json", "hooks.json"],
 }
 
 OPTIONAL_FILES: dict[str, list[str]] = {
@@ -25,7 +28,21 @@ OPTIONAL_FILES: dict[str, list[str]] = {
     "skill": ["templates/", "assets/", "dependencies.json", "examples/", "scripts/", "references/"],
     "mcp": ["docker-compose.yml", "docs/", "implementation/"],
     "workflow": ["README.md", "examples/"],
-    "plugin": ["agents/", "skills/", "tools/", "mcp.json", ".cursor-plugin/", "mcp/"],
+    "plugin": [
+        "agents/",
+        "skills/",
+        "tools/",
+        "rules/",
+        "commands/",
+        "hooks/",
+        "mcp.json",
+        ".cursor-plugin/",
+        "mcp/",
+        "scripts/",
+    ],
+    "rule": ["examples/", "references/"],
+    "command": ["examples/", "scripts/"],
+    "hook": ["scripts/", "README.md"],
 }
 
 # Allow Unicode letters (incl. CJK), digits, underscore, hyphen, dot
@@ -376,6 +393,9 @@ def validate_package(capability_type: str, content: bytes) -> dict[str, Any]:
         "skill": "skill.json",
         "mcp": "mcp.json",
         "workflow": "workflow.json",
+        "rule": "rule.json",
+        "command": "command.json",
+        "hook": "hook.json",
     }[capability_type]
     meta = _read_json(zf, files[meta_file], meta_file)
     _resolve_meta_name(meta, meta_file)
@@ -405,11 +425,23 @@ def validate_package(capability_type: str, content: bytes) -> dict[str, Any]:
         _validate_skill_package(zf, files, meta)
     elif capability_type == "agent":
         details["warnings"] = _validate_agent_embedded(zf, files, meta)
+    elif capability_type in ("rule", "command"):
+        validate_skill_meta(meta, meta_file, require_version=True)
+    elif capability_type == "hook":
+        validate_skill_meta(meta, "hook.json", require_version=True)
+        hooks_cfg = _read_json(zf, files["hooks.json"], "hooks.json")
+        if "hooks" not in hooks_cfg and "version" not in hooks_cfg:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "hooks.json 需包含 hooks 对象（Cursor hooks 格式）",
+            )
+        details["hooks"] = hooks_cfg
     return details
 
 
 _TEXT_EXTENSIONS = {
     ".md",
+    ".mdc",
     ".markdown",
     ".txt",
     ".json",
@@ -537,7 +569,7 @@ def read_package_entry(content: bytes, path: str, *, max_bytes: int = _MAX_PREVI
         return result
 
 
-_TEMPLATE_KINDS = frozenset({"skill", "mcp", "tool", "agent", "plugin"})
+_TEMPLATE_KINDS = frozenset({"skill", "mcp", "tool", "agent", "plugin", "rule", "command", "hook"})
 
 
 def build_package_template(kind: str, *, name: str = "example") -> bytes:
@@ -624,7 +656,16 @@ def build_package_template(kind: str, *, name: str = "example") -> bytes:
         files["plugin.json"] = json.dumps(
             {
                 "name": safe,
-                "description": "示例安装包：含 skill + mcp",
+                "description": "示例安装包：含 skill + mcp + rule/command/hook",
+                "version": "0.1.0",
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        files[".cursor-plugin/plugin.json"] = json.dumps(
+            {
+                "name": safe,
+                "description": "Cursor Plugin 清单",
                 "version": "0.1.0",
             },
             ensure_ascii=False,
@@ -636,6 +677,25 @@ def build_package_template(kind: str, *, name: str = "example") -> bytes:
             ensure_ascii=False,
             indent=2,
         )
+        files["rules/demo-rule.mdc"] = (
+            "---\ndescription: 示例规则\nalwaysApply: false\n---\n\n"
+            "示例：优先使用项目既有模式。\n"
+        )
+        files["commands/demo-command.md"] = (
+            "---\nname: demo-command\ndescription: 示例斜杠命令\n---\n\n"
+            "# 示例命令\n\n按步骤完成当前任务。\n"
+        )
+        files["hooks/hooks.json"] = json.dumps(
+            {
+                "version": 1,
+                "hooks": {
+                    "sessionStart": [{"command": "./scripts/session-start.sh"}]
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        files["scripts/session-start.sh"] = "#!/bin/sh\necho session start\n"
         files["mcp.json"] = json.dumps(
             {
                 "mcpServers": {
@@ -650,10 +710,53 @@ def build_package_template(kind: str, *, name: str = "example") -> bytes:
             indent=2,
         )
         files["README.md"] = (
-            "# Plugin 模板\n\n"
-            "上传后市场会拆出 skills / mcp（及可选 agents）子能力。\n"
-            "零号员工可用整包；MCP 客户端可只取 skills + mcp。\n"
+            "# Plugin 模板（Cursor Plugin 兼容）\n\n"
+            "上传后市场会拆出 skills / mcp / rules / commands / hooks（及可选 agents）子能力。\n"
+            "零号员工可用整包；IDE 可识别 .cursor-plugin/plugin.json。\n"
         )
+    elif kind == "rule":
+        files["rule.json"] = json.dumps(
+            {
+                "name": safe,
+                "description": "示例规则",
+                "version": "0.1.0",
+                "alwaysApply": False,
+                "globs": "",
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        files["RULE.mdc"] = (
+            "---\n"
+            f"description: {safe}\n"
+            "alwaysApply: false\n"
+            "---\n\n"
+            f"# {safe}\n\n在适用文件上遵循本规则。\n"
+        )
+    elif kind == "command":
+        files["command.json"] = json.dumps(
+            {"name": safe, "description": "示例斜杠命令", "version": "0.1.0"},
+            ensure_ascii=False,
+            indent=2,
+        )
+        files["COMMAND.md"] = f"# {safe}\n\n## 步骤\n\n1. …\n"
+    elif kind == "hook":
+        files["hook.json"] = json.dumps(
+            {"name": safe, "description": "示例 Hooks", "version": "0.1.0"},
+            ensure_ascii=False,
+            indent=2,
+        )
+        files["hooks.json"] = json.dumps(
+            {
+                "version": 1,
+                "hooks": {
+                    "sessionStart": [{"command": "./scripts/session-start.sh"}]
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        files["scripts/session-start.sh"] = "#!/bin/sh\necho session start\n"
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:

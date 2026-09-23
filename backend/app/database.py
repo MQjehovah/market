@@ -76,5 +76,12 @@ async def _auto_migrate(conn) -> None:
             sync_conn.exec_driver_sql(
                 "ALTER TABLE capabilities ADD COLUMN readme_md TEXT DEFAULT ''"
             )
+        tables = inspector.get_table_names()
+        if "user_capabilities" in tables:
+            uc_cols = {c["name"] for c in inspector.get_columns("user_capabilities")}
+            if "enabled" not in uc_cols:
+                sync_conn.exec_driver_sql(
+                    "ALTER TABLE user_capabilities ADD COLUMN enabled BOOLEAN DEFAULT 1"
+                )
 
     await conn.run_sync(_do)

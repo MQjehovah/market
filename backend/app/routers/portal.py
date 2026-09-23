@@ -64,7 +64,7 @@ async def taxonomy():
 
 @router.get("/meta/package-templates/{kind}")
 async def package_template(kind: str, name: str = Query("example", max_length=80)):
-    """下载空能力包模板 zip（skill/mcp/tool/agent/plugin）。"""
+    """下载空能力包模板 zip（skill/mcp/tool/agent/plugin/rule/command/hook）。"""
     from app.services.packages import build_package_template
 
     content = build_package_template(kind, name=name or "example")
@@ -260,12 +260,29 @@ async def sync_capabilities(db: DbSession, user: OptionalUser):
 
 
 @router.get("/capabilities/{name}/download")
-async def download_capability(name: str, db: DbSession, user: OptionalUser, version: str = ""):
-    """下载已发布能力包（去重 zip）。消费者按名称（可选版本）获取。"""
+async def download_capability(
+    name: str,
+    db: DbSession,
+    user: OptionalUser,
+    version: str = "",
+    type: str = "",
+):
+    """下载已发布能力包（去重 zip）。消费者按名称（可选版本 / type）获取。
+
+    type 用于同名不同 kind 消歧（桌面与 cap 都可能装 skill 与 plugin 撞名）。
+    """
     visible = await get_visible_capabilities(db, user)
     matches = [c for c in visible if c.name == name and c.status in ("published", "deprecated")]
+    type_filter = (type or "").strip().lower()
+    if type_filter:
+        from app.schemas import CAPABILITY_TYPES
+
+        if type_filter not in CAPABILITY_TYPES:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"未知能力类型 {type}")
+        matches = [c for c in matches if c.type == type_filter]
     if not matches:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"能力 {name} 不存在或未发布")
+        hint = f"（type={type_filter}）" if type_filter else ""
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"能力 {name}{hint} 不存在或未发布")
     cap = None
     if version:
         cap = next((c for c in matches if c.version == version), None)

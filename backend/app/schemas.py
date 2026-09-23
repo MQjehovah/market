@@ -5,7 +5,20 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-CAPABILITY_TYPES = ("agent", "tool", "skill", "mcp", "workflow", "plugin")
+CAPABILITY_TYPES = (
+    "agent",
+    "tool",
+    "skill",
+    "mcp",
+    "workflow",
+    "plugin",
+    "rule",
+    "command",
+    "hook",
+)
+CapabilityType = Literal[
+    "agent", "tool", "skill", "mcp", "workflow", "plugin", "rule", "command", "hook"
+]
 VISIBILITY_LEVELS = ("private", "team", "internal", "public")
 STATUS_LEVELS = ("draft", "reviewing", "published", "deprecated", "archived", "rejected", "returned")
 ROLES = ("admin", "publisher", "user")
@@ -74,7 +87,7 @@ class TokenOut(BaseModel):
 class CapabilityBase(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str = Field(default="", max_length=20000)
-    type: Literal["agent", "tool", "skill", "mcp", "workflow", "plugin"]
+    type: CapabilityType
     version: str = Field(default="0.1.0", max_length=50)
     category: str = Field(default="", max_length=100)
     tags: list[str] = Field(default_factory=list)
@@ -103,7 +116,7 @@ class CapabilityCreate(CapabilityBase):
 
 class CapabilityUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
-    type: Literal["agent", "tool", "skill", "mcp", "workflow", "plugin"] | None = None
+    type: CapabilityType | None = None
     description: str | None = None
     category: str | None = Field(default=None, max_length=100)
     tags: list[str] | None = None
@@ -193,6 +206,9 @@ class CapabilityOut(CapabilityBase):
     # skill/mcp：被哪些 agent/plugin 引用；plugin 子能力：父插件 id
     used_by: list[dict[str, Any]] = Field(default_factory=list)
     parent_plugin_id: str | None = None
+    # 桌面消费投影；plugin 的已发布子能力（与 input_schema.components 同源）
+    consumers: dict[str, Any] = Field(default_factory=dict)
+    components: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class CapabilityPage(BaseModel):
@@ -271,7 +287,7 @@ class McpCallRequest(BaseModel):
 
 class AssembleDependency(BaseModel):
     name: str = Field(min_length=1, max_length=255)
-    type: Literal["tool", "skill", "mcp"]
+    type: Literal["tool", "skill", "mcp", "rule", "command", "hook"]
     version: str = Field(default="", max_length=50, description="留空取最新发布版")
 
 
@@ -384,6 +400,40 @@ class SkillEditOut(BaseModel):
 
 class SkillEditSave(BaseModel):
     skill_md: str = Field(default="", max_length=500000)
+    description: str = Field(default="", max_length=20000)
+    category: str = Field(default="", max_length=100)
+    tags: list[str] = Field(default_factory=list)
+    new_version: str = Field(default="", max_length=50, description="留空则基于最新版本 patch+1")
+
+
+class MarkdownKindEditOut(BaseModel):
+    capability: CapabilityOut
+    body: str = ""
+    files: list[dict[str, Any]] = Field(default_factory=list)
+    base_version: str = ""
+    always_apply: bool = False
+    globs: str = ""
+
+
+class MarkdownKindEditSave(BaseModel):
+    body: str = Field(default="", max_length=500000)
+    description: str = Field(default="", max_length=20000)
+    category: str = Field(default="", max_length=100)
+    tags: list[str] = Field(default_factory=list)
+    new_version: str = Field(default="", max_length=50, description="留空则基于最新版本 patch+1")
+    always_apply: bool | None = None
+    globs: str = Field(default="", max_length=500)
+
+
+class HookEditOut(BaseModel):
+    capability: CapabilityOut
+    hooks_json: str = ""
+    files: list[dict[str, Any]] = Field(default_factory=list)
+    base_version: str = ""
+
+
+class HookEditSave(BaseModel):
+    hooks_json: str = Field(default="", max_length=500000)
     description: str = Field(default="", max_length=20000)
     category: str = Field(default="", max_length=100)
     tags: list[str] = Field(default_factory=list)
@@ -516,6 +566,10 @@ class PackageFileContentOut(BaseModel):
 
 class MyCapabilityAdd(BaseModel):
     capability_id: str
+
+
+class MyCapabilityPatch(BaseModel):
+    enabled: bool
 
 
 class AccessPolicyUpdate(BaseModel):

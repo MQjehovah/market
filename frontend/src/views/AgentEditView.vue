@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../api'
 import StatusBadge from '../components/StatusBadge.vue'
+import MarkdownEditor from '../components/MarkdownEditor.vue'
 
 const route = useRoute()
 const agentName = computed(() => route.params.name)
@@ -150,7 +151,7 @@ onMounted(() => {
 
       <div class="field mt-16">
         <label>提示词（PROMPT.md）</label>
-        <textarea v-model="form.prompt" class="textarea" rows="16" spellcheck="false"></textarea>
+        <MarkdownEditor v-model="form.prompt" />
       </div>
 
       <div class="panel mt-16">

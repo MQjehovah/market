@@ -16,24 +16,30 @@
 | **组件** `brick` | 组件 | `skill` | SOP（SKILL.md） | `config/.../skills/`；Agent 的 `skill` 工具激活 |
 | **组件** | 组件 | `mcp` | 连接器 | `mcp_servers.json`；MCPManager / 网关 / IDE |
 | **组件** | 组件 | `tool` | 沙箱函数，主要给能力编排节点 | 仅云端 invoke；**不是** `src/tools` |
+| **组件** | 组件 | `rule` | 持久指导（RULE.mdc） | `config/rules/<name>/` |
+| **组件** | 组件 | `command` | `/` 斜杠命令（COMMAND.md） | `config/commands/<name>/` |
+| **组件** | 组件 | `hook` | 生命周期脚本（hooks.json） | `config/hooks/<name>/` |
 | **助手** `recipe` | 助手 | `agent` | 人设 + 依赖；可选 **TEAM.md 团队流水线** | `cap install` → `config/agents/<name>/` |
 | **助手** | 助手 | `workflow` | **能力编排**（已上架能力的静态 DAG） | 只云端执行，**不进** Agent 目录 |
-| **安装包** `install` | 安装包 | `plugin` | 一键分发技能+连接器（可选助手） | 拆子能力；IDE 可用 skills+mcp |
+| **安装包** `install` | 安装包 | `plugin` | 一键分发 skill/mcp/rule/command/hook（可选助手） | 拆子能力；兼容 Cursor Plugin |
 
 逛店顶栏：**推荐 | 技能 | 安装包 | 助手 | 更多**。  
-推荐默认浏览：`skill + plugin + agent`。连接器 / 能力编排 / 编排函数进「更多」。`plugin-component` 默认隐藏。
+推荐默认浏览：`skill + plugin + agent`。连接器 / 规则 / 命令 / Hooks / 能力编排 / 编排函数进「更多」。`plugin-component` 默认隐藏。
 
 元数据：`GET /api/meta/taxonomy`。空模板：`GET /api/meta/package-templates/{kind}`。
 
-## skill / tool / mcp / agent 关系
+## kind 关系
 
-四个 kind **不是同一层东西**。市场 `tool`、MCP 发现出的 tools、零号员工 `src/tools` **不是同一种**。
+这些 kind **不是同一层东西**。市场 `tool`、MCP 发现出的 tools、零号员工 `src/tools` **不是同一种**。
 
 | kind | 是什么 | 自己干活吗 | 主消费路径 |
 | --- | --- | --- | --- |
 | **skill** | SOP（`SKILL.md`） | 否；装进 Agent 后由名为 `skill` 的元工具读进上下文 | `cap install` → `skills/` |
 | **mcp** | 连接器（`connection.json`） | 否；连上后 **发现出的 tools** 才可调 | `cap install` → `mcp_servers.json` |
 | **tool** | 云端沙箱 `tool.py` | 是（仅市场沙箱 / workflow 节点） | `POST /api/runtime/tools/{name}/invoke`；**无**本地安装 |
+| **rule** | 持久指导（`RULE.mdc`） | 否；按 alwaysApply / globs 读进上下文 | `cap install --type rule` → `config/rules/` |
+| **command** | 斜杠命令（`COMMAND.md`） | 否；对话里 `/` 唤起 | `cap install --type command` → `config/commands/` |
+| **hook** | 生命周期脚本（`hooks.json`） | 宿主按事件执行 scripts | `cap install --type hook` → `config/hooks/` |
 | **agent** | 人设（`PROMPT.md`）+ 依赖清单 | 对话在零号员工 / A2A | `cap install` → `config/agents/<name>/` |
 
 Agent 日常主路：**skill 当说明书** + **MCP 发现出的 tools 当手**。市场 `tool` 若出现在 `dependencies.json` 里，本地只生成 HTTP 桥，真正执行仍打回市场沙箱。
@@ -44,9 +50,9 @@ Agent 拿到 skill / mcp 的三种来源：
 2. **内嵌**：zip 自带 `skills/`、`mcp/`；不单独逛店；同名上架时详情 `used_by`  
 3. **plugin 拆包**：上传后拆子草稿（`plugin-component`），默认不出现在目录列表  
 
-`cap install` 只支持 `agent / skill / mcp / plugin`。**workflow / tool 不进本地目录。**
+`cap install` 只支持 `agent / skill / mcp / plugin / rule / command / hook`。**workflow / tool 不进本地目录。**
 
-- **plugin**：分发袋，可带 skill / mcp / 可选 agent / 可选 tool  
+- **plugin**：分发袋，可带 skill / mcp / rule / command / hook / 可选 agent / 可选 tool  
 - **workflow**：云端 DAG，节点 `tool|agent|skill|mcp`；与 `TEAM.md`（角色流水线）平行、禁止互转  
 
 ## 双编排（平行，禁止互转）
@@ -119,8 +125,10 @@ MCP 注意：市场包必须是 `mcp.json` + `connection.json` + `tools.json` + 
 
 - 市场：Asset 记录、zip、审核、网关、试用 API  
 - 零号员工：`PROMPT` / `TEAM` / `skills` / `mcp_servers.json` + 宿主 `src/tools` + 通道 `src/plugins`  
-- IDE / 客户端：装 Plugin 或连市场 MCP；Rules/Hooks **不进**市场 kind  
+- IDE / 客户端：装 Plugin（含 rules / commands / hooks）或连市场 MCP；rule / command / hook 也可单独上架  
 - **不要**把宿主 BuiltinTool、钉钉/飞书通道插件登记成市场商品  
+
+「我的能力」分两栏：**自定义**（已加入，可启用/停用）与 **我发布的**（草稿/审核）。
 
 `cap install` 目标：
 
@@ -132,6 +140,9 @@ config/agents/<name>/
   skills/<skill>/SKILL.md
   mcp_servers.json
   dependencies.json / installed.json
+config/rules/<name>/
+config/commands/<name>/
+config/hooks/<name>/
 ```
 
 业务函数经 MCP（发现出的 tools）；市场 `tool` 仅云端沙箱 / Workflow。本地 Agent 依赖里的市场 tool 若有，也只是 HTTP 桥，不是宿主 BuiltinTool。

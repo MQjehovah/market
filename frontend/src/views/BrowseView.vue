@@ -43,10 +43,10 @@ const notice = ref('')
 
 const browseTabs = [
   { key: '', label: '推荐', hint: '技能、安装包与助手的精选与热门' },
-  { key: 'skill', label: '技能', hint: '可复用 SOP（SKILL.md）' },
+  { key: 'skill', label: '技能', hint: '问答 SOP；装进助手后提问即可按该流程回答' },
   { key: 'install', label: '安装包', hint: SHELVES.install.description },
-  { key: 'agent', label: '助手', hint: '面向场景的 Agent 人设' },
-  { key: 'more', label: '更多', hint: '连接器、能力编排、编排函数' }
+  { key: 'agent', label: '助手', hint: '场景级问答助手' },
+  { key: 'more', label: '更多', hint: '连接器给助手接系统；规则/命令等进阶组件' }
 ]
 
 /** 推荐页：无货架、无类型、无搜索、无其它筛选 */
@@ -73,19 +73,19 @@ const pageContext = computed(() => {
     }
   }
   if (filters.tab === 'skill' || filters.type === 'skill') {
-    return { eyebrow: '目录', title: '技能', desc: '可复用 SOP；加入后用 cap install --type skill，或装进助手/安装包。' }
+    return { eyebrow: '目录', title: '技能', desc: '问答 SOP；加入后装进助手，在对话里提问即可按该流程回答。' }
   }
   if (filters.tab === 'install' || filters.shelf === 'install') {
     return { eyebrow: '目录', title: '安装包', desc: SHELVES.install.description }
   }
   if (filters.tab === 'agent' || filters.type === 'agent') {
-    return { eyebrow: '目录', title: '助手', desc: '场景级 Agent；依赖的技能/连接器需已上架，或改用安装包内嵌。' }
+    return { eyebrow: '目录', title: '助手', desc: '场景级问答助手；依赖的技能/连接器会随助手一起生效。' }
   }
   if (filters.tab === 'more' || MORE_BROWSE_KINDS.includes(filters.type)) {
     return {
       eyebrow: '目录',
       title: '更多',
-      desc: '连接器、能力编排与编排函数；进阶发布与编排用。'
+      desc: '连接器给问答助手接外部系统；规则、命令、Hooks、编排为进阶组件。'
     }
   }
   if (filters.shelf && SHELVES[filters.shelf]) {
