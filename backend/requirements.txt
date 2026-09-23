@@ -1,4 +1,4 @@
-fastapi>=0.115
+﻿fastapi>=0.115
 uvicorn[standard]>=0.30
 sqlalchemy>=2.0
 aiosqlite>=0.20
@@ -6,20 +6,21 @@ asyncpg>=0.29
 pydantic>=2.7
 pydantic-settings>=2.3
 PyJWT>=2.8
-# SSO/OIDC 验签(sso_auth 与 auth 顶层 import jose),单独 pin 防干净安装缺失
+# SSO/OIDC 楠岀(sso_auth 涓?auth 椤跺眰 import jose),鍗曠嫭 pin 闃插共鍑€瀹夎缂哄け
 python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7
-# passlib 1.7.4 与 bcrypt>=4.1 不兼容（bcrypt.__about__ 被移除），锁定版本
+# passlib 1.7.4 涓?bcrypt>=4.1 涓嶅吋瀹癸紙bcrypt.__about__ 琚Щ闄わ級锛岄攣瀹氱増鏈?
 bcrypt==4.0.1
 python-multipart>=0.0.9
 minio>=7.2
 httpx>=0.27
-# MCP 能力包实现按 mcp 1.x（mcp.server.fastmcp）编写，2.x 移除了该路径
+# MCP 鑳藉姏鍖呭疄鐜版寜 mcp 1.x锛坢cp.server.fastmcp锛夌紪鍐欙紝2.x 绉婚櫎浜嗚璺緞
 mcp>=1.26.0,<2.0.0
-# 平台预装的 stdio MCP 运行时依赖（能力包勿默认假定可随意 pip；扩展请走包内声明 + 运维预装）
+# 骞冲彴棰勮鐨?stdio MCP 杩愯鏃朵緷璧栵紙鑳藉姏鍖呭嬁榛樿鍋囧畾鍙殢鎰?pip锛涙墿灞曡璧板寘鍐呭０鏄?+ 杩愮淮棰勮锛?
 nest_asyncio>=1.6.0
 websockets>=12.0
 pymysql>=1.1.0
+requests>=2.31.0
 rich>=13.0.0
 pytest>=8.0
 pytest-asyncio>=0.23
