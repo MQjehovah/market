@@ -35,6 +35,8 @@ import StatusBadge from '../components/StatusBadge.vue'
 import PackagePreview from '../components/PackagePreview.vue'
 import DebugCapabilityModal from '../components/DebugCapabilityModal.vue'
 
+const __API_BASE__ = (import.meta.env.BASE_URL || '/').replace(/\/$/, '') + '/api'
+
 const props = defineProps({ id: { type: String, required: true } })
 const router = useRouter()
 const route = useRoute()
@@ -295,7 +297,7 @@ const mcpClientConfigJson = computed(() => {
   } else if (transport === 'gateway') {
     const server = conn.server || schema.server || name
     entry.type = 'sse'
-    entry.baseUrl = `${window.location.origin}/api/mcp-gateway/${server}/sse`
+    entry.baseUrl = `${window.location.origin}${__API_BASE__}/mcp-gateway/${server}/sse`
   } else if (transport === 'sse') {
     entry.type = 'sse'
     entry.baseUrl = conn.url || schema.url || ''
@@ -505,7 +507,7 @@ async function toggleMy() {
 function downloadTemplate() {
   if (!cap.value) return
   const name = encodeURIComponent(cap.value.name || 'example')
-  window.open(`/api/meta/package-templates/${cap.value.type}?name=${name}`, '_blank')
+  window.open(`${__API_BASE__}/meta/package-templates/${cap.value.type}?name=${name}`, '_blank')
 }
 
 function focusPackage() {
@@ -620,7 +622,7 @@ async function downloadVersion(v) {
     const headers = {}
     if (authState.token) headers.Authorization = `Bearer ${authState.token}`
     const res = await fetch(
-      `/api/capabilities/${encodeURIComponent(v.name || cap.value.name)}/download?version=${encodeURIComponent(v.version)}`,
+      `${__API_BASE__}/capabilities/${encodeURIComponent(v.name || cap.value.name)}/download?version=${encodeURIComponent(v.version)}`,
       { headers }
     )
     if (!res.ok) {
@@ -649,7 +651,7 @@ async function downloadArtifact() {
     const headers = {}
     if (authState.token) headers.Authorization = `Bearer ${authState.token}`
     const res = await fetch(
-      `/api/capabilities/${encodeURIComponent(cap.value.name)}/download?version=${encodeURIComponent(cap.value.version)}`,
+      `${__API_BASE__}/capabilities/${encodeURIComponent(cap.value.name)}/download?version=${encodeURIComponent(cap.value.version)}`,
       { headers }
     )
     if (!res.ok) {
@@ -669,11 +671,11 @@ async function downloadArtifact() {
 }
 
 function cardUrl(id) {
-  return `${location.origin}/api/a2a/agents/${id}/card`
+  return `${location.origin}${__API_BASE__}/a2a/agents/${id}/card`
 }
 
 function rpcUrl(id) {
-  return `${location.origin}/api/a2a/agents/${id}/a2a`
+  return `${location.origin}${__API_BASE__}/a2a/agents/${id}/a2a`
 }
 
 async function submitRating() {
@@ -1158,11 +1160,11 @@ onMounted(() => {
             <div class="muted" style="font-size: 13px">可作为标准 A2A Agent 被发现与委派。</div>
             <div class="mt-16">
               <div class="flex"><span class="muted" style="width: 120px">Agent Card</span>
-                <code class="url-code">GET /api/a2a/agents/{{ cap.id }}/card</code>
+                <code class="url-code">GET {{ __API_BASE__ }}/a2a/agents/{{ cap.id }}/card</code>
                 <button class="btn btn-sm" type="button" @click="copyText(cardUrl(cap.id))">复制</button>
               </div>
               <div class="flex mt-8"><span class="muted" style="width: 120px">JSON-RPC</span>
-                <code class="url-code">POST /api/a2a/agents/{{ cap.id }}/a2a</code>
+                <code class="url-code">POST {{ __API_BASE__ }}/a2a/agents/{{ cap.id }}/a2a</code>
                 <button class="btn btn-sm" type="button" @click="copyText(rpcUrl(cap.id))">复制</button>
               </div>
             </div>

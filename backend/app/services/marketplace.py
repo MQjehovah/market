@@ -12,6 +12,7 @@ from sqlalchemy.orm import joinedload, selectinload
 
 from app.models import Capability, UsageEvent, User
 from app.services.capabilities import get_visible_capabilities, parse_semver
+from app.services.visibility import is_capability_visible
 from app.storage import get_storage
 
 
@@ -26,7 +27,7 @@ async def resolve_capability(
     caps = (await db.scalars(stmt)).all()
     if not caps:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"能力 {name} 不存在")
-    visible = [c for c in caps if c.visibility in ("internal", "public") or (user and c.author_id == user.id)]
+    visible = [c for c in caps if is_capability_visible(c, user)]
     if not visible:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"能力 {name} 不存在")
     if version:

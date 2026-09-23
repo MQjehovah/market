@@ -11,9 +11,13 @@ services:
     volumes:
       - ./data:/app/backend/data
     environment:
+      - APP_ENV=${APP_ENV:-production}
+      - ROOT_PATH=/market
       - PORT=8093
-      - JWT_SECRET=${JWT_SECRET}
-      - SEED_ADMIN_PASSWORD=${SEED_ADMIN_PASSWORD:-admin123}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
+      - SEED_ADMIN_PASSWORD=${SEED_ADMIN_PASSWORD:?SEED_ADMIN_PASSWORD is required}
+      - SEED_PUBLISHER_PASSWORD=${SEED_PUBLISHER_PASSWORD:?SEED_PUBLISHER_PASSWORD is required}
+      - SEED_USER_PASSWORD=${SEED_USER_PASSWORD:?SEED_USER_PASSWORD is required}
       - DATABASE_URL=${DATABASE_URL:-sqlite+aiosqlite:///./data/marketplace.db}
       - ARTIFACT_STORAGE=${ARTIFACT_STORAGE:-local}
       - ARTIFACT_DIR=${ARTIFACT_DIR:-./data/artifacts}
@@ -26,7 +30,8 @@ services:
       - SSO_AUDIENCE=${SSO_AUDIENCE:-market}
       - SSO_JWKS_URI=${SSO_JWKS_URI:-http://192.168.31.45:8091/.well-known/jwks.json}
       - SSO_CLIENT_ID=${SSO_CLIENT_ID:-market}
-      - SSO_CLIENT_SECRET=${SSO_CLIENT_SECRET:-xzrobot-market-2026}
+      - SSO_CLIENT_SECRET=${SSO_CLIENT_SECRET:-}
       - SSO_REDIRECT_URI=${SSO_REDIRECT_URI:-http://192.168.31.34:8093/api/auth/oidc/callback}
       - SSO_REDIRECT_TARGET=${SSO_REDIRECT_TARGET:-/login}
+    command: ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port 8093 --root-path /market --proxy-headers --forwarded-allow-ips=* --workers 1"]
     restart: unless-stopped

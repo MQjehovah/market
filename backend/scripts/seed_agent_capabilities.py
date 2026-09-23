@@ -454,9 +454,9 @@ async def _publish(
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
     from app.auth import hash_password
-    from app.config import get_settings
     from app.database import Base
     from app.models import Capability, CapabilityArtifact, User
+    from app.seed import resolve_seed_admin_password
     from app.storage import get_storage
 
     engine = create_async_engine(db_url)
@@ -468,11 +468,10 @@ async def _publish(
     async with Session() as db:
         author = await db.scalar(select(User).where(User.username == author_username))
         if author is None:
-            settings = get_settings()
             author = User(
                 username=author_username,
                 email=f"{author_username}@example.com",
-                password_hash=hash_password(settings.seed_admin_password),
+                password_hash=hash_password(resolve_seed_admin_password()),
                 display_name="能力层发布者",
                 role="admin",
                 organization="平台部",

@@ -5,11 +5,13 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.core.env_guard import require_secret
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    app_name: str = "AI 能力公共市场平台"
+    app_name: str = "企业AI能力平台"
     app_version: str = "0.1.0"
     debug: bool = False
 
@@ -28,7 +30,7 @@ class Settings(BaseSettings):
     # 安全
     jwt_secret: str = "dev-secret-change-me-please-32-bytes-minimum"
     jwt_algorithm: str = "HS256"
-    jwt_expire_minutes: int = 60 * 24
+    jwt_expire_minutes: int = 720  # 本地会话 12h(默认),可用 JWT_EXPIRE_MINUTES 覆盖
     # 逗号分隔；生产请配置实际前端源。空则仅允许本机 Vite。
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     # MCP 网关：True 时 api_token 为空则拒绝外部调用（强制配置令牌）
@@ -38,6 +40,8 @@ class Settings(BaseSettings):
     seed_admin_username: str = "admin"
     seed_admin_password: str = "admin123"
     seed_admin_email: str = "admin@example.com"
+    seed_publisher_password: str = "change-me"
+    seed_user_password: str = "change-me"
 
     # 能力包上传限制
     max_artifact_size_mb: int = 50
@@ -94,7 +98,16 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     settings = Settings()
+    # 启动即校验:生产环境缺失或仍为弱值则抛错,开发环境告警放行。
+    require_secret("JWT_SECRET", settings.jwt_secret)
+    require_secret("SEED_ADMIN_PASSWORD", settings.seed_admin_password)
+    require_secret("SEED_PUBLISHER_PASSWORD", settings.seed_publisher_password)
+    require_secret("SEED_USER_PASSWORD", settings.seed_user_password)
     # 确保数据目录存在
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     settings.artifact_path.mkdir(parents=True, exist_ok=True)
     return settings
+
+
+# 导入 app.config 即触发一次校验,保证生产环境在启动最早期失败。
+get_settings()

@@ -8,7 +8,7 @@ import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from passlib.context import CryptContext
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -83,7 +83,17 @@ async def _resolve_sso_user(
     except SsoAuthError:
         raise credentials_exc
     username = str(claims["sub"])
-    user = await db.scalar(select(User).where(User.username == username))
+    raw_email = (claims.get("email") or "").strip() or None
+    claim_email = raw_email.lower() if raw_email else None
+
+    # 身份识别顺序: 邮箱 -> 工号 -> 新建。
+    # 邮箱优先可与系统自建账号(本地注册/按邮箱登录的)对齐, 避免同一人两份账号;
+    # 邮箱缺失时退回按工号匹配(SSO 侧未取到 LDAP mail 的极少数情况)。
+    user = None
+    if claim_email:
+        user = await db.scalar(select(User).where(func.lower(User.email) == claim_email))
+    if user is None:
+        user = await db.scalar(select(User).where(User.username == username))
     if user is None:
         user = _new_sso_user(username, claims)
         db.add(user)
@@ -93,6 +103,9 @@ async def _resolve_sso_user(
             # 并发建号竞态:username 唯一约束被其他请求抢建,回滚后回查兜底
             await db.rollback()
             user = await db.scalar(select(User).where(User.username == username))
+            if user is None and claim_email:
+                # 也可能是邮箱撞了并发/已存在账号, 再按邮箱回查一次
+                user = await db.scalar(select(User).where(func.lower(User.email) == claim_email))
             if user is None:
                 # 回查仍无说明冲突非 username(病态场景:疑似 email 撞已存在账号),
                 # 抛友好 409 而非裸 500(IntegrityError 不属于 HTTPException)
@@ -102,6 +115,19 @@ async def _resolve_sso_user(
                 )
         else:
             await db.refresh(user)
+
+    # 命中已有账号时以 SSO 为权威源回写邮箱与姓名。
+    # 邮箱在前面已查过同值账号, 因此这里改写不会撞唯一约束。
+    changed = False
+    if raw_email and raw_email != (user.email or ""):
+        user.email = raw_email
+        changed = True
+    claim_name = (claims.get("name") or "").strip()
+    if claim_name and user.display_name != claim_name:
+        user.display_name = claim_name
+        changed = True
+    if changed:
+        await db.commit()
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

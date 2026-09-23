@@ -28,6 +28,7 @@ from app.models import (
 )
 from app.storage import get_storage
 from app.schemas import ArtifactOut, CapabilityCreate, CapabilityOut, CapabilityUpdate
+from app.services.visibility import is_capability_visible
 
 SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
@@ -244,25 +245,8 @@ async def get_visible_capabilities(
     stmt = select(Capability).options(
         selectinload(Capability.artifacts), joinedload(Capability.author)
     )
-    if user is not None and user.role == "admin":
-        result = await db.scalars(stmt)
-        return list(result)
     result = await db.scalars(stmt)
-    all_caps = list(result)
-    visible = []
-    for cap in all_caps:
-        if cap.visibility in ("internal", "public"):
-            visible.append(cap)
-        elif user is not None and cap.author_id == user.id:
-            visible.append(cap)
-        elif (
-            user is not None
-            and cap.visibility == "team"
-            and cap.author.team == user.team
-            and user.team
-        ):
-            visible.append(cap)
-    return visible
+    return [cap for cap in result if is_capability_visible(cap, user)]
 
 
 async def create_capability(

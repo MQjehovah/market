@@ -521,7 +521,7 @@ function stateLabel(state) {
               <div v-else-if="filteredCaps.length === 0" class="muted cap-empty">
                 暂无已发布的 {{ TYPE_LABELS[selectedNode.type] }}。
                 请先在「我的能力」发布对应组件/助手并审核通过，或到
-                <router-link to="/">能力目录</router-link>
+                <router-link to="/">能力平台</router-link>
                 确认是否有 {{ TYPE_LABELS[selectedNode.type] }} 已上架。
               </div>
             </div>

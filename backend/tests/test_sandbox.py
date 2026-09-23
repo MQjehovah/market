@@ -136,5 +136,5 @@ async def test_local_only_tool_rejected_in_cloud(client, publisher_headers, admi
 
 
 async def _login_admin(client):
-    r = await client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
+    r = await client.post("/api/auth/login", json={"username": "admin", "password": "test-seed-admin-password-32-bytes!!"})
     return {"Authorization": f"Bearer {r.json()['access_token']}"}

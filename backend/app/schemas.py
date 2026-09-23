@@ -24,15 +24,6 @@ STATUS_LEVELS = ("draft", "reviewing", "published", "deprecated", "archived", "r
 ROLES = ("admin", "publisher", "user")
 
 
-class UserRegister(BaseModel):
-    username: str = Field(min_length=3, max_length=64, pattern=r"^[\w.\-]+$")
-    email: str = Field(max_length=255)
-    password: str = Field(min_length=6, max_length=128)
-    display_name: str = Field(default="", max_length=64)
-    organization: str = Field(default="", max_length=100)
-    team: str = Field(default="", max_length=100)
-
-
 class UserLogin(BaseModel):
     username: str
     password: str

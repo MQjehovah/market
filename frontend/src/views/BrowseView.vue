@@ -93,10 +93,10 @@ const pageContext = computed(() => {
     return { eyebrow: '分类', title: s.label, desc: s.description }
   }
   if (filters.shelf === 'all') {
-    return { eyebrow: '目录', title: '搜索结果', desc: '含技能、安装包、助手与更多类型。' }
+    return { eyebrow: '能力总览', title: '搜索结果', desc: '含技能、安装包、助手与更多类型。' }
   }
   return {
-    eyebrow: '企业内部能力目录',
+    eyebrow: '企业内部的 AI 能力',
     title: '发现当下值得使用的能力',
     desc: JOIN_VS_INSTALL_HINT
   }

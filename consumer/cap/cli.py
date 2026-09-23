@@ -172,7 +172,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"cap {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("sync", help="同步能力目录")
+    p = sub.add_parser("sync", help="同步能力平台")
     _common_args(p)
     p.add_argument("--json", action="store_true", help="以 JSON 输出")
     p.set_defaults(func=cmd_sync)

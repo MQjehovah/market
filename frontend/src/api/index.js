@@ -1,6 +1,6 @@
 import { authState, clearAuth } from '../stores/auth'
 
-const AUTH_NO_REDIRECT = new Set(['/auth/login', '/auth/register', '/auth/change-password'])
+const AUTH_NO_REDIRECT = new Set(['/auth/login', '/auth/change-password'])
 let sessionRedirecting = false
 
 async function redirectToLogin() {
@@ -18,7 +18,7 @@ async function redirectToLogin() {
   }
 }
 
-const BASE = '/api'
+const BASE = (import.meta.env.BASE_URL || '/').replace(/\/$/, '') + '/api'
 
 export class ApiError extends Error {
   constructor(status, message, detail) {

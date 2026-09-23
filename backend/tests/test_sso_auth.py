@@ -20,7 +20,7 @@ from jose import jwk as jose_jwk
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.auth import create_access_token, get_current_user, get_current_user_optional
+from app.auth import create_access_token, hash_password, get_current_user, get_current_user_optional
 from app.config import get_settings
 from app.core import sso_auth
 from app.core.sso_auth import SsoAuthError, verify_sso_token
@@ -219,6 +219,37 @@ async def test_get_current_user_sso_provisions_and_does_not_duplicate(sso_env, d
     assert await _count_users(db) == 1
 
 
+async def test_get_current_user_sso_matches_existing_account_by_email(sso_env, db):
+    """SSO token 的邮箱命中系统自建账号时复用该账号(不新建、不改 username)。
+
+    与网关控制台一致: 邮箱是首选唯一标识, 避免同一人两份账号。
+    """
+    key, _ = sso_env
+    # 系统自建账号(如本地注册): username 不是工号, 但邮箱与 SSO 一致
+    existing = User(
+        id="u-local",
+        username="jimingqing",
+        email="jimingqing@xzrobot.com",
+        password_hash=hash_password("not-used-sso"),
+        display_name="旧名字",
+        role="user",
+        is_active=True,
+    )
+    db.add(existing)
+    await db.commit()
+
+    token = _sso_employee_token(
+        key, emp_no="202202100024", name="季明清", email="jimingqing@xzrobot.com"
+    )
+    user = await get_current_user(token, db)
+
+    assert user.id == "u-local"
+
+    assert user.username == "jimingqing"  # username 不在 SSO 身份键上, 保持不变
+    assert user.display_name == "季明清"  # 姓名以 SSO 为权威源刷新
+    assert await _count_users(db) == 1
+
+
 async def test_get_current_user_sso_without_email_uses_derived_fallback(sso_env, db):
     """claims 缺 email 时用派生自唯一 username 的占位邮箱，name 仍取自 claims。"""
     key, _ = sso_env
@@ -332,14 +363,40 @@ async def test_sso_start_redirects_when_configured(sso_env, client, monkeypatch)
 
 
 async def test_oidc_callback_rejects_bad_state(sso_env, client, monkeypatch):
+    """state 失效时跳回登录页并带 error,不把 JSON 错误丢给浏览器。"""
     settings = get_settings()
     monkeypatch.setattr(settings, "sso_redirect_uri", "http://127.0.0.1:8000/api/auth/oidc/callback")
+    monkeypatch.setattr(settings, "sso_redirect_target", "/market/login")
     r = await client.get(
         "/api/auth/oidc/callback",
         params={"code": "abc", "state": "bad"},
         follow_redirects=False,
     )
-    assert r.status_code == 401
+    assert r.status_code == 302
+    loc = r.headers["location"]
+    assert loc.startswith("/market/login?error=")
+    assert "sso_token=" not in loc
+
+
+async def test_oidc_callback_missing_params_redirects(client, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "sso_redirect_uri", "http://127.0.0.1:8000/api/auth/oidc/callback")
+    monkeypatch.setattr(settings, "sso_redirect_target", "/market/login")
+    r = await client.get("/api/auth/oidc/callback", follow_redirects=False)
+    assert r.status_code == 302
+    assert "error=" in r.headers["location"]
+
+
+async def test_oidc_callback_disabled_redirects(client, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "sso_issuer", "")
+    monkeypatch.setattr(settings, "sso_client_id", "")
+    monkeypatch.setattr(settings, "sso_redirect_uri", "")
+    r = await client.get(
+        "/api/auth/oidc/callback", params={"code": "a", "state": "b"}, follow_redirects=False
+    )
+    assert r.status_code == 302
+    assert "error=" in r.headers["location"]
 
 
 async def test_http_me_accepts_sso_token(sso_env, client):

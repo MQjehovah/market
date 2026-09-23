@@ -174,14 +174,53 @@ cd {REMOTE_DIR}
 if [ -f .env ]; then cp -a .env /tmp/market.env.bak; fi
 tar -xzf {remote_tar} -C {REMOTE_DIR}
 if [ -f /tmp/market.env.bak ]; then mv /tmp/market.env.bak .env; fi
+NEW_ENV=0
 if [ ! -f .env ]; then
+  NEW_ENV=1
   if [ -f backend/.env.example ]; then
     cp backend/.env.example .env
-    echo "WARN: created .env from backend/.env.example — please set JWT_SECRET"
+    echo "INFO: created .env from backend/.env.example"
   else
-    echo "JWT_SECRET=change-me-in-production" > .env
-    echo "WARN: created minimal .env — please set JWT_SECRET"
+    : > .env
+    echo "INFO: created empty .env"
   fi
+fi
+gen_secret() {{
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 32
+  else
+    head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \\n'
+  fi
+}}
+ensure_secret() {{
+  key="$1"
+  cur="$(grep -E "^$key=" .env 2>/dev/null | head -n1 | cut -d= -f2- | tr -d '\\r')"
+  case "$cur" in
+    ""|change-me|change-me-in-production|dev-secret-change-me-please-32-bytes-minimum|default-secret|default-key|"xzyz2022!"|admin123|123456|gateway-secret|agent-secret|your-secret-key)
+      val="$(gen_secret)"
+      if grep -qE "^$key=" .env; then
+        sed -i "s|^$key=.*|$key=$val|" .env
+      else
+        printf '%s=%s\\n' "$key" "$val" >> .env
+      fi
+      echo "INFO: generated strong random value for $key (stored in .env)"
+      ;;
+    *)
+      echo "INFO: keeping existing non-weak $key from .env"
+      ;;
+  esac
+}}
+ensure_secret JWT_SECRET
+ensure_secret SEED_ADMIN_PASSWORD
+ensure_secret SEED_PUBLISHER_PASSWORD
+ensure_secret SEED_USER_PASSWORD
+if [ "$NEW_ENV" = "1" ]; then
+  if grep -qE '^APP_ENV=' .env; then
+    sed -i 's|^APP_ENV=.*|APP_ENV=production|' .env
+  else
+    printf 'APP_ENV=production\\n' >> .env
+  fi
+  echo "INFO: APP_ENV=production set for new .env (override with shell env for development)"
 fi
 mkdir -p data
 rm -f {remote_tar}

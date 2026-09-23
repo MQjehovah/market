@@ -25,6 +25,7 @@ from app.schemas import (
 )
 from app.services.capabilities import get_visible_capabilities, parse_semver, record_rating
 from app.services.capabilities import to_capability_out
+from app.services.visibility import visibility_condition
 from app.services.taxonomy import (
     DEFAULT_BROWSE_KINDS,
     kinds_for_shelf,
@@ -40,20 +41,8 @@ def _to_out(cap: Capability, versions: list[Capability] | None = None) -> Capabi
 
 
 def _visibility_where(user: User | None):
-    """可见性过滤（SQL 层）：internal/public 全员；private 仅作者；team 仅同团队；admin 全量。"""
-    if user is not None and user.role == "admin":
-        return None
-    clauses = [Capability.visibility.in_(["internal", "public"])]
-    if user is not None:
-        clauses.append(Capability.author_id == user.id)
-        if user.team:
-            clauses.append(
-                and_(
-                    Capability.visibility == "team",
-                    Capability.author.has(User.team == user.team),
-                )
-            )
-    return or_(*clauses)
+    """可见性过滤（SQL 层）：单一判定来源见 ``app.services.visibility``。"""
+    return visibility_condition(user)
 
 
 @router.get("/meta/taxonomy")

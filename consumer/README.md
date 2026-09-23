@@ -1,11 +1,11 @@
 # 能力层消费者（cap）
 
-`cap` 是 market **能力目录**的独立消费端：只依赖 `httpx`，不依赖市场后端代码。
+`cap` 是 market **能力平台**的独立消费端：只依赖 `httpx`，不依赖市场后端代码。
 市场是控制面（注册/审核/分发）；本 CLI 把资产落到零号员工 `config/`，或走云端试用 / A2A。
 
 | 模式 | 说明 | 命令 |
 | --- | --- | --- |
-| 同步 | 拉取能力目录（Agent / 积木 / 配方 / 安装包） | `cap sync` |
+| 同步 | 拉取能力清单（Agent / 积木 / 配方 / 安装包） | `cap sync` |
 | 下载 | 下载单个能力包（zip + 校验和） | `cap pull` |
 | 本地组装 | 下载 Agent / skill / mcp / plugin / rule / command / hook（tool、workflow 不支持本地装） | `cap install` |
 | 本地运行 | 用本地 agent 引擎执行任务 | `cap run --mode local` |
@@ -25,7 +25,7 @@ pip install -r requirements.txt
 CAP_URL=http://127.0.0.1:8093
 CAP_TOKEN=...
 CAP_USER=admin
-CAP_PASSWORD=admin123
+CAP_PASSWORD=<你的市场账号口令>
 AGENT_ROOT=E:/ai/agent
 CAP_PYTHON=python
 ```

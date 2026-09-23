@@ -29,10 +29,12 @@ function loginWithSso() {
   if (ssoLoading.value) return
   ssoLoading.value = true
   error.value = ''
-  window.location.href = '/api/auth/sso/start'
+  window.location.href = (import.meta.env.BASE_URL || '/').replace(/\/$/, '') + '/api/auth/sso/start'
 }
 
 async function handleSsoCallback() {
+  const queryError = route.query.error
+  if (typeof queryError === 'string' && queryError) error.value = queryError
   const token = route.query.sso_token
   if (typeof token !== 'string' || !token) return
   ssoLoading.value = true
@@ -60,11 +62,11 @@ onMounted(handleSsoCallback)
     <div class="auth-box">
       <router-link to="/" class="brand">
         <span class="logo">AI</span>
-        <span>能力目录</span>
+        <span>企业AI能力平台</span>
       </router-link>
 
       <h1>登录</h1>
-      <p class="hint">使用企业账号进入能力目录</p>
+      <p class="hint">使用企业账号登录平台</p>
 
       <div v-if="error" class="alert alert-error">{{ error }}</div>
 
@@ -101,15 +103,6 @@ onMounted(handleSsoCallback)
       </button>
       <p class="sso-hint">将打开公司统一登录页，可用钉钉扫码或工号密码。</p>
 
-      <p class="foot">
-        还没有账号？
-        <router-link to="/register">立即注册</router-link>
-      </p>
-
-      <details class="demo">
-        <summary>演示账号</summary>
-        <p>admin / admin123 · publisher / publisher123 · user / user123456</p>
-      </details>
     </div>
   </div>
 </template>
@@ -196,28 +189,5 @@ h1 {
   text-align: center;
   color: var(--muted);
   font-size: 13px;
-}
-
-.demo {
-  margin-top: 28px;
-  padding-top: 16px;
-  border-top: 1px solid var(--border);
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.demo summary {
-  cursor: pointer;
-  user-select: none;
-  list-style: none;
-}
-
-.demo summary::-webkit-details-marker {
-  display: none;
-}
-
-.demo p {
-  margin: 10px 0 0;
-  line-height: 1.6;
 }
 </style>
