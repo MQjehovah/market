@@ -15,6 +15,7 @@
 """
 
 import asyncio
+import hashlib
 import hmac
 import io
 import json
@@ -24,8 +25,12 @@ import re
 import shutil
 import sys
 import tempfile
+import threading
+import time
 import zipfile
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from math import ceil
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -39,7 +44,6 @@ from mcp.server.sse import SseServerTransport
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.server.models import InitializationOptions
 from mcp.types import ServerCapabilities
-from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 logger = logging.getLogger("market.mcp_gateway")
@@ -172,6 +176,7 @@ def row_to_config(row) -> dict[str, Any]:
         "env": env,
         "cwd": row.cwd or "",
         "api_token": row.api_token or "",
+        "capability_id": row.capability_id or "",
         "enabled": bool(row.enabled),
     }
 
@@ -433,23 +438,297 @@ class GatewayRegistry:
         self._endpoints.clear()
 
 
-async def check_token(config: dict[str, Any], scope) -> bool:
-    """网关端点鉴权：X-Gateway-Token 或 Authorization: Bearer。
+@dataclass
+class GatewayIdentity:
+    """入站请求身份：来源 server_token | jwt | sso | anonymous。"""
 
-    留空令牌：默认内部免鉴权；若 settings.mcp_gateway_require_token=True 则拒绝。
+    source: str
+    user_id: str | None = None
+    username: str = ""
+    role: str = ""
+    user: Any = None  # ORM User；仅 jwt/sso 来源非空
+
+
+class GatewayAuthError(Exception):
+    """网关鉴权失败（对应 401）。"""
+
+
+def _header(scope, name: str) -> str:
+    """从 ASGI scope 读首个同名 header（name 需小写）。"""
+    for key, value in scope.get("headers") or []:
+        if key.decode("latin-1").lower() == name:
+            return value.decode("latin-1")
+    return ""
+
+
+def _bearer_token(scope) -> str:
+    auth = _header(scope, "authorization")
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    return ""
+
+
+async def _resolve_bearer_identity(token: str) -> GatewayIdentity | None:
+    """Bearer → 本地 JWT / SSO 身份；均不匹配返回 None（短会话，无依赖注入）。"""
+    from app.auth import resolve_user_by_bearer
+    from app.database import SessionLocal
+
+    try:
+        async with SessionLocal() as db:
+            resolved = await resolve_user_by_bearer(db, token)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("网关 Bearer 解析失败: %s", exc)
+        return None
+    if resolved is None:
+        return None
+    user, source = resolved
+    return GatewayIdentity(
+        source=source,
+        user_id=user.id,
+        username=user.username,
+        role=user.role,
+        user=user,
+    )
+
+
+async def authenticate_request(config: dict[str, Any], scope) -> GatewayIdentity:
+    """网关端点鉴权：per-server token → 本地 JWT → SSO → 匿名/401。
+
+    1) api_token 非空时，X-Gateway-Token / Bearer 精确匹配（原行为，文案不变）；
+    2) Bearer 依次尝试本地 HS256 JWT 与 SSO RS256（复用 auth 双轨解析）；
+    3) 都不匹配：mcp_gateway_require_token=True → GatewayAuthError；False → 匿名。
     """
     from app.config import get_settings
 
     expected = config.get("api_token") or ""
-    if not expected:
-        return not get_settings().mcp_gateway_require_token
-    request = Request(scope, None)  # type: ignore[arg-type]
-    provided = request.headers.get("x-gateway-token", "")
-    if not provided:
-        auth = request.headers.get("authorization", "")
-        if auth.lower().startswith("bearer "):
-            provided = auth[7:].strip()
-    return bool(provided) and hmac.compare_digest(provided, expected)
+    if expected:
+        candidates = (_header(scope, "x-gateway-token"), _bearer_token(scope))
+        if any(c and hmac.compare_digest(c, expected) for c in candidates):
+            return GatewayIdentity(source="server_token")
+    bearer = _bearer_token(scope)
+    if bearer:
+        identity = await _resolve_bearer_identity(bearer)
+        if identity is not None:
+            return identity
+    if expected or get_settings().mcp_gateway_require_token:
+        raise GatewayAuthError("网关令牌无效")
+    return GatewayIdentity(source="anonymous")
+
+
+RATE_WINDOW_SECONDS = 60.0
+_rate_hits: dict[str, list[float]] = {}
+_rate_lock = threading.Lock()
+_rate_last_cleanup = 0.0
+
+
+def rate_limit_key(identity: GatewayIdentity, config: dict[str, Any], scope) -> str:
+    """限流身份键：登录用户 → 网关令牌指纹 → 客户端 IP。"""
+    if identity.user_id:
+        return f"user:{identity.user_id}"
+    token = config.get("api_token") or ""
+    if token:
+        return "token:" + hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
+    client = scope.get("client") or ("", 0)
+    return f"ip:{client[0]}"
+
+
+def check_rate_limit(key: str, limit: int, now: float | None = None) -> tuple[bool, int]:
+    """60s 滑动窗口限流（纯函数）。limit<=0 关闭；返回 (allowed, retry_after 秒)。"""
+    global _rate_last_cleanup
+
+    if limit <= 0:
+        return True, 0
+    now = time.monotonic() if now is None else now
+    with _rate_lock:
+        hits = [t for t in _rate_hits.get(key, []) if now - t < RATE_WINDOW_SECONDS]
+        if len(hits) >= limit:
+            _rate_hits[key] = hits
+            return False, max(1, ceil(RATE_WINDOW_SECONDS - (now - hits[0])))
+        hits.append(now)
+        _rate_hits[key] = hits
+        if now - _rate_last_cleanup >= RATE_WINDOW_SECONDS:
+            _rate_last_cleanup = now
+            for stale in [k for k, v in _rate_hits.items() if not v or now - v[-1] >= RATE_WINDOW_SECONDS]:
+                _rate_hits.pop(stale, None)
+        return True, 0
+
+
+def reset_rate_limits() -> None:
+    """清空滑动窗口状态（测试 / 本地重置用）。"""
+    global _rate_last_cleanup
+
+    with _rate_lock:
+        _rate_hits.clear()
+        _rate_last_cleanup = 0.0
+
+
+_METHOD_NAMES = {"initialize": "initialize", "tools/list": "tools_list", "tools/call": "tools_call"}
+
+
+@dataclass
+class MCPCall:
+    """审计用的单条 JSON-RPC 消息摘要。"""
+
+    method: str = "other"
+    tool: str = ""
+    rpc_id: Any = None
+
+
+def parse_mcp_calls(body: bytes) -> list[MCPCall]:
+    """解析请求体中的 JSON-RPC 消息（支持 batch）：initialize/tools_list/tools_call/other。"""
+    if not body:
+        return []
+    try:
+        data = json.loads(body.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return []
+    items = data if isinstance(data, list) else [data]
+    calls: list[MCPCall] = []
+    for item in items:
+        if not isinstance(item, dict) or "method" not in item:
+            continue
+        method = str(item.get("method") or "")
+        params = item.get("params") if isinstance(item.get("params"), dict) else {}
+        tool = str(params.get("name") or "") if method == "tools/call" else ""
+        calls.append(
+            MCPCall(method=_METHOD_NAMES.get(method, "other"), tool=tool[:255], rpc_id=item.get("id"))
+        )
+    return calls
+
+
+def _content_text(content: Any) -> str:
+    if not isinstance(content, list):
+        return ""
+    parts = [
+        str(item.get("text") or "")
+        for item in content
+        if isinstance(item, dict) and item.get("type") == "text"
+    ]
+    return " ".join(p for p in parts if p).strip()
+
+
+def extract_rpc_error(status: int | None, body: bytes) -> str:
+    """从 HTTP 响应提取错误：JSON-RPC error / result.isError / 非 2xx 状态。"""
+    try:
+        data = json.loads(body.decode("utf-8")) if body else None
+    except (ValueError, UnicodeDecodeError):
+        data = None
+    items = data if isinstance(data, list) else [data]
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        err = item.get("error")
+        if isinstance(err, dict):
+            return str(err.get("message") or err)[:300]
+        result = item.get("result")
+        if isinstance(result, dict) and result.get("isError"):
+            return (_content_text(result.get("content")) or "工具调用失败")[:300]
+    if status is not None and status >= 400:
+        if isinstance(data, dict):
+            return str(data.get("detail") or data)[:300]
+        return (body.decode("utf-8", "replace") if body else f"HTTP {status}")[:300]
+    return ""
+
+
+async def record_gateway_calls(
+    server_name: str,
+    config: dict[str, Any],
+    identity: GatewayIdentity,
+    calls: list[MCPCall],
+    conversation_id: str,
+    duration_ms: int,
+    ok: bool,
+    error: str = "",
+) -> None:
+    """能力级审计 + 用量：每条 JSON-RPC 消息一行；写失败仅告警不阻断请求。"""
+    if not calls:
+        return
+    from app.database import SessionLocal
+    from app.models import Capability, MCPGatewayCall, User
+    from app.services.marketplace import record_usage
+
+    error = (error or "")[:300]
+    try:
+        async with SessionLocal() as db:
+            cap = None
+            cap_id = config.get("capability_id") or ""
+            if cap_id:
+                cap = await db.get(Capability, cap_id)
+            usable = cap is not None and cap.status in ("published", "deprecated", "reviewing")
+            for call in calls:
+                db.add(
+                    MCPGatewayCall(
+                        server_name=server_name,
+                        capability_id=cap_id,
+                        capability_version=cap.version if cap is not None else "",
+                        user_id=identity.user_id or "",
+                        username=identity.username,
+                        source=identity.source,
+                        method=call.method,
+                        tool=call.tool,
+                        conversation_id=conversation_id,
+                        duration_ms=duration_ms,
+                        ok=ok,
+                        error=error,
+                    )
+                )
+                if identity.user_id and usable and call.method == "tools_call":
+                    try:
+                        user = await db.get(User, identity.user_id)
+                        if user is not None:
+                            await record_usage(
+                                db,
+                                user,
+                                cap,
+                                "mcp_call",
+                                {"tool": call.tool, "server": server_name},
+                                result_status="ok" if ok else "failed",
+                            )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("MCP 网关用量写入失败 server=%s: %s", server_name, exc)
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("MCP 网关审计写入失败 server=%s: %s", server_name, exc)
+
+
+class _ResponseCapture:
+    """包装 send 捕获状态码与响应体（仅供审计，不改变转发行为）。"""
+
+    def __init__(self, send: Callable) -> None:
+        self._send = send
+        self.status: int | None = None
+        self.body = bytearray()
+        self.started = False
+
+    async def __call__(self, message: dict) -> None:
+        mtype = message.get("type")
+        if mtype == "http.response.start":
+            self.status = int(message.get("status") or 0)
+            self.started = True
+        elif mtype == "http.response.body":
+            self.body.extend(message.get("body") or b"")
+        await self._send(message)
+
+
+async def _read_body(receive) -> tuple[bytes, Callable[[], Awaitable[dict]]]:
+    """先读完请求体再重放给下游（MCP JSON-RPC 体量小），供解析审计。"""
+    pending: list[dict] = []
+    chunks: list[bytes] = []
+    while True:
+        message = await receive()
+        pending.append(message)
+        if message.get("type") != "http.request":
+            break
+        chunks.append(message.get("body") or b"")
+        if not message.get("more_body", False):
+            break
+
+    async def replay() -> dict:
+        if pending:
+            return pending.pop(0)
+        return await receive()
+
+    return b"".join(chunks), replay
 
 
 async def send_json(scope, receive, send, status: int, body: dict) -> None:
@@ -483,19 +762,33 @@ class GatewayASGIApp:
         if config is None or not config.get("enabled", True):
             await send_json(scope, receive, send, 404, {"detail": f"网关服务 {name} 不存在或已停用"})
             return
-        if not await check_token(config, scope):
+        try:
+            identity = await authenticate_request(config, scope)
+        except GatewayAuthError:
             await send_json(
                 scope, receive, send, 401, {"detail": "网关令牌无效（X-Gateway-Token 或 Bearer）"}
             )
+            return
+        from app.config import get_settings
+
+        allowed, retry_after = check_rate_limit(
+            rate_limit_key(identity, config, scope),
+            get_settings().mcp_gateway_rate_limit_per_min,
+        )
+        if not allowed:
+            response = JSONResponse(
+                {"detail": "请求过于频繁，请稍后重试"},
+                status_code=429,
+                headers={"Retry-After": str(retry_after)},
+            )
+            await response(scope, receive, send)
             return
         ep = self._registry.get(name)
         try:
             if kind == "sse":
                 await ep.handle_sse(scope, receive, send, config)
-            elif kind == "messages":
-                await ep.handle_messages(scope, receive, send)
-            elif kind == "stream":
-                await ep.handle_stream(scope, receive, send)
+            elif kind in ("messages", "stream"):
+                await self._handle_jsonrpc(kind, name, config, identity, scope, receive, send, ep)
             else:
                 await send_json(scope, receive, send, 404, {"detail": "网关端点不存在"})
         except asyncio.CancelledError:
@@ -506,3 +799,54 @@ class GatewayASGIApp:
                 await send_json(scope, receive, send, 502, {"detail": str(exc)[:300]})
             except Exception:  # noqa: BLE001
                 pass
+
+    async def _handle_jsonrpc(self, kind, name, config, identity, scope, receive, send, ep) -> None:
+        """带审计/超时的 JSON-RPC 转发：/stream 的 POST 与 SSE 的 /messages。"""
+        from app.config import get_settings
+
+        body, replay = await _read_body(receive)
+        calls = parse_mcp_calls(body)
+        if not calls:
+            if kind == "stream":
+                await ep.handle_stream(scope, replay, send)
+            else:
+                await ep.handle_messages(scope, replay, send)
+            return
+        conversation_id = _header(scope, "x-conversation-id")[:64]
+        capture = _ResponseCapture(send)
+        started = time.perf_counter()
+        timeout = float(get_settings().mcp_gateway_request_timeout or 0)
+        ok, error = True, ""
+        try:
+            if kind == "stream":
+                if timeout > 0:
+                    await asyncio.wait_for(ep.handle_stream(scope, replay, capture), timeout=timeout)
+                else:
+                    await ep.handle_stream(scope, replay, capture)
+            else:
+                await ep.handle_messages(scope, replay, capture)
+        except asyncio.TimeoutError:
+            ok = False
+            error = f"网关请求超时（{timeout:g}s）"
+            if not capture.started:
+                await send_json(
+                    scope,
+                    receive,
+                    send,
+                    200,
+                    {"jsonrpc": "2.0", "id": calls[0].rpc_id, "error": {"code": -32001, "message": error}},
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            ok = False
+            error = str(exc)
+            raise
+        finally:
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            if ok:
+                error = extract_rpc_error(capture.status, bytes(capture.body))
+                ok = not error
+            await record_gateway_calls(
+                name, config, identity, calls, conversation_id, duration_ms, ok, error
+            )

@@ -297,6 +297,32 @@ class MCPGatewayServer(Base):
     )
 
 
+class MCPGatewayCall(Base):
+    """MCP 网关调用审计：每条入站 JSON-RPC 消息一行（匿名与未绑定能力也记录）。
+
+    user_id/capability_id 用默认空串而非外键：网关调用可匿名、也可未绑定能力。
+    """
+
+    __tablename__ = "mcp_gateway_calls"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    server_name: Mapped[str] = mapped_column(String(100), index=True)
+    capability_id: Mapped[str] = mapped_column(String(36), default="", index=True)
+    capability_version: Mapped[str] = mapped_column(String(50), default="")
+    user_id: Mapped[str] = mapped_column(String(36), default="", index=True)
+    username: Mapped[str] = mapped_column(String(64), default="")
+    source: Mapped[str] = mapped_column(String(16), default="")
+    # server_token | jwt | sso | anonymous
+    method: Mapped[str] = mapped_column(String(20), default="other")
+    # initialize | tools_list | tools_call | other
+    tool: Mapped[str] = mapped_column(String(255), default="")
+    conversation_id: Mapped[str] = mapped_column(String(64), default="")
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    ok: Mapped[bool] = mapped_column(Boolean, default=True)
+    error: Mapped[str] = mapped_column(String(300), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+
+
 class UserCapability(Base):
     """用户从市场加入的能力（「我的能力」集合）。"""
 

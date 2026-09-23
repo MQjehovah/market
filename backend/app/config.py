@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     # MCP 网关：True 时 api_token 为空则拒绝外部调用（强制配置令牌）
     mcp_gateway_require_token: bool = False
+    # MCP 网关滑动窗口限流（次/分钟，按用户/令牌指纹/IP）；0 = 关闭
+    mcp_gateway_rate_limit_per_min: int = 120
+    # MCP 网关 /stream 消息转发超时（秒）；<=0 = 关闭（/sse 长连接不设总超时）
+    mcp_gateway_request_timeout: float = 60.0
 
     # 种子数据
     seed_admin_username: str = "admin"

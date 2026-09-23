@@ -41,6 +41,23 @@ def create_access_token(user: User) -> str:
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
+def decode_local_token(token: str) -> dict | None:
+    """解本地 HS256 token；签名或格式无效返回 None（由调用方决定是否走 SSO 轨）。"""
+    settings = get_settings()
+    try:
+        return jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+    except jwt.PyJWTError:
+        return None
+
+
+def _credentials_exception() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="登录状态无效或已过期",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
 async def get_current_user(
     token: Annotated[str, Depends(oauth2_scheme)],
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -51,15 +68,9 @@ async def get_current_user(
     轨2（SSO）sub=工号：用户不存在自动建号（role=user，最小角色）；
     命中但已禁用 -> 403。两轨返回同类型 User 对象。
     """
-    credentials_exc = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="登录状态无效或已过期",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    settings = get_settings()
-    try:
-        payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
-    except jwt.PyJWTError:
+    credentials_exc = _credentials_exception()
+    payload = decode_local_token(token)
+    if payload is None:
         # 轨1失败：尝试 SSO 轨
         return await _resolve_sso_user(db, token, credentials_exc)
     user_id = payload.get("sub")
@@ -69,6 +80,28 @@ async def get_current_user(
     if user is None or not user.is_active:
         raise credentials_exc
     return user
+
+
+async def resolve_user_by_bearer(db: AsyncSession, token: str) -> tuple[User, str] | None:
+    """非依赖注入场景（MCP 网关等纯 ASGI）的双轨 Bearer 解析。
+
+    成功返回 (User, "jwt" | "sso")；token 无效、用户不存在/已禁用返回 None，
+    由调用方决定回退匿名还是 401。SSO 轨复用 _resolve_sso_user 的校验与映射。
+    """
+    payload = decode_local_token(token)
+    if payload is not None:
+        user_id = payload.get("sub")
+        if not user_id:
+            return None
+        user = await db.get(User, user_id)
+        if user is None or not user.is_active:
+            return None
+        return user, "jwt"
+    try:
+        user = await _resolve_sso_user(db, token, _credentials_exception())
+    except HTTPException:
+        return None
+    return user, "sso"
 
 
 async def _resolve_sso_user(

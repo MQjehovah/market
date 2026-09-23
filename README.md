@@ -109,6 +109,24 @@ MCP 注意：市场包必须是 `mcp.json` + `connection.json` + `tools.json` + 
 
 授权：`RUNTIME_ACCESS_ROLES` ∪ 作者 ∪ 已加入者 ∪ `access_policy`（open / admin_only / restricted）。
 
+## MCP 网关治理（鉴权 / 审计 / 限流 / 超时）
+
+`/api/mcp-gateway/{name}/{sse|messages|stream}` 入站鉴权顺序（`authenticate_request`）：
+
+1. per-server `api_token` 精确匹配（`X-Gateway-Token` 或 `Authorization: Bearer`）；
+2. Bearer 走本地 HS256 JWT（与门户登录同签发）；
+3. Bearer 走 SSO/OIDC RS256（复用 `get_current_user` 双轨校验与按工号/邮箱建号）；
+4. 都不匹配：`MCP_GATEWAY_REQUIRE_TOKEN=True` → 401；False → 匿名放行（source=anonymous）。
+
+配置了 `api_token` 的服务仍必须令牌匹配或持有效 JWT/SSO；未配置且 require_token=False 时匿名可用。
+
+- **审计**：`mcp_gateway_calls` 按每条 JSON-RPC 消息一行：服务名、绑定能力与版本、用户/来源、`initialize|tools_list|tools_call|other`、工具名、`X-Conversation-Id`（截断 64）、耗时、成功/错误（截断 300）。匿名与未绑定能力也记录；审计/用量写失败只告警，不影响调用。
+- **用量**：有登录用户且服务绑定了可用状态（published/deprecated/reviewing）的 mcp 能力时，tools/call 同时写 `usage_events`（`action=mcp_call`，含 tool）。
+- **限流**：60s 滑动窗口，身份键 user_id → 令牌指纹 → 客户端 IP；超限 429 + `Retry-After`。`MCP_GATEWAY_RATE_LIMIT_PER_MIN=0` 关闭（默认 120）。
+- **超时**：`/stream` 的 JSON-RPC 转发受 `MCP_GATEWAY_REQUEST_TIMEOUT`（默认 60s，≤0 关闭）约束，超时返回 JSON-RPC error(-32001) 并审计 ok=False；`/sse` 长连接不设总超时。
+
+新表 `mcp_gateway_calls` 由 `create_all` 自动创建，存量库无需手工 ALTER（`capability_id` 等新列走 `init_db` 轻量迁移）。
+
 ## 生命周期与审核
 
 `draft → reviewing → published → deprecated → archived`（另有 rejected / returned）。
