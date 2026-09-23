@@ -54,7 +54,10 @@ def _gateway_payload(
     by_capability: dict[str, MCPGatewayServer],
     by_name: dict[str, MCPGatewayServer],
 ) -> dict | None:
-    """mcp 能力对应的网关注册行：优先 capability_id 关联，回退同名且 enabled 的行。"""
+    """mcp 能力对应的网关注册行：优先 capability_id 关联，回退同名且 enabled 的行。
+
+    stream_url/sse_url 为能力级主入口（Bearer）；解析到登记服务时附 relay_url（服务级直连）。
+    """
     row = by_capability.get(cap.id)
     if row is None:
         row = by_name.get(cap.name)
@@ -62,12 +65,14 @@ def _gateway_payload(
             row = None
     if row is None:
         return None
+    name = quote(cap.name, safe="")
     return {
         "name": row.name,
         "transport": row.transport,
         "require_token": bool(get_settings().mcp_gateway_require_token),
-        "stream_url": f"/api/mcp-gateway/{row.name}/stream",
-        "sse_url": f"/api/mcp-gateway/{row.name}/sse",
+        "stream_url": f"/api/mcp-gateway/{name}/stream",
+        "sse_url": f"/api/mcp-gateway/{name}/sse",
+        "relay_url": f"/api/mcp-gateway/relay/{quote(row.name, safe='')}/stream",
     }
 
 

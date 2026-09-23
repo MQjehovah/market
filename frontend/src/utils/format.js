@@ -56,7 +56,7 @@ export const KIND_HINTS = {
   mcp: {
     shelf: 'brick',
     what: '连接器：给助手接外部系统。真正可调的是连上后发现的工具，单独下载不是一项服务。',
-    where: '随助手装到零号员工；桌面可连 /api/mcp-gateway/cap/{name}/sse（SSO Bearer）',
+    where: '随助手装到零号员工；桌面可连 /api/mcp-gateway/{name}/sse（SSO Bearer）',
     whoRuns: '问答助手通过连接器调用外部系统'
   },
   tool: {
@@ -204,7 +204,7 @@ export const CONSUME_WAYS = [
   { id: 'trial', label: '云端试用', api: 'POST /api/runtime/*', who: '详情页 / 我的能力（问答验证）' },
   { id: 'a2a', label: 'A2A 互调', api: 'Agent Card + tasks/send', who: 'Agent 之间' },
   { id: 'mcp_bridge', label: '市场 MCP 桥', api: 'marketplace_* tools', who: 'IDE / Agent 客户端' },
-  { id: 'gateway', label: 'MCP HTTP 网关', api: '/market/api/mcp-gateway/{name}', who: 'Dify 等' },
+  { id: 'gateway', label: 'MCP HTTP 网关', api: '/market/api/mcp-gateway/relay/{name}', who: 'Dify 等' },
   { id: 'join', label: '加入我的能力', api: 'POST /api/my/capabilities', who: '人（调用授权前提）' }
 ]
 

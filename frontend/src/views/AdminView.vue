@@ -597,15 +597,15 @@ function gatewayBindingLabel(s) {
 }
 
 function gatewayUrl(s) {
-  return `${window.location.origin}${__API_BASE__}/mcp-gateway/${s.name}/stream`
+  return `${window.location.origin}${__API_BASE__}/mcp-gateway/relay/${s.name}/stream`
 }
 
 function gatewaySseUrl(s) {
-  return `${window.location.origin}${__API_BASE__}/mcp-gateway/${s.name}/sse`
+  return `${window.location.origin}${__API_BASE__}/mcp-gateway/relay/${s.name}/sse`
 }
 
 function gatewayPreviewUrl(name) {
-  return `${window.location.origin}${__API_BASE__}/mcp-gateway/${name || '…'}/stream`
+  return `${window.location.origin}${__API_BASE__}/mcp-gateway/relay/${name || '…'}/stream`
 }
 
 function copyText(text, noticeRef) {

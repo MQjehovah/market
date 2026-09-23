@@ -9,13 +9,14 @@
    可以像连接普通 MCP server 一样调用，stdio 服务自动转成 HTTP（mcp-proxy 模式）。
 
 端点约定（挂在 /api/mcp-gateway 下）：
-    GET  /{name}/sse        SSE 传输的 MCP 服务（GET 建立连接）——管理员登记表
+    GET  /{name}/sse        SSE 传输的 MCP 能力（GET 建立连接）——能力级主入口
     POST /{name}/messages   SSE 客户端回传 JSON-RPC 消息
-    GET/POST/DELETE /{name}/stream   Streamable HTTP 传输的 MCP 服务
-    GET  /cap/{name}/sse    已发布 MCP 能力的桌面入口（Bearer = 市场/SSO/服务令牌）
-    POST /cap/{name}/messages
-    GET/POST/DELETE /cap/{name}/stream
-    能力名支持 name@version 钉版本；鉴权后限流/熔断；调用写 UsageEvent（含 conversation_id/耗时）
+    GET/POST/DELETE /{name}/stream   Streamable HTTP 传输的 MCP 能力
+    GET/POST/DELETE /relay/{name}/{sse|messages|stream}  管理员登记的 MCP 服务（服务级）
+    /cap/{name}/{kind}      能力级过渡别名，行为与裸路径一致
+    能力级入口（裸路径与 /cap 别名）Bearer = 市场/SSO/服务令牌，name 支持 name@version 钉版本；
+    服务级 /relay 用登记令牌（X-Gateway-Token/Bearer 精确匹配）。
+    鉴权后限流/熔断；调用写 UsageEvent（含 conversation_id/耗时）
 """
 
 import asyncio
@@ -572,7 +573,7 @@ class _ServerProxy:
 
     manager 每个客户端会话会调用一次 run()，我们在该会话内连接独立的上游，
     保证 stdio 子进程 / HTTP 会话的生命周期与客户端会话一致。
-    配置优先用 GatewayEndpoints 在鉴权后缓存的 config（能力级 /cap/{name}），
+    配置优先用 GatewayEndpoints 在鉴权后缓存的 config（能力级 /{name}，别名 /cap/{name}），
     否则回退登记表 loader。
     """
 
@@ -612,13 +613,17 @@ class _ServerProxy:
 
 
 class GatewayEndpoints:
-    """单个网关服务的入站端点：SSE + Streamable HTTP + 消息接收。"""
+    """单个网关端点的入站实现：SSE + Streamable HTTP + 消息接收。
 
-    def __init__(self, name: str, loader: ConfigLoader) -> None:
+    name：登记服务名，或能力级的 ``cap/{能力名}`` 路由键；同时作为 loader 回退键与审计名。
+    route_path：SSE 消息端点相对路径（服务级 ``relay/{name}``；能力级默认与 name 相同）。
+    """
+
+    def __init__(self, name: str, loader: ConfigLoader, route_path: str | None = None) -> None:
         self.name = name
         self._loader = loader
         self._cached_config: dict[str, Any] | None = None
-        self.sse = SseServerTransport(endpoint=f"/{name}/messages/")
+        self.sse = SseServerTransport(endpoint=f"/{(route_path or name).strip('/')}/messages/")
         self._stream_manager: StreamableHTTPSessionManager | None = None
         self._stream_task: asyncio.Task | None = None
         self._stream_ready = asyncio.Event()
@@ -714,16 +719,16 @@ class GatewayEndpoints:
 
 
 class GatewayRegistry:
-    """按服务名持有入站端点实例。"""
+    """按路由键持有入站端点实例（能力级 ``cap/{name}`` / 服务级登记名）。"""
 
     def __init__(self, loader: ConfigLoader) -> None:
         self._loader = loader
         self._endpoints: dict[str, GatewayEndpoints] = {}
 
-    def get(self, name: str) -> GatewayEndpoints:
+    def get(self, name: str, route_path: str | None = None) -> GatewayEndpoints:
         ep = self._endpoints.get(name)
         if ep is None:
-            ep = GatewayEndpoints(name, self._loader)
+            ep = GatewayEndpoints(name, self._loader, route_path)
             self._endpoints[name] = ep
         return ep
 
@@ -737,8 +742,8 @@ class GatewayRegistry:
 class GatewayIdentity:
     """入站请求身份来源：server_token | jwt | sso | service_token | anonymous。
 
-    仅用于审计归因；鉴权动作仍由 authorize_capability_gateway（/cap）与
-    check_token（服务级）执行，匿名仅服务级路由在未配置令牌时可能出现。
+    仅用于审计归因；鉴权动作仍由 authorize_capability_gateway（能力级 /{name} 与
+    /cap/{name} 别名）与 check_token（服务级 /relay/{name}）执行，匿名仅服务级路由在未配置令牌时可能出现。
     """
 
     source: str
@@ -993,7 +998,13 @@ async def send_json(scope, receive, send, status: int, body: dict) -> None:
 
 
 class GatewayASGIApp:
-    """挂在 /api/mcp-gateway 下的分发器：/{name}/{sse|messages|stream} 与 /cap/{name}/…。"""
+    """挂在 /api/mcp-gateway 下的分发器。
+
+    路由判定（保留 3 段先于 2 段的顺序）：
+    - 3 段 ``relay/{name}/{kind}`` → 服务级（登记表 + check_token）
+    - 3 段 ``cap/{name}/{kind}``   → 能力级过渡别名
+    - 2 段 ``{name}/{kind}``       → 能力级主入口（``relay`` / ``cap`` 为保留字，拒绝）
+    """
 
     def __init__(self, registry: GatewayRegistry, loader: ConfigLoader) -> None:
         self._registry = registry
@@ -1004,7 +1015,7 @@ class GatewayASGIApp:
             await send_json(scope, receive, send, 404, {"detail": "Not Found"})
             return
         # 挂载在 /api/mcp-gateway 下时，scope["path"] 仍是完整路径，
-        # 需要去掉 root_path（挂载前缀）后再解析 /{name}/{kind} 或 /cap/{name}/{kind}
+        # 需要去掉 root_path（挂载前缀）后再解析 /{name}/{kind}、/cap/{name}/{kind} 或 /relay/{name}/{kind}
         root = scope.get("root_path") or ""
         raw_path = scope.get("path") or ""
         if root and raw_path.startswith(root):
@@ -1012,20 +1023,12 @@ class GatewayASGIApp:
         from urllib.parse import unquote
 
         parts = [unquote(p) for p in raw_path.split("/") if p]
-        cap_route = len(parts) == 3 and parts[0] == "cap"
-        if cap_route:
+        route_path: str | None = None
+        if len(parts) == 3 and parts[0] == "relay":
+            # 服务级：原裸路由改名到 /relay，注册名与审计名保持为 name
             name, kind = parts[1], parts[2]
-            registry_key = f"cap/{name}"
-            config, err_status, err_body = await authorize_capability_gateway(scope, name)
-            if err_status is not None:
-                await send_json(scope, receive, send, err_status, err_body or {"detail": "未授权"})
-                return
-            if config is None:
-                await send_json(scope, receive, send, 502, {"detail": "无法构建上游配置"})
-                return
-        elif len(parts) == 2:
-            name, kind = parts
             registry_key = name
+            route_path = f"relay/{name}"
             config = await self._loader(name)
             if config is None or not config.get("enabled", True):
                 await send_json(scope, receive, send, 404, {"detail": f"网关服务 {name} 不存在或已停用"})
@@ -1035,10 +1038,38 @@ class GatewayASGIApp:
                     scope, receive, send, 401, {"detail": "网关令牌无效（X-Gateway-Token 或 Bearer）"}
                 )
                 return
+        elif (len(parts) == 3 and parts[0] == "cap") or len(parts) == 2:
+            # 能力级：裸路径为主入口，/cap 为过渡别名
+            if len(parts) == 3:
+                name, kind = parts[1], parts[2]
+            else:
+                name, kind = parts
+                if name in ("relay", "cap"):
+                    await send_json(
+                        scope,
+                        receive,
+                        send,
+                        404,
+                        {
+                            "detail": (
+                                f"网关端点不存在：{name} 为网关保留字，"
+                                "能力级请使用 /{能力名}/{kind}"
+                            )
+                        },
+                    )
+                    return
+            registry_key = f"cap/{name}"
+            config, err_status, err_body = await authorize_capability_gateway(scope, name)
+            if err_status is not None:
+                await send_json(scope, receive, send, err_status, err_body or {"detail": "未授权"})
+                return
+            if config is None:
+                await send_json(scope, receive, send, 502, {"detail": "无法构建上游配置"})
+                return
         else:
             await send_json(scope, receive, send, 404, {"detail": "网关端点不存在"})
             return
-        ep = self._registry.get(registry_key)
+        ep = self._registry.get(registry_key, route_path=route_path)
         identity = await self._audit_identity(config, scope)
         try:
             if kind == "sse":

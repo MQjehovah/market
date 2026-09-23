@@ -180,6 +180,7 @@ async def test_sync_gateway_binding_and_require_token(
         "require_token": False,
         "stream_url": "/api/mcp-gateway/gw-bound/stream",
         "sse_url": "/api/mcp-gateway/gw-bound/sse",
+        "relay_url": "/api/mcp-gateway/relay/gw-bound/stream",
     }
 
     # 打开 require_token 后同步结果变化
@@ -224,6 +225,7 @@ async def test_sync_gateway_null_and_name_fallback(client, publisher_headers, ad
     assert gateway is not None
     assert gateway["name"] == "gw-fallback"
     assert gateway["stream_url"] == "/api/mcp-gateway/gw-fallback/stream"
+    assert gateway["relay_url"] == "/api/mcp-gateway/relay/gw-fallback/stream"
 
 
 @pytest.mark.asyncio

@@ -103,7 +103,7 @@ MCP 注意：市场包必须是 `mcp.json` + `connection.json` + `tools.json` + 
 ## 消费矩阵（两条主路径）
 
 **员工装机（本地）**：发现 → 加入 → 宿主同步 / `cap install` → 零号员工或桌面本地执行。  
-**模型线上网关（不下载 zip）**：客户端只连 `marketplace_mcp`（或直调 `/api/runtime/*` / `/api/mcp-gateway/cap/*`），按授权在线调能力。
+**模型线上网关（不下载 zip）**：客户端只连 `marketplace_mcp`（或直调 `/api/runtime/*` / `/api/mcp-gateway/{name}/*`），按授权在线调能力。
 
 | 方式 | 接口 | 说明 |
 | --- | --- | --- |
@@ -115,8 +115,8 @@ MCP 注意：市场包必须是 `mcp.json` + `connection.json` + `tools.json` + 
 | **模型线上网关** | `marketplace_mcp` → `/api/runtime/*` | **推荐**：模型/IDE 不装包，搜目录并线上调 |
 | 云端 runtime | `POST /api/runtime/*`（支持 `name@version`） | tool 沙箱 invoke、agent 任务、skill 返回 SKILL.md、mcp call |
 | A2A | Agent Card + `tasks/send` | Agent 协议委派 |
-| MCP HTTP 网关 | `/api/mcp-gateway/{name}` | 管理员登记的平台连接器 |
-| 能力 MCP 网关 | `/api/mcp-gateway/cap/{name}/sse`（可 `name@version`） | 商品 MCP 代理（桌面 `gateway-sse`）；限流/熔断/审计 |
+| MCP HTTP 网关 | `/api/mcp-gateway/relay/{name}` | 管理员登记的平台连接器（服务级） |
+| 能力 MCP 网关 | `/api/mcp-gateway/{name}/sse`（可 `name@version`；`/cap/{name}/…` 过渡别名） | 商品 MCP 代理（桌面 `gateway-sse`）；限流/熔断/审计 |
 | 服务令牌 | `POST /api/admin/service-tokens` | M2M Bearer（`mkt_svc_…`），替代交互式登录 |
 | 加入我的能力 | `/api/my/capabilities` | 调用授权前提之一 |
 | 业务密钥托管 | 工作台 `/my/secrets` → `/api/my/secrets` | 用户 env 加密存库；网关/runtime 按用户注入 |
@@ -136,7 +136,7 @@ MCP 注意：市场包必须是 `mcp.json` + `connection.json` + `tools.json` + 
 
 ## MCP 网关治理（鉴权 / 审计 / 限流熔断 / 超时）
 
-- **鉴权**：能力级 `/api/mcp-gateway/cap/{name}/{sse|messages|stream}` 必须 Bearer（市场 JWT / SSO / 服务令牌，`name` 支持 `name@version`），再走运行时准入与 `distribution=local` 拦截；服务级 `/api/mcp-gateway/{name}/…` 用 `X-Gateway-Token`/Bearer 精确匹配登记令牌，未配置令牌时按 `MCP_GATEWAY_REQUIRE_TOKEN` 决定是否放行（匿名仅出现在此轨）。
+- **鉴权**：能力级 `/api/mcp-gateway/{name}/{sse|messages|stream}`（`/cap/{name}/…` 为过渡别名）必须 Bearer（市场 JWT / SSO / 服务令牌，`name` 支持 `name@version`），再走运行时准入与 `distribution=local` 拦截；服务级 `/api/mcp-gateway/relay/{name}/…` 用 `X-Gateway-Token`/Bearer 精确匹配登记令牌，未配置令牌时按 `MCP_GATEWAY_REQUIRE_TOKEN` 决定是否放行（匿名仅出现在此轨）。
 - **审计**：`persist_gateway_usage` 写 `UsageEvent`（mcp_connect / gateway_call，含 capability_version/耗时/conversation_id/source=platform）并累计 `usage_count`；另按每条入站 JSON-RPC 消息写 `mcp_gateway_calls` 一行（服务名、绑定能力与版本、用户/来源 `jwt|sso|service_token|server_token|anonymous`、`initialize|tools_list|tools_call|other`、工具名、`X-Conversation-Id`（截断 64）、耗时、成功/错误（截断 300）），匿名与未绑定能力也记录；审计写失败只告警，不影响调用。
 - **限流 / 熔断**：`gateway_governance` 以 `user:{id}` 限流（`MCP_GATEWAY_RATE_LIMIT_PER_MINUTE`，默认 120，超限 429）、以 `mcp:{name}` 熔断（连续失败阈值 / 冷却秒 `MCP_GATEWAY_CIRCUIT_*`，熔断 503）。
 - **超时**：`/stream` 的单条 JSON-RPC 转发受 `MCP_GATEWAY_REQUEST_TIMEOUT`（默认 60s，≤0 关闭）约束，超时返回 JSON-RPC error(-32001) 并审计 ok=False；`/sse` 长连接不设总超时。
@@ -186,7 +186,7 @@ config/hooks/<name>/
 
 **Catalog**：`GET /api/capabilities`（`shelf` / `include_bricks`）、详情、版本、同步、下载、`GET /api/meta/taxonomy`  
 **Governance**：发布/审核、调用权限、安装策略、用户、MCP 网关 CRUD  
-**Consume**：模型线上网关 `marketplace_mcp` → `/api/runtime/*`、A2A、`/api/mcp-gateway/cap/*`；员工装机 `host-sync` / `cap install`
+**Consume**：模型线上网关 `marketplace_mcp` → `/api/runtime/*`、A2A、`/api/mcp-gateway/{name}/*`；员工装机 `host-sync` / `cap install`
 
 ## 测试
 

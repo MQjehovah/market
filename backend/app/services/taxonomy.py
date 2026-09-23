@@ -49,7 +49,7 @@ KIND_META: dict[str, dict[str, str]] = {
     "mcp": {
         "shelf": "brick",
         "what": "连接器；真正可调的是发现出的 tools（≠ 市场 tool kind）",
-        "install": "mcp_servers.json（cap install --type mcp）；桌面走 /api/mcp-gateway/cap/{name}/sse",
+        "install": "mcp_servers.json（cap install --type mcp）；桌面走 /api/mcp-gateway/{name}/sse",
         "runs_in": "MCPManager / 能力级 HTTP 网关 / IDE",
         "local_install": "yes",
     },
@@ -155,11 +155,11 @@ CONSUME_WAYS = [
     {"id": "trial", "label": "云端 runtime", "api": "POST /api/runtime/*"},
     {"id": "a2a", "label": "A2A 互调", "api": "Agent Card + tasks/send"},
     {"id": "mcp_bridge", "label": "市场 MCP 桥", "api": "marketplace_*"},
-    {"id": "gateway", "label": "MCP HTTP 网关（管理员登记）", "api": "/api/mcp-gateway/{name}"},
+    {"id": "gateway", "label": "MCP HTTP 网关（管理员登记）", "api": "/api/mcp-gateway/relay/{name}"},
     {
         "id": "cap_gateway",
         "label": "能力 MCP 网关（商品代理）",
-        "api": "/api/mcp-gateway/cap/{name}/sse",
+        "api": "/api/mcp-gateway/{name}/sse",
     },
     {"id": "join", "label": "加入我的能力", "api": "POST /api/my/capabilities"},
 ]

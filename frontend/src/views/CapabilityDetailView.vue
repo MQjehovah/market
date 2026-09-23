@@ -405,7 +405,7 @@ const mcpClientConfigJson = computed(() => {
   } else if (transport === 'gateway') {
     const server = conn.server || schema.server || name
     entry.type = 'sse'
-    entry.baseUrl = `${window.location.origin}${__API_BASE__}/mcp-gateway/${server}/sse`
+    entry.baseUrl = `${window.location.origin}${__API_BASE__}/mcp-gateway/relay/${server}/sse`
   } else if (transport === 'sse') {
     entry.type = 'sse'
     entry.baseUrl = conn.url || schema.url || ''
