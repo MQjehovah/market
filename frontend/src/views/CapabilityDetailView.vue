@@ -17,6 +17,10 @@ import {
   OWNER_PROGRESS_STEPS,
   JOIN_VS_INSTALL_HINT,
   INSTALL_POLICY_LABELS,
+  DISTRIBUTION_LABELS,
+  RISK_DEFAULT_LABELS,
+  DISTRIBUTION_BADGE,
+  RISK_DEFAULT_BADGE,
   shelfLabel,
   formatDate,
   stars,
@@ -91,7 +95,10 @@ const editForm = reactive({
   description: '',
   category: '',
   tags: '',
-  visibility: 'internal'
+  visibility: 'internal',
+  distribution: 'both',
+  risk_default: 'read',
+  data_domain: ''
 })
 
 const isOwner = computed(() => cap.value && authState.user && cap.value.author_id === authState.user.id)
@@ -491,6 +498,9 @@ watch(cap, (c) => {
   editForm.category = c.category || ''
   editForm.tags = (c.tags || []).join(', ')
   editForm.visibility = c.visibility || 'internal'
+  editForm.distribution = c.distribution || 'both'
+  editForm.risk_default = c.risk_default || 'read'
+  editForm.data_domain = c.data_domain || ''
 })
 
 async function loadMcpPackageMeta() {
@@ -885,7 +895,10 @@ async function saveMeta() {
       description: editForm.description,
       category: editForm.category,
       tags: editForm.tags.split(/[,，]/).map((s) => s.trim()).filter(Boolean),
-      visibility: editForm.visibility
+      visibility: editForm.visibility,
+      distribution: editForm.distribution,
+      risk_default: editForm.risk_default,
+      data_domain: editForm.data_domain.trim()
     })
     notice.value = '草稿已保存'
     await load()
@@ -989,6 +1002,8 @@ onMounted(() => {
           <span v-if="cap.latest" class="badge badge-primary">最新版</span>
           <span class="badge">{{ TYPE_LABELS[cap.type] }}</span>
           <span v-if="shelfName" class="badge badge-primary">{{ shelfName }}</span>
+          <span class="badge" :class="DISTRIBUTION_BADGE[cap.distribution]">{{ DISTRIBUTION_LABELS[cap.distribution] || cap.distribution }}</span>
+          <span class="badge" :class="RISK_DEFAULT_BADGE[cap.risk_default]">{{ RISK_DEFAULT_LABELS[cap.risk_default] || cap.risk_default }}</span>
           <span v-if="isMcp" class="badge">{{ mcpTransport }}</span>
           <span
             v-if="isMcp && isPublished"
@@ -1579,6 +1594,33 @@ onMounted(() => {
                 </select>
               </div>
             </div>
+            <div class="grid mt-12" style="grid-template-columns: 1fr 1fr">
+              <div class="field">
+                <label>分发方式</label>
+                <select v-model="editForm.distribution" class="select">
+                  <option v-for="(label, key) in DISTRIBUTION_LABELS" :key="key" :value="key">
+                    {{ label }}（{{ key }}）
+                  </option>
+                </select>
+              </div>
+              <div class="field">
+                <label>默认风险</label>
+                <select v-model="editForm.risk_default" class="select">
+                  <option v-for="(label, key) in RISK_DEFAULT_LABELS" :key="key" :value="key">
+                    {{ label }}（{{ key }}）
+                  </option>
+                </select>
+              </div>
+            </div>
+            <div class="field mt-12">
+              <label>数据域（≤64 字）</label>
+              <input
+                v-model="editForm.data_domain"
+                class="input"
+                maxlength="64"
+                placeholder="设备/客户/财务/知识…"
+              />
+            </div>
             <div class="field mt-12">
               <label>标签（逗号分隔）</label>
               <input v-model="editForm.tags" class="input" />
@@ -1806,6 +1848,9 @@ onMounted(() => {
             <div><dt>分类</dt><dd>{{ shelfName || '—' }}</dd></div>
             <div><dt>版本</dt><dd>v{{ cap.version }}</dd></div>
             <div><dt>可见性</dt><dd>{{ VISIBILITY_LABELS[cap.visibility] }}</dd></div>
+            <div><dt>分发方式</dt><dd>{{ DISTRIBUTION_LABELS[cap.distribution] || cap.distribution || '—' }}</dd></div>
+            <div><dt>默认风险</dt><dd>{{ RISK_DEFAULT_LABELS[cap.risk_default] || cap.risk_default || '—' }}</dd></div>
+            <div><dt>数据域</dt><dd>{{ cap.data_domain || '—' }}</dd></div>
             <div v-if="cap.category"><dt>分类</dt><dd>{{ cap.category }}</dd></div>
             <div><dt>作者</dt><dd>{{ cap.author_name || '-' }}</dd></div>
             <div v-if="isMcp"><dt>传输</dt><dd>{{ mcpTransport }}</dd></div>

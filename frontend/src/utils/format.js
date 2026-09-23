@@ -285,6 +285,32 @@ export const INSTALL_POLICY_LABELS = {
   required: '必装'
 }
 
+/** 分发方式（distribution） */
+export const DISTRIBUTION_LABELS = {
+  local: '本地',
+  remote: '远程',
+  both: '全部'
+}
+
+/** 默认风险（risk_default） */
+export const RISK_DEFAULT_LABELS = {
+  read: '只读',
+  write: '写入',
+  destructive: '破坏性'
+}
+
+export const DISTRIBUTION_BADGE = {
+  local: '',
+  remote: 'badge-primary',
+  both: 'badge-success'
+}
+
+export const RISK_DEFAULT_BADGE = {
+  read: '',
+  write: 'badge-warning',
+  destructive: 'badge-danger'
+}
+
 /** 加入≠安装：统一文案，避免 Browse / My / Detail 各写一套 */
 export const JOIN_VS_INSTALL_HINT =
   '「加入」只完成授权。在「我的能力」里保持启用后，零号员工 / 桌面会按 host-sync 拉取；复制 cap install 仅作兼容。也可以直接写你要办的事。'

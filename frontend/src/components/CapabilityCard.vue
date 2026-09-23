@@ -6,6 +6,10 @@ import {
   TYPE_LABELS,
   TYPE_LETTER,
   VISIBILITY_LABELS,
+  DISTRIBUTION_LABELS,
+  RISK_DEFAULT_LABELS,
+  DISTRIBUTION_BADGE,
+  RISK_DEFAULT_BADGE,
   shelfLabel,
   stars
 } from '../utils/format'
@@ -54,6 +58,18 @@ const fromPlugin = computed(() => (props.cap.tags || []).includes('plugin-compon
       <h3 class="cap-name">{{ cap.name }}</h3>
       <p class="cap-desc">{{ cap.description || '暂无描述' }}</p>
       <div class="cap-tags">
+        <span
+          v-if="cap.distribution"
+          class="badge"
+          :class="DISTRIBUTION_BADGE[cap.distribution]"
+          :title="`分发方式：${DISTRIBUTION_LABELS[cap.distribution] || cap.distribution}`"
+        >{{ DISTRIBUTION_LABELS[cap.distribution] || cap.distribution }}</span>
+        <span
+          v-if="cap.risk_default"
+          class="badge"
+          :class="RISK_DEFAULT_BADGE[cap.risk_default]"
+          :title="`默认风险：${RISK_DEFAULT_LABELS[cap.risk_default] || cap.risk_default}`"
+        >{{ RISK_DEFAULT_LABELS[cap.risk_default] || cap.risk_default }}</span>
         <span v-if="displayCategory" class="badge">{{ displayCategory }}</span>
         <span v-if="fromPlugin" class="badge badge-primary">来自插件</span>
         <span v-if="policy !== 'optional'" class="badge badge-warning">{{ INSTALL_POLICY_LABELS[policy] || policy }}</span>

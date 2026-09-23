@@ -121,6 +121,7 @@ const gatewayForm = ref({
   env: '{}',
   cwd: '',
   api_token: '',
+  capability_id: '',
   enabled: true
 })
 const gatewayTest = ref({})
@@ -454,6 +455,7 @@ function openGatewayCreate() {
     env: '{}',
     cwd: '',
     api_token: '',
+    capability_id: '',
     enabled: true
   }
   gatewayNotice.value = ''
@@ -473,6 +475,7 @@ function openGatewayEdit(s) {
     env: JSON.stringify(s.env || {}, null, 2),
     cwd: s.cwd || '',
     api_token: s.api_token || '',
+    capability_id: s.capability_id || '',
     enabled: s.enabled
   }
   gatewayNotice.value = ''
@@ -517,6 +520,7 @@ async function saveGateway() {
     env,
     cwd: f.cwd.trim(),
     api_token: f.api_token,
+    capability_id: f.capability_id || '',
     enabled: f.enabled
   }
   try {
@@ -572,6 +576,24 @@ async function testGateway(s) {
   } catch (e) {
     gatewayTest.value = { ...gatewayTest.value, [s.id]: { connected: false, error: e.message } }
   }
+}
+
+const mcpCapabilities = computed(() =>
+  [...(allCaps.value || [])]
+    .filter((c) => c.type === 'mcp')
+    .sort((a, b) => `${a.name}@${a.version}`.localeCompare(`${b.name}@${b.version}`))
+)
+
+function gatewayBoundCap(s) {
+  const id = s?.capability_id || ''
+  if (!id) return null
+  return (allCaps.value || []).find((c) => c.id === id) || null
+}
+
+function gatewayBindingLabel(s) {
+  const cap = gatewayBoundCap(s)
+  if (cap) return `${cap.name}@${cap.version}`
+  return s?.capability_id ? `${s.capability_id.slice(0, 8)}…` : '—'
 }
 
 function gatewayUrl(s) {
@@ -1051,6 +1073,7 @@ watch(
               </div>
             </div>
             <code class="gw-code">{{ s.transport === 'stdio' ? `${s.command} ${(s.args || []).join(' ')}` : s.url }}</code>
+            <div class="gw-binding">绑定能力：{{ gatewayBindingLabel(s) }}</div>
             <div class="gw-card-actions">
               <button class="btn btn-sm" @click="copyText(gatewayUrl(s))">复制 Stream</button>
               <button class="btn btn-sm" @click="copyText(gatewaySseUrl(s))">复制 SSE</button>
@@ -1269,6 +1292,19 @@ watch(
           <input v-model="gatewayForm.description" class="input" placeholder="这个 MCP 服务提供什么能力" />
         </div>
 
+        <div class="field">
+          <label>绑定能力（可选，仅 mcp 类型）</label>
+          <select v-model="gatewayForm.capability_id" class="select">
+            <option value="">不绑定</option>
+            <option v-for="c in mcpCapabilities" :key="c.id" :value="c.id">
+              {{ c.name }}@{{ c.version }}
+            </option>
+          </select>
+          <div class="muted" style="font-size: 12px; margin-top: 4px">
+            绑定后网关调用按该能力计审计；一个能力只能绑定一个网关服务。
+          </div>
+        </div>
+
         <template v-if="gatewayForm.transport === 'stdio'">
           <div class="grid" style="grid-template-columns: 2fr 1fr">
             <div class="field">
@@ -1415,6 +1451,7 @@ watch(
 .gw-card-top { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; margin-bottom: 10px; }
 .gw-badges { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
 .gw-card .gw-code { display: block; margin: 8px 0 12px; }
+.gw-binding { font-size: 12px; color: var(--muted); margin: -6px 0 10px; }
 .gw-card-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .gw-test { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
 .token-h { margin: 0 0 10px; font-size: 15px; }

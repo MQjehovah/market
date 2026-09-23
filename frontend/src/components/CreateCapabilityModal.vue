@@ -13,6 +13,8 @@ import {
   TYPE_LABELS,
   VISIBLE_CREATE_KINDS,
   HIDDEN_BROWSE_KINDS,
+  DISTRIBUTION_LABELS,
+  RISK_DEFAULT_LABELS,
   canOnlineEdit,
   needsZipUpload,
   nextRouteAfterCreate
@@ -37,6 +39,9 @@ const form = reactive({
   visibility: 'internal',
   access_policy: 'open',
   allowedUsers: '',
+  distribution: 'both',
+  risk_default: 'read',
+  data_domain: '',
   workflowJson: '{\n  "nodes": [],\n  "edges": []\n}'
 })
 const error = ref('')
@@ -151,7 +156,10 @@ async function create() {
       tags,
       visibility: form.visibility,
       access_policy: form.access_policy,
-      allowed_users: allowedUsers
+      allowed_users: allowedUsers,
+      distribution: form.distribution,
+      risk_default: form.risk_default,
+      data_domain: form.data_domain.trim()
     }
     if (form.type === 'workflow') {
       let workflow
@@ -312,6 +320,35 @@ async function create() {
             <label>白名单用户名（逗号分隔）</label>
             <input v-model="form.allowedUsers" class="input" placeholder="zhangsan, lisi" />
           </div>
+        </div>
+
+        <div class="grid mt-12" style="grid-template-columns: 1fr 1fr">
+          <div class="field">
+            <label>分发方式</label>
+            <select v-model="form.distribution" class="select">
+              <option v-for="(label, key) in DISTRIBUTION_LABELS" :key="key" :value="key">
+                {{ label }}（{{ key }}）
+              </option>
+            </select>
+          </div>
+          <div class="field">
+            <label>默认风险</label>
+            <select v-model="form.risk_default" class="select">
+              <option v-for="(label, key) in RISK_DEFAULT_LABELS" :key="key" :value="key">
+                {{ label }}（{{ key }}）
+              </option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field mt-12">
+          <label>数据域（≤64 字）</label>
+          <input
+            v-model="form.data_domain"
+            class="input"
+            maxlength="64"
+            placeholder="设备/客户/财务/知识…"
+          />
         </div>
 
         <div class="field mt-12">
