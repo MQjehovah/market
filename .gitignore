@@ -15,3 +15,6 @@ dist/
 Thumbs.db
 
 logs/
+
+# 本地分析/计划文档（不随上游合并推送）
+docs/
