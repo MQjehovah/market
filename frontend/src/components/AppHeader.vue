@@ -23,11 +23,13 @@ const isDiscoverActive = computed(
   () => route.path === '/' || route.path.startsWith('/capabilities/')
 )
 const isMyActive = computed(() => {
-  if (route.path === '/my') return true
+  if (route.path === '/my' || route.path === '/my/secrets') return false
   return ['/agents/', '/skills/', '/tools/', '/mcp/', '/workflows/', '/rules/', '/commands/', '/hooks/'].some((p) =>
     route.path.startsWith(p)
   )
 })
+const isMyCapsActive = computed(() => route.path === '/my')
+const isMySecretsActive = computed(() => route.path === '/my/secrets')
 const adminSection = computed(() =>
   route.path.startsWith('/admin/') ? String(route.params.section || '') : ''
 )
@@ -130,11 +132,16 @@ watch(isAdmin, loadAdminBadge)
           <router-link
             to="/my"
             class="nav-item"
-            active-class="nav-rr"
-            exact-active-class="nav-rr"
-            :class="{ active: isMyActive }"
+            :class="{ active: isMyCapsActive || isMyActive }"
           >
             我的能力
+          </router-link>
+          <router-link
+            to="/my/secrets"
+            class="nav-item"
+            :class="{ active: isMySecretsActive }"
+          >
+            业务密钥
           </router-link>
         </template>
         <router-link v-else to="/login" class="nav-item">登录后管理</router-link>

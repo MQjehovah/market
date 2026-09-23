@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     mcp_gateway_circuit_fail_threshold: int = 5
     mcp_gateway_circuit_cooldown_seconds: int = 60
 
+    # 用户业务密钥托管：Fernet 密钥；留空则由 JWT_SECRET 派生（生产建议单独配置）
+    secret_vault_key: str = ""
+
     # 种子数据
     seed_admin_username: str = "admin"
     seed_admin_password: str = "admin123"

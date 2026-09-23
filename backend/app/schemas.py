@@ -286,6 +286,36 @@ class UsageEventOut(BaseModel):
     created_at: datetime
 
 
+class UserSecretUpsert(BaseModel):
+    key_name: str = Field(min_length=1, max_length=128)
+    value: str = Field(min_length=1, max_length=8192)
+    # 空=全局；填 capability_id 为该能力专用覆盖
+    scope: str = Field(default="", max_length=36)
+    label: str = Field(default="", max_length=128)
+
+
+class UserSecretBulkUpsert(BaseModel):
+    secrets: dict[str, str] = Field(default_factory=dict, description="key_name → 明文值")
+    scope: str = Field(default="", max_length=36, description="空=全局；或 capability_id")
+
+
+class UserSecretOut(BaseModel):
+    id: str
+    key_name: str
+    scope: str = ""
+    label: str = ""
+    has_value: bool = True
+    updated_at: datetime | None = None
+    created_at: datetime | None = None
+
+
+class UserSecretStatusOut(BaseModel):
+    required: list[str] = Field(default_factory=list)
+    filled: list[str] = Field(default_factory=list)
+    missing: list[str] = Field(default_factory=list)
+    complete: bool = False
+
+
 class ServiceTokenCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     scopes: list[str] = Field(default_factory=lambda: ["runtime", "gateway", "sync"])

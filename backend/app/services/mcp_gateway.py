@@ -184,21 +184,25 @@ def rewrite_stdio_script_arg(tmpdir: Path, arg: str) -> str:
     return arg
 
 
-def resolve_placeholders(value: Any) -> Any:
-    """递归解析 ${VAR} / ${VAR:default} 占位符（env/headers/args 中的敏感信息）。"""
+def resolve_placeholders(value: Any, extra_env: dict[str, str] | None = None) -> Any:
+    """递归解析 ${VAR} / ${VAR:default} 占位符（env/headers/args 中的敏感信息）。
+
+    extra_env：用户托管密钥等覆盖层，优先于进程环境变量。
+    """
+    overlay = extra_env or {}
 
     def _sub(m: re.Match) -> str:
         full = m.group(1).strip()
         var, _, default = full.partition(":")
-        real = os.environ.get(var, "")
+        real = overlay.get(var) or os.environ.get(var, "")
         if not real and default:
             real = default
         return real
 
     if isinstance(value, dict):
-        return {k: resolve_placeholders(v) for k, v in value.items()}
+        return {k: resolve_placeholders(v, extra_env) for k, v in value.items()}
     if isinstance(value, list):
-        return [resolve_placeholders(v) for v in value]
+        return [resolve_placeholders(v, extra_env) for v in value]
     if isinstance(value, str):
         return ENV_PLACEHOLDER.sub(_sub, value)
     return value
@@ -255,6 +259,7 @@ async def connect_upstream(
         raw_files = config.get("package_files")
         package_files = raw_files if isinstance(raw_files, dict) else None
 
+    user_env = config.get("_user_env") if isinstance(config.get("_user_env"), dict) else {}
     try:
         if transport == "stdio":
             command = config.get("command") or "python"
@@ -262,7 +267,7 @@ async def connect_upstream(
             if str(command).strip().lower() in _GENERIC_PYTHON:
                 command = sys.executable
             args = list(config.get("args") or [])
-            env = resolve_placeholders(config.get("env") or {})
+            env = resolve_placeholders(config.get("env") or {}, user_env)
             cwd: str | None = config.get("cwd") or None
             if package_files:
                 tmpdir = Path(tempfile.mkdtemp(prefix=f"mcp-gw-{sanitize(config['name'])}-"))
@@ -272,6 +277,8 @@ async def connect_upstream(
                     args = [rewrite_stdio_script_arg(tmpdir, a) for a in args]
             merged_env = dict(os.environ)
             merged_env["PYTHONUNBUFFERED"] = "1"
+            if user_env:
+                merged_env.update({str(k): str(v) for k, v in user_env.items()})
             merged_env.update(env)
             params = StdioServerParameters(command=command, args=args, env=merged_env, cwd=cwd)
             # 真实文件描述符：anyio/subprocess 不能把 stderr 接到 StringIO
@@ -303,7 +310,7 @@ async def connect_upstream(
             url = config.get("url") or ""
             if not url:
                 raise RuntimeError("http 传输需要配置 url")
-            headers = resolve_placeholders(config.get("headers") or {})
+            headers = resolve_placeholders(config.get("headers") or {}, user_env)
             timeout = httpx.Timeout(
                 connect=CONNECT_TIMEOUT, read=CALL_TIMEOUT, write=CALL_TIMEOUT, pool=CALL_TIMEOUT
             )
@@ -322,7 +329,7 @@ async def connect_upstream(
             url = config.get("url") or ""
             if not url:
                 raise RuntimeError("sse 传输需要配置 url")
-            headers = resolve_placeholders(config.get("headers") or {})
+            headers = resolve_placeholders(config.get("headers") or {}, user_env)
             async with asyncio.timeout(CONNECT_TIMEOUT):
                 async with sse_client(
                     url, headers=headers, timeout=CONNECT_TIMEOUT, sse_read_timeout=CALL_TIMEOUT
@@ -497,6 +504,10 @@ async def authorize_capability_gateway(
         if config is None:
             return None, 404, {"detail": f"MCP {name} 缺少 connection.json"}
         config = dict(config)
+        from app.services.secret_vault import attach_user_env, resolve_user_env
+
+        user_env = await resolve_user_env(db, user.id, capability_id=cap.id)
+        config = attach_user_env(config, user_env)
         config["_audit"] = {
             "user_id": user.id,
             "capability_id": cap.id,

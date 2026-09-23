@@ -8,10 +8,27 @@ from sqlalchemy.orm import joinedload, selectinload
 
 from app.auth import CurrentUser, DbSession
 from app.models import Capability, UserCapability
-from app.schemas import HostSyncOut, MessageOut, MyCapabilityAdd, MyCapabilityPatch
+from app.schemas import (
+    HostSyncOut,
+    MessageOut,
+    MyCapabilityAdd,
+    MyCapabilityPatch,
+    UserSecretBulkUpsert,
+    UserSecretOut,
+    UserSecretStatusOut,
+    UserSecretUpsert,
+)
 from app.services.capabilities import parse_semver, to_capability_out
 from app.services.dashboard_consume import attach_consumer_fields
 from app.services.install_policy import ensure_default_on_joins, is_required_policy
+from app.services.secret_vault import (
+    delete_secret,
+    list_secrets,
+    secret_status,
+    to_secret_out,
+    upsert_secret,
+    upsert_secrets_bulk,
+)
 from app.services.taxonomy import KIND_META
 
 router = APIRouter(prefix="/api/my", tags=["my"])
@@ -352,3 +369,63 @@ async def remove_capability(capability_id: str, db: DbSession, user: CurrentUser
     if cap is not None and cap.type == "plugin" and removed > 1:
         return MessageOut(message=f"已从我的能力移除插件及其 {removed - 1} 个组件")
     return MessageOut(message="已从我的能力移除")
+
+
+# ── 业务密钥托管 ──────────────────────────────────────────────
+
+
+@router.get("/secrets", response_model=list[UserSecretOut])
+async def my_secrets(db: DbSession, user: CurrentUser, scope: str | None = None):
+    """列出我的托管密钥元数据（从不返回明文）。scope 不传=全部；传空串=仅全局。"""
+    rows = await list_secrets(db, user.id, scope=scope)
+    return [UserSecretOut(**to_secret_out(r)) for r in rows]
+
+
+@router.put("/secrets", response_model=UserSecretOut)
+async def put_secret(data: UserSecretUpsert, db: DbSession, user: CurrentUser):
+    """写入/更新一条托管密钥（明文仅本次请求携带，落库为 Fernet 密文）。"""
+    row = await upsert_secret(
+        db,
+        user.id,
+        key_name=data.key_name,
+        value=data.value,
+        scope=data.scope,
+        label=data.label,
+    )
+    await db.commit()
+    await db.refresh(row)
+    return UserSecretOut(**to_secret_out(row))
+
+
+@router.put("/secrets/bulk", response_model=list[UserSecretOut])
+async def put_secrets_bulk(data: UserSecretBulkUpsert, db: DbSession, user: CurrentUser):
+    """批量写入（常用于能力详情页一次保存 required_env）。空值跳过。"""
+    rows = await upsert_secrets_bulk(
+        db, user.id, secrets=data.secrets, scope=data.scope
+    )
+    await db.commit()
+    for row in rows:
+        await db.refresh(row)
+    return [UserSecretOut(**to_secret_out(r)) for r in rows]
+
+
+@router.get("/secrets/status", response_model=UserSecretStatusOut)
+async def secrets_status(
+    db: DbSession,
+    user: CurrentUser,
+    keys: str = "",
+    capability_id: str = "",
+):
+    """检查 required keys 是否已在托管中填齐。keys 为逗号分隔。"""
+    required = [k.strip() for k in keys.split(",") if k.strip()]
+    status = await secret_status(
+        db, user.id, required_keys=required, capability_id=capability_id or None
+    )
+    return UserSecretStatusOut(**status)
+
+
+@router.delete("/secrets/{secret_id}", response_model=MessageOut)
+async def remove_secret(secret_id: str, db: DbSession, user: CurrentUser):
+    await delete_secret(db, user.id, secret_id)
+    await db.commit()
+    return MessageOut(message="已删除托管密钥")

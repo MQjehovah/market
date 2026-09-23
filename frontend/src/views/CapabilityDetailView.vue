@@ -289,57 +289,35 @@ const mcpEnvRows = computed(() => {
   }))
 })
 
-/** 安装引导：在页面填写后生成可粘贴进 mcp_servers.json 的片段（仅本地，不上传） */
-const mcpEnvDraft = ref({})
-const mcpEnableAfterFill = ref(false)
+/** 业务密钥：详情只展示托管状态，填写在工作台 /my/secrets */
+const vaultStatus = ref({ required: [], filled: [], missing: [], complete: false })
+
+async function loadVaultStatus() {
+  if (!authState.token || !cap.value?.id || !mcpEnvRows.value.length) {
+    vaultStatus.value = { required: [], filled: [], missing: [], complete: false }
+    return
+  }
+  const keys = mcpEnvRows.value.map((r) => r.key).join(',')
+  try {
+    vaultStatus.value = await api.get(
+      `/my/secrets/status?keys=${encodeURIComponent(keys)}&capability_id=${encodeURIComponent(cap.value.id)}`
+    )
+  } catch {
+    vaultStatus.value = {
+      required: mcpEnvRows.value.map((r) => r.key),
+      filled: [],
+      missing: mcpEnvRows.value.map((r) => r.key),
+      complete: false
+    }
+  }
+}
 
 watch(
-  mcpEnvRows,
-  (rows) => {
-    const next = { ...mcpEnvDraft.value }
-    for (const row of rows) {
-      if (next[row.key] === undefined) next[row.key] = ''
-    }
-    mcpEnvDraft.value = next
-  },
-  { immediate: true }
-)
-
-const mcpEnvAllFilled = computed(() =>
-  mcpEnvRows.value.every((r) => String(mcpEnvDraft.value[r.key] || '').trim())
-)
-
-function isSecretEnvKey(key) {
-  const k = String(key || '').toLowerCase()
-  return ['password', 'secret', 'token', 'key', 'passwd', 'credential'].some((s) => k.includes(s))
-}
-
-function buildFilledMcpEntry() {
-  const base = mcpConnection.value && typeof mcpConnection.value === 'object'
-    ? { ...mcpConnection.value }
-    : {}
-  const env = {}
-  for (const row of mcpEnvRows.value) {
-    const v = String(mcpEnvDraft.value[row.key] || '').trim()
-    env[row.key] = v || row.hint
+  () => [cap.value?.id, mcpEnvRows.value.map((r) => r.key).join(','), authState.token],
+  () => {
+    loadVaultStatus()
   }
-  return {
-    ...base,
-    name: cap.value?.name || base.name || '',
-    env,
-    enabled: mcpEnableAfterFill.value && mcpEnvAllFilled.value
-  }
-}
-
-function copyFilledMcpSnippet() {
-  const entry = buildFilledMcpEntry()
-  const text = JSON.stringify([entry], null, 2)
-  navigator.clipboard?.writeText(text).then(() => {
-    myNotice.value = mcpEnvAllFilled.value
-      ? '已复制 mcp_servers.json 片段（含所填凭据）。合并到零号员工配置后重启会话。'
-      : '已复制片段（仍有空项保留占位）。填齐后再启用。'
-  })
-}
+)
 
 const mcpTrial = computed(() =>
   mcpTrialMode({
@@ -1172,35 +1150,37 @@ onMounted(() => {
               </table>
 
               <div v-if="mcpEnvRows.length" class="env-fill-box">
-                <h4 class="env-fill-title">安装到零号员工前 · 填写凭据</h4>
+                <h4 class="env-fill-title">业务凭据</h4>
                 <p class="muted" style="font-size: 13px; margin: 0 0 10px">
-                  凭据只在本机填写，不会上传到市场。填齐后可复制
-                  <code>mcp_servers.json</code> 片段，合并到零号员工配置再启用。
-                  也可用 <code>cap install {{ cap.name }} --type mcp</code> 在终端交互填写。
+                  平台轨密钥请在工作台「业务密钥」托管（加密存库，线上试用自动注入）。
+                  本地轨可用 <code>cap install {{ cap.name }} --type mcp</code> 或本机
+                  <code>mcp_servers.json</code>。
                 </p>
-                <div class="env-fill-grid">
-                  <div v-for="row in mcpEnvRows" :key="'draft-' + row.key" class="field">
-                    <label><code>{{ row.key }}</code></label>
-                    <input
-                      v-model="mcpEnvDraft[row.key]"
-                      class="input"
-                      :type="isSecretEnvKey(row.key) ? 'password' : 'text'"
-                      :placeholder="row.hint"
-                      autocomplete="off"
-                    />
-                  </div>
-                </div>
-                <label class="checkbox" style="margin-top: 10px">
-                  <input v-model="mcpEnableAfterFill" type="checkbox" :disabled="!mcpEnvAllFilled" />
-                  片段中直接 <code>enabled: true</code>（须全部填齐）
-                </label>
-                <div class="flex" style="gap: 8px; margin-top: 12px; flex-wrap: wrap">
-                  <button class="btn btn-primary" type="button" @click="copyFilledMcpSnippet">
-                    复制 mcp_servers.json 片段
-                  </button>
-                  <span v-if="!mcpEnvAllFilled" class="muted" style="font-size: 12px; align-self: center">
-                    还有 {{ mcpEnvRows.filter((r) => !String(mcpEnvDraft[r.key] || '').trim()).length }} 项未填
-                  </span>
+                <p v-if="authState.token" class="muted" style="font-size: 12px; margin: 0 0 10px">
+                  <template v-if="vaultStatus.complete">
+                    托管已齐：
+                    <code v-for="k in vaultStatus.filled" :key="'v-' + k" style="margin-right: 6px">{{ k }}</code>
+                  </template>
+                  <template v-else-if="vaultStatus.filled?.length">
+                    已填
+                    <code v-for="k in vaultStatus.filled" :key="'v-' + k" style="margin-right: 6px">{{ k }}</code>
+                    · 仍缺 {{ (vaultStatus.missing || []).join(', ') }}
+                  </template>
+                  <template v-else>
+                    尚未托管：{{ mcpEnvRows.map((r) => r.key).join(', ') }}
+                  </template>
+                </p>
+                <div class="flex" style="gap: 8px; flex-wrap: wrap">
+                  <router-link
+                    v-if="authState.token"
+                    class="btn btn-primary"
+                    :to="{ path: '/my/secrets', query: { capability_id: cap.id } }"
+                  >去工作台管理密钥</router-link>
+                  <router-link
+                    v-else
+                    class="btn btn-primary"
+                    :to="{ path: '/login', query: { redirect: `/my/secrets?capability_id=${cap.id}` } }"
+                  >登录后管理密钥</router-link>
                 </div>
               </div>
             </div>

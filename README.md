@@ -98,7 +98,7 @@ cd frontend && npm install && npm run dev
 进阶：技能 / 连接器 / 编排函数 / 助手创建后会进入**在线编辑**（保存即生成能力包），再提交审核；也可先上架组件再发助手并在依赖里引用（依赖须已上架）。安装包仍以上传 zip 为主。
 
 MCP 注意：市场包必须是 `mcp.json` + `connection.json` + `tools.json` + `security.json`；不能直接上传 agent 仓里的 `mcp-server.json`。  
-连接器若声明 `env`（如 `ERP_*` / `DB_*`），安装到零号员工时请用详情页「填写凭据」或 `cap install … --type mcp` 交互填入后再 `enabled: true`。
+连接器若声明 `env`（如 `ERP_*` / `DB_*`），请在工作台 **业务密钥**（`/my/secrets`）托管；能力详情只显示是否已齐。本地轨仍可用 `cap install … --type mcp` 或本机 `mcp_servers.json`。
 
 ## 消费矩阵（两条主路径）
 
@@ -119,6 +119,7 @@ MCP 注意：市场包必须是 `mcp.json` + `connection.json` + `tools.json` + 
 | 能力 MCP 网关 | `/api/mcp-gateway/cap/{name}/sse`（可 `name@version`） | 商品 MCP 代理（桌面 `gateway-sse`）；限流/熔断/审计 |
 | 服务令牌 | `POST /api/admin/service-tokens` | M2M Bearer（`mkt_svc_…`），替代交互式登录 |
 | 加入我的能力 | `/api/my/capabilities` | 调用授权前提之一 |
+| 业务密钥托管 | 工作台 `/my/secrets` → `/api/my/secrets` | 用户 env 加密存库；网关/runtime 按用户注入 |
 
 线上可调边界：
 

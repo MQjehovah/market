@@ -37,16 +37,19 @@ def _read_package(cap) -> dict[str, bytes]:
 class MCPBridge:
     """一次 Agent 运行期间管理的 MCP 连接池。"""
 
-    def __init__(self, gateway_loader=None) -> None:
+    def __init__(self, gateway_loader=None, user_env: dict[str, str] | None = None) -> None:
         self._stack = AsyncExitStack()
         self._servers: dict[str, dict[str, Any]] = {}
         self._tool_map: dict[str, tuple[str, str]] = {}
         self.tool_defs: list[dict[str, Any]] = []
         self.tool_names: list[str] = []
         self._gateway_loader = gateway_loader
+        self._user_env = dict(user_env or {})
 
     async def connect_capability(self, mcp_name: str, cap) -> dict[str, Any]:
         """连接一个 MCP 能力包，返回连接结果信息。"""
+        from app.services.secret_vault import attach_user_env
+
         files = _read_package(cap)
         raw = files.get("connection.json")
         if raw is None:
@@ -87,6 +90,7 @@ class MCPBridge:
                 "connected": False,
                 "error": f"暂不支持 transport={transport}",
             }
+        config = attach_user_env(dict(config), self._user_env)
         try:
             async with asyncio.timeout(CONNECT_TIMEOUT):
                 session = await self._stack.enter_async_context(

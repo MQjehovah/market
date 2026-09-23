@@ -335,3 +335,24 @@ class UserCapability(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     capability: Mapped["Capability"] = relationship()
+
+
+class UserSecret(Base):
+    """用户业务密钥托管（Fernet 密文）。scope=空为全局；填 capability_id 为能力级覆盖。"""
+
+    __tablename__ = "user_secrets"
+    __table_args__ = (
+        UniqueConstraint("user_id", "key_name", "scope", name="uq_user_secret_key_scope"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    key_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    # "" = 全局；否则为 capability.id，解析时能力级优先于全局
+    scope: Mapped[str] = mapped_column(String(36), default="", index=True)
+    ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    label: Mapped[str] = mapped_column(String(128), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )

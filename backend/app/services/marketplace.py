@@ -375,6 +375,7 @@ async def install_mcp(db: AsyncSession, user: User, cap: Capability, config: dic
         probe_tools,
         read_package_files,
     )
+    from app.services.secret_vault import attach_user_env, resolve_user_env
 
     files = read_package_files(cap)
     raw = files.get("connection.json")
@@ -412,6 +413,8 @@ async def install_mcp(db: AsyncSession, user: User, cap: Capability, config: dic
             "error": f"暂不支持 transport={transport}",
             "tools": [],
         }
+    user_env = await resolve_user_env(db, user.id, capability_id=cap.id)
+    cfg = attach_user_env(dict(cfg), user_env)
     try:
         tools = await probe_tools(cfg, files)
     except Exception as exc:  # noqa: BLE001
@@ -430,6 +433,7 @@ async def install_mcp(db: AsyncSession, user: User, cap: Capability, config: dic
         "installed": True,
         "transport": cfg["transport"],
         "tools": [t["name"] for t in tools],
+        "secrets_injected": sorted(user_env.keys()),
     }
 
 
