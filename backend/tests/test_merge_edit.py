@@ -21,11 +21,17 @@ def test_draft_policy_kwargs():
         access_policy="restricted",
         allowed_users=["alice"],
         install_policy="required",
+        distribution="remote",
+        risk_default="write",
+        data_domain="设备",
     )
     assert draft_policy_kwargs(base) == {
         "access_policy": "restricted",
         "allowed_users": ["alice"],
         "install_policy": "required",
+        "distribution": "remote",
+        "risk_default": "write",
+        "data_domain": "设备",
     }
 
 

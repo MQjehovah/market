@@ -73,6 +73,12 @@ class Capability(Base):
     allowed_users: Mapped[list] = mapped_column(JSON, default=list)
     install_policy: Mapped[str] = mapped_column(String(20), default="optional")
     # optional | default_on | required
+    distribution: Mapped[str] = mapped_column(String(16), default="both")
+    # local（仅内网/本地部署）| remote（仅远程调用）| both
+    risk_default: Mapped[str] = mapped_column(String(16), default="read")
+    # read | write | destructive（默认风险级别）
+    data_domain: Mapped[str] = mapped_column(String(50), default="")
+    # 数据域自由文本：设备 / 客户 / 财务 / 知识…
     validation_report: Mapped[dict] = mapped_column(JSON, default=dict)
     # 最近一次上传包的结构校验摘要：{ok, warnings, errors?, files}
     usage_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -282,6 +288,8 @@ class MCPGatewayServer(Base):
     cwd: Mapped[str] = mapped_column(String(512), default="")
     api_token: Mapped[str] = mapped_column(String(255), default="")
     # 外部调用该网关端点所需的令牌；留空表示内部免鉴权
+    capability_id: Mapped[str] = mapped_column(String(36), default="", index=True)
+    # 关联的市场 mcp 能力 id；空 = 未绑定（同步 API 按此关联能力与网关）
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

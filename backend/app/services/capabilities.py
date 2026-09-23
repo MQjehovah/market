@@ -185,11 +185,14 @@ def text_file(files: dict[str, bytes], path: str, default: str = "") -> str:
 
 
 def draft_policy_kwargs(base: Capability) -> dict:
-    """新版本草稿从已发布行继承访问/安装策略。"""
+    """新版本草稿从已发布行继承访问/安装策略与元数据标签。"""
     return {
         "access_policy": getattr(base, "access_policy", None) or "open",
         "allowed_users": list(getattr(base, "allowed_users", None) or []),
         "install_policy": getattr(base, "install_policy", None) or "optional",
+        "distribution": getattr(base, "distribution", None) or "both",
+        "risk_default": getattr(base, "risk_default", None) or "read",
+        "data_domain": getattr(base, "data_domain", None) or "",
     }
 
 
@@ -212,6 +215,9 @@ def to_capability_out(
         "access_policy": cap.access_policy or "open",
         "allowed_users": list(cap.allowed_users or []),
         "install_policy": getattr(cap, "install_policy", None) or "optional",
+        "distribution": getattr(cap, "distribution", None) or "both",
+        "risk_default": getattr(cap, "risk_default", None) or "read",
+        "data_domain": getattr(cap, "data_domain", None) or "",
         "changelog": getattr(cap, "changelog", None) or "",
         "readme_md": getattr(cap, "readme_md", None) or "",
         "validation_report": getattr(cap, "validation_report", None) or {},
@@ -269,6 +275,9 @@ async def create_capability(
         access_policy=data.access_policy,
         allowed_users=list(data.allowed_users or []),
         install_policy=data.install_policy or "optional",
+        distribution=data.distribution,
+        risk_default=data.risk_default,
+        data_domain=data.data_domain,
         author_id=user.id,
         organization=user.organization,
         status="draft",
@@ -349,6 +358,12 @@ async def update_capability(
         cap.allowed_users = [u.strip() for u in data.allowed_users if u.strip()]
     if data.install_policy is not None:
         cap.install_policy = data.install_policy
+    if data.distribution is not None:
+        cap.distribution = data.distribution
+    if data.risk_default is not None:
+        cap.risk_default = data.risk_default
+    if data.data_domain is not None:
+        cap.data_domain = data.data_domain
     await db.commit()
     await db.refresh(cap)
     return cap
@@ -569,6 +584,9 @@ async def create_new_version(
         access_policy=cap.access_policy,
         allowed_users=list(cap.allowed_users or []),
         install_policy=getattr(cap, "install_policy", None) or "optional",
+        distribution=getattr(cap, "distribution", None) or "both",
+        risk_default=getattr(cap, "risk_default", None) or "read",
+        data_domain=getattr(cap, "data_domain", None) or "",
         author_id=user.id,
         organization=cap.organization,
         status="draft",

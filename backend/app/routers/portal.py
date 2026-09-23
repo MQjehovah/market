@@ -1,6 +1,7 @@
 """门户：浏览 / 搜索 / 详情 / 评分 / 订阅 / 通知 / 版本列表。"""
 
 import io
+from datetime import datetime, timezone
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -9,7 +10,15 @@ from sqlalchemy import String, and_, case, cast, func, or_, select
 from sqlalchemy.orm import joinedload, selectinload
 
 from app.auth import CurrentUser, DbSession, OptionalUser
-from app.models import Capability, Notification, Rating, Subscription, User
+from app.config import get_settings
+from app.models import (
+    Capability,
+    MCPGatewayServer,
+    Notification,
+    Rating,
+    Subscription,
+    User,
+)
 from app.schemas import (
     AccessPolicyUpdate,
     CapabilityOut,
@@ -43,6 +52,45 @@ def _to_out(cap: Capability, versions: list[Capability] | None = None) -> Capabi
 def _visibility_where(user: User | None):
     """可见性过滤（SQL 层）：单一判定来源见 ``app.services.visibility``。"""
     return visibility_condition(user)
+
+
+def _parse_since(raw: str) -> datetime:
+    """解析 ISO8601 增量同步起点；非法值返回 400。"""
+    text = raw.strip()
+    if text.endswith(("Z", "z")):
+        text = f"{text[:-1]}+00:00"
+    try:
+        value = datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "since 必须是 ISO8601 时间，如 2026-09-23T00:00:00Z",
+        ) from exc
+    if value.tzinfo is not None:
+        value = value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
+def _gateway_payload(
+    cap: Capability,
+    by_capability: dict[str, MCPGatewayServer],
+    by_name: dict[str, MCPGatewayServer],
+) -> dict | None:
+    """mcp 能力对应的网关注册行：优先 capability_id 关联，回退同名且 enabled 的行。"""
+    row = by_capability.get(cap.id)
+    if row is None:
+        row = by_name.get(cap.name)
+        if row is not None and not row.enabled:
+            row = None
+    if row is None:
+        return None
+    return {
+        "name": row.name,
+        "transport": row.transport,
+        "require_token": bool(get_settings().mcp_gateway_require_token),
+        "stream_url": f"/api/mcp-gateway/{row.name}/stream",
+        "sse_url": f"/api/mcp-gateway/{row.name}/sse",
+    }
 
 
 @router.get("/meta/taxonomy")
@@ -212,13 +260,20 @@ async def browse_capabilities(
 
 
 @router.get("/capabilities/sync", response_model=list[dict])
-async def sync_capabilities(db: DbSession, user: OptionalUser):
+async def sync_capabilities(db: DbSession, user: OptionalUser, since: str = ""):
     """同步接口：返回各能力的最新发布版本/商业包，供 Agent 等消费者拉取目录。
 
     含已发布的 plugin 拆出组件（skill/mcp 等），便于其他 Agent 依赖复用。
+    ``since``（ISO8601）用于增量同步：仅返回 updated_at 晚于该时刻的能力。
+    mcp 类型附带 ``gateway``（按 capability_id 关联网关注册行，回退同名 enabled 行）。
     """
+    since_dt = _parse_since(since) if since.strip() else None
     visible = await get_visible_capabilities(db, user)
     published = [c for c in visible if c.status in ("published", "deprecated")]
+    if since_dt is not None:
+        published = [
+            c for c in published if c.updated_at is not None and c.updated_at > since_dt
+        ]
     latest: dict[tuple[str, str], Capability] = {}
     for cap in published:
         key = (cap.name, cap.type)
@@ -226,25 +281,37 @@ async def sync_capabilities(db: DbSession, user: OptionalUser):
         if cur is None or parse_semver(cap.version) > parse_semver(cur.version):
             latest[key] = cap
 
+    latest_caps = sorted(latest.values(), key=lambda c: (c.type, c.name))
+    servers_by_capability: dict[str, MCPGatewayServer] = {}
+    servers_by_name: dict[str, MCPGatewayServer] = {}
+    if any(c.type == "mcp" for c in latest_caps):
+        rows = (await db.scalars(select(MCPGatewayServer))).all()
+        servers_by_capability = {r.capability_id: r for r in rows if r.capability_id}
+        servers_by_name = {r.name: r for r in rows}
+
     items = []
-    for cap in sorted(latest.values(), key=lambda c: (c.type, c.name)):
-        items.append(
-            {
-                "name": cap.name,
-                "type": cap.type,
-                "version": cap.version,
-                "status": cap.status,
-                "category": cap.category or "",
-                "description": cap.description or "",
-                "tags": cap.tags or [],
-                "usage_count": cap.usage_count,
-                "has_artifact": bool(cap.artifacts),
-                "download_url": (
-                    f"/api/capabilities/{quote(cap.name, safe='')}/download"
-                    f"?version={cap.version}"
-                ),
-            }
-        )
+    for cap in latest_caps:
+        item = {
+            "name": cap.name,
+            "type": cap.type,
+            "version": cap.version,
+            "status": cap.status,
+            "category": cap.category or "",
+            "description": cap.description or "",
+            "tags": cap.tags or [],
+            "usage_count": cap.usage_count,
+            "has_artifact": bool(cap.artifacts),
+            "distribution": getattr(cap, "distribution", None) or "both",
+            "risk_default": getattr(cap, "risk_default", None) or "read",
+            "data_domain": getattr(cap, "data_domain", None) or "",
+            "download_url": (
+                f"/api/capabilities/{quote(cap.name, safe='')}/download"
+                f"?version={cap.version}"
+            ),
+        }
+        if cap.type == "mcp":
+            item["gateway"] = _gateway_payload(cap, servers_by_capability, servers_by_name)
+        items.append(item)
     return items
 
 

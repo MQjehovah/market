@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
 from app.auth import CurrentUser, DbSession
-from app.models import MCPGatewayServer
+from app.models import Capability, MCPGatewayServer
 from app.schemas import (
     MCPGatewayServerIn,
     MCPGatewayServerOut,
@@ -24,6 +24,29 @@ def _require_admin(user) -> None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "仅管理员可管理 MCP 网关")
 
 
+async def _validate_capability_binding(
+    db: DbSession, capability_id: str, server_id: str | None = None
+) -> None:
+    """校验能力绑定：必须是存在的 mcp 能力，且未被其他网关服务绑定。"""
+    if not capability_id:
+        return
+    cap = await db.get(Capability, capability_id)
+    if cap is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "绑定的能力不存在")
+    if cap.type != "mcp":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "只能绑定 mcp 类型的能力")
+    stmt = select(MCPGatewayServer.id).where(
+        MCPGatewayServer.capability_id == capability_id
+    )
+    if server_id is not None:
+        stmt = stmt.where(MCPGatewayServer.id != server_id)
+    dup = await db.scalar(stmt)
+    if dup:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, f"能力 {cap.name} 已绑定到其他网关服务"
+        )
+
+
 @router.get("/servers", response_model=list[MCPGatewayServerOut])
 async def list_servers(db: DbSession, user: CurrentUser):
     _require_admin(user)
@@ -39,6 +62,7 @@ async def create_server(data: MCPGatewayServerIn, db: DbSession, user: CurrentUs
     )
     if exists:
         raise HTTPException(status.HTTP_409_CONFLICT, f"网关服务 {data.name} 已存在")
+    await _validate_capability_binding(db, data.capability_id)
     row = MCPGatewayServer(
         name=data.name,
         description=data.description,
@@ -50,6 +74,7 @@ async def create_server(data: MCPGatewayServerIn, db: DbSession, user: CurrentUs
         env=data.env,
         cwd=data.cwd,
         api_token=data.api_token,
+        capability_id=data.capability_id,
         enabled=data.enabled,
     )
     db.add(row)
@@ -73,6 +98,7 @@ async def update_server(
     )
     if dup:
         raise HTTPException(status.HTTP_409_CONFLICT, f"网关服务 {data.name} 已存在")
+    await _validate_capability_binding(db, data.capability_id, server_id)
     row.name = data.name
     row.description = data.description
     row.transport = data.transport
@@ -83,6 +109,7 @@ async def update_server(
     row.env = data.env
     row.cwd = data.cwd
     row.api_token = data.api_token
+    row.capability_id = data.capability_id
     row.enabled = data.enabled
     await db.commit()
     await db.refresh(row)

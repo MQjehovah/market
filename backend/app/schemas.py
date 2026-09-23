@@ -73,6 +73,9 @@ class CapabilityBase(BaseModel):
     access_policy: Literal["open", "admin_only", "restricted"] = "open"
     allowed_users: list[str] = Field(default_factory=list, description="restricted 时的白名单用户名")
     install_policy: Literal["optional", "default_on", "required"] = "optional"
+    distribution: Literal["local", "remote", "both"] = "both"
+    risk_default: Literal["read", "write", "destructive"] = "read"
+    data_domain: str = Field(default="", max_length=50, description="数据域，如 设备/客户/财务/知识")
 
     @field_validator("version")
     @classmethod
@@ -102,6 +105,9 @@ class CapabilityUpdate(BaseModel):
     access_policy: Literal["open", "admin_only", "restricted"] | None = None
     allowed_users: list[str] | None = None
     install_policy: Literal["optional", "default_on", "required"] | None = None
+    distribution: Literal["local", "remote", "both"] | None = None
+    risk_default: Literal["read", "write", "destructive"] | None = None
+    data_domain: str | None = Field(default=None, max_length=50)
 
 
 class InstallPolicyUpdate(BaseModel):
@@ -452,6 +458,7 @@ class MCPGatewayServerIn(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     cwd: str = Field(default="", max_length=500)
     api_token: str = Field(default="", max_length=255)
+    capability_id: str = Field(default="", max_length=36, description="关联的市场 mcp 能力 id；空 = 未绑定")
     enabled: bool = True
 
 
@@ -469,6 +476,7 @@ class MCPGatewayServerOut(BaseModel):
     env: dict = {}
     cwd: str = ""
     api_token: str = ""
+    capability_id: str = ""
     enabled: bool = True
     created_at: datetime
     updated_at: datetime
