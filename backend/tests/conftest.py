@@ -24,12 +24,28 @@ get_settings.cache_clear()
 from app.database import Base, engine
 from app.main import app
 
+# mcp 2.x 保留了 mcp.server.fastmcp 的 shim 模块（find_spec 能查到，import 才报错），
+# 因此必须真实 import 探测；本地 mcp>=2 时相关真实拉起服务的用例跳过（容器/CI 用 pinned mcp<2）。
+try:  # noqa: SIM105
+    from mcp.server.fastmcp import FastMCP as _FastMCP  # noqa: F401
+
+    MCP_V1_AVAILABLE = True
+except Exception:  # noqa: BLE001
+    MCP_V1_AVAILABLE = False
+
 
 @pytest.fixture(scope="session")
 def event_loop():
     loop = asyncio.new_event_loop()
     yield loop
     loop.close()
+
+
+@pytest.fixture(scope="session", autouse=True)
+async def _dispose_engine_at_end():
+    """会话结束释放连接池：否则 aiosqlite 非守护线程会让 pytest 进程卡在退出。"""
+    yield
+    await engine.dispose()
 
 
 @pytest.fixture

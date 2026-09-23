@@ -7,7 +7,14 @@ import zipfile
 
 import pytest
 
+from conftest import MCP_V1_AVAILABLE
 from test_workflow import _publish_capability
+
+# 本文件真实拉起包内 FastMCP 服务：需要 mcp<2；本地 mcp>=2 时跳过（容器/CI 用 pinned 版本）。
+pytestmark = pytest.mark.skipif(
+    not MCP_V1_AVAILABLE,
+    reason="需要 mcp<2（本地为 mcp>=2；容器/CI 用 pinned 版本）",
+)
 
 
 def _mcp_zip(name: str) -> bytes:

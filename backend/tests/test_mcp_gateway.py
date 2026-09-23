@@ -15,7 +15,15 @@ from mcp.client.streamable_http import streamable_http_client
 
 from app.main import app
 from app.services.mcp_gateway import connect_upstream
+from conftest import MCP_V1_AVAILABLE
 from test_workflow import _publish_capability
+
+# 本文件用真实 MCP SDK 拉起 stdio/SSE 服务：需要 mcp<2（FastMCP）。
+# 本地开发环境若装了 mcp>=2，跳过而不是失败；容器/CI 用 pinned 版本执行。
+pytestmark = pytest.mark.skipif(
+    not MCP_V1_AVAILABLE,
+    reason="需要 mcp<2（本地为 mcp>=2；容器/CI 用 pinned 版本）",
+)
 
 FASTMCP_SERVER = r"""
 import sys
@@ -403,7 +411,8 @@ async def test_capability_gateway_upstream_from_published_package(
     assert "echo" in {t.name for t in tools.tools}
     assert "echo:desk" in (result.content[0].text if result.content else "")
 
-    # 能力级主入口 /relay 与 /cap 别名等价：未登录都 401
-    for url in (f"/api/mcp-gateway/relay/{name}/sse", f"/api/mcp-gateway/cap/{name}/sse"):
-        r = await asyncio.wait_for(client.get(url), 8)
-        assert r.status_code == 401, url
+    # 能力级主入口 /relay：未登录 401；旧 /cap 别名已移除 404
+    r = await asyncio.wait_for(client.get(f"/api/mcp-gateway/relay/{name}/sse"), 8)
+    assert r.status_code == 401, "relay"
+    r = await asyncio.wait_for(client.get(f"/api/mcp-gateway/cap/{name}/sse"), 8)
+    assert r.status_code == 404, "cap alias removed"

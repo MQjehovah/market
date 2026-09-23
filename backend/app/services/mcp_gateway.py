@@ -12,9 +12,8 @@
     GET  /relay/{name}/sse        SSE 传输的 MCP 能力（GET 建立连接）——能力级主入口
     POST /relay/{name}/messages   SSE 客户端回传 JSON-RPC 消息
     GET/POST/DELETE /relay/{name}/stream   Streamable HTTP 传输的 MCP 能力
-    /cap/{name}/{kind}      能力级过渡别名，行为与 /relay 一致
     GET/POST/DELETE /{name}/{kind}  管理员登记的 MCP 服务（服务级，mcp-proxy）
-    能力级入口（/relay 主入口与 /cap 别名）Bearer = 市场/SSO/服务令牌，name 支持 name@version 钉版本；
+    能力级入口（/relay）Bearer = 市场/SSO/服务令牌，name 支持 name@version 钉版本；
     服务级裸路径用登记令牌（X-Gateway-Token/Bearer 精确匹配）。
     鉴权后限流/熔断；调用写 UsageEvent（含 conversation_id/耗时）
 """
@@ -573,7 +572,7 @@ class _ServerProxy:
 
     manager 每个客户端会话会调用一次 run()，我们在该会话内连接独立的上游，
     保证 stdio 子进程 / HTTP 会话的生命周期与客户端会话一致。
-    配置优先用 GatewayEndpoints 在鉴权后缓存的 config（能力级 /relay/{name}，别名 /cap/{name}），
+    配置优先用 GatewayEndpoints 在鉴权后缓存的 config（能力级 /relay/{name}），
     否则回退登记表 loader。
     """
 
@@ -719,7 +718,7 @@ class GatewayEndpoints:
 
 
 class GatewayRegistry:
-    """按路由键持有入站端点实例（能力级 ``relay/{name}`` 与 ``cap/{name}`` 别名 / 服务级登记名）。"""
+    """按路由键持有入站端点实例（能力级 ``relay/{name}`` / 服务级登记名）。"""
 
     def __init__(self, loader: ConfigLoader) -> None:
         self._loader = loader
@@ -742,8 +741,8 @@ class GatewayRegistry:
 class GatewayIdentity:
     """入站请求身份来源：server_token | jwt | sso | service_token | anonymous。
 
-    仅用于审计归因；鉴权动作仍由 authorize_capability_gateway（能力级 /relay/{name} 与
-    /cap/{name} 别名）与 check_token（服务级裸路径 /{name}）执行，匿名仅服务级路由在未配置令牌时可能出现。
+    仅用于审计归因；鉴权动作仍由 authorize_capability_gateway（能力级 /relay/{name}）与
+    check_token（服务级裸路径 /{name}）执行，匿名仅服务级路由在未配置令牌时可能出现。
     """
 
     source: str
@@ -1002,8 +1001,7 @@ class GatewayASGIApp:
 
     路由判定（保留 3 段先于 2 段的顺序）：
     - 3 段 ``relay/{name}/{kind}`` → 能力级主入口（Bearer + 治理）
-    - 3 段 ``cap/{name}/{kind}``   → 能力级过渡别名，与 /relay 等价
-    - 2 段 ``{name}/{kind}``       → 服务级（登记表 + check_token；``relay`` / ``cap`` 为保留字，拒绝）
+    - 2 段 ``{name}/{kind}``       → 服务级（登记表 + check_token；``relay`` 为保留字，拒绝）
     """
 
     def __init__(self, registry: GatewayRegistry, loader: ConfigLoader) -> None:
@@ -1015,7 +1013,7 @@ class GatewayASGIApp:
             await send_json(scope, receive, send, 404, {"detail": "Not Found"})
             return
         # 挂载在 /api/mcp-gateway 下时，scope["path"] 仍是完整路径，
-        # 需要去掉 root_path（挂载前缀）后再解析 /relay/{name}/{kind}、/cap/{name}/{kind} 或 /{name}/{kind}
+        # 需要去掉 root_path（挂载前缀）后再解析 /relay/{name}/{kind} 或 /{name}/{kind}
         root = scope.get("root_path") or ""
         raw_path = scope.get("path") or ""
         if root and raw_path.startswith(root):
@@ -1024,11 +1022,10 @@ class GatewayASGIApp:
 
         parts = [unquote(p) for p in raw_path.split("/") if p]
         route_path: str | None = None
-        if len(parts) == 3 and parts[0] in ("relay", "cap"):
-            # 能力级：/relay 主入口，/cap 过渡别名（等价）；
-            # 路由键与 SSE 回传端点都跟随访问命名空间（relay|cap/{name}）
+        if len(parts) == 3 and parts[0] == "relay":
+            # 能力级：/relay/{能力名}/{kind}；路由键与 SSE 回传端点都使用 relay/{name}
             name, kind = parts[1], parts[2]
-            registry_key = f"{parts[0]}/{name}"
+            registry_key = f"relay/{name}"
             route_path = registry_key
             config, err_status, err_body = await authorize_capability_gateway(scope, name)
             if err_status is not None:
@@ -1040,7 +1037,7 @@ class GatewayASGIApp:
         elif len(parts) == 2:
             # 服务级：管理员登记的 MCP 服务（裸路径），登记令牌精确匹配
             name, kind = parts
-            if name in ("relay", "cap"):
+            if name == "relay":
                 await send_json(
                     scope,
                     receive,

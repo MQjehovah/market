@@ -344,7 +344,7 @@ def test_parse_mcp_calls_maps_methods_and_tool():
     assert parse_mcp_calls(b"not-json") == []
 
 
-# ---------- 路由判定：能力级 /relay（主入口）与 /cap 别名 / 服务级裸路径 ----------
+# ---------- 路由判定：能力级 /relay（主入口）与服务级裸路径（/cap 已移除） ----------
 
 
 @pytest.mark.asyncio
@@ -406,10 +406,10 @@ async def test_bare_route_is_service_level(client, stream_stub):
 
 
 @pytest.mark.asyncio
-async def test_cap_alias_equivalent_to_relay_capability_route(
+async def test_cap_alias_removed(
     client, publisher_headers, admin_headers, stream_stub
 ):
-    """/cap/{name} 别名与 /relay/{name} 主入口等价：同一能力解析、同样放行。"""
+    """旧 /cap 别名已移除：/cap/{name} 404；/relay/{name} 正常放行。"""
     from test_mcp_debug import _mcp_zip
     from test_workflow import _publish_capability
 
@@ -423,35 +423,38 @@ async def test_cap_alias_equivalent_to_relay_capability_route(
         client.post(f"/api/mcp-gateway/relay/{name}/stream", json=payload, headers=admin_headers),
         timeout=15,
     )
+    assert relay.status_code == 200, relay.text
     alias = await asyncio.wait_for(
         client.post(f"/api/mcp-gateway/cap/{name}/stream", json=payload, headers=admin_headers),
         timeout=15,
     )
-    assert relay.status_code == alias.status_code == 200, relay.text
-    assert relay.json() == alias.json()
+    assert alias.status_code == 404, alias.text
 
 
 @pytest.mark.asyncio
 async def test_reserved_namespace_two_segment_paths_rejected(client):
-    """2 段裸路径中 relay/cap 为保留字，避免与命名空间歧义；其余形状仍通用 404。"""
-    for reserved in ("relay", "cap"):
-        r = await client.get(f"/api/mcp-gateway/{reserved}/stream")
-        assert r.status_code == 404, reserved
-        assert "保留字" in r.json()["detail"]
+    """2 段裸路径中 relay 为保留字；其余形状（含旧 /cap 段）仍通用 404。"""
+    r = await client.get("/api/mcp-gateway/relay/stream")
+    assert r.status_code == 404
+    assert "保留字" in r.json()["detail"]
 
     r = await client.get("/api/mcp-gateway/relay")
     assert r.status_code == 404
 
+    # 旧 /cap 命名空间已移除：2 段按服务级解析（服务不存在 → 404），3 段直接 404
+    r = await client.get("/api/mcp-gateway/cap/stream")
+    assert r.status_code == 404
+    r = await client.post("/api/mcp-gateway/cap/demo/stream", json={})
+    assert r.status_code == 404
+
 
 def test_sse_message_endpoint_follows_route_namespace():
-    """SSE 回传端点跟随访问命名空间：/relay/{name} 与 /cap/{name} 能力级、裸路径服务级。"""
+    """SSE 回传端点跟随访问命名空间：能力级 relay/{name}、服务级裸路径。"""
 
     async def loader(_name):
         return None
 
     relay_ep = GatewayEndpoints("relay/demo", loader)
-    alias_ep = GatewayEndpoints("cap/demo", loader)
     service_ep = GatewayEndpoints("demo", loader)
     assert relay_ep.sse._endpoint == "/relay/demo/messages/"
-    assert alias_ep.sse._endpoint == "/cap/demo/messages/"
     assert service_ep.sse._endpoint == "/demo/messages/"
