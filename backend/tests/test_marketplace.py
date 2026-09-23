@@ -30,12 +30,12 @@ async def test_public_browse_returns_published(client):
     r = await client.get("/api/capabilities")
     assert r.status_code == 200
     items = r.json()["items"]
-    # 默认浏览：技能 + 安装包 + 助手（不含连接器/编排/编排函数）
+    # 默认浏览：助手 + 依赖（技能 / 连接器）
     assert len(items) >= 1
     assert all(item["status"] == "published" for item in items)
     types = {item["type"] for item in items}
-    assert types <= {"skill", "plugin", "agent"}
-    assert "agent" in types or "plugin" in types or "skill" in types
+    assert types <= {"agent", "skill", "mcp"}
+    assert "agent" in types or "skill" in types or "mcp" in types
 
     r_all = await client.get("/api/capabilities?include_bricks=true")
     assert r_all.status_code == 200
@@ -100,6 +100,12 @@ async def test_publish_submit_review_publish_flow(client, publisher_headers, adm
     r = await client.get(f"/api/capabilities/{cap_id}")
     assert r.status_code == 200
     assert r.json()["name"] == name
+
+    r = await client.get("/api/notifications", headers=publisher_headers)
+    assert r.status_code == 200
+    notes = [n for n in r.json() if n.get("link") == f"/capabilities/{cap_id}"]
+    assert notes, r.text
+    assert "已通过审核并发布" in notes[0]["title"]
 
 
 @pytest.mark.asyncio

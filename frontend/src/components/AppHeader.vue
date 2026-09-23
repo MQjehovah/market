@@ -24,11 +24,13 @@ const isDiscoverActive = computed(
   () => route.path === '/' || route.path.startsWith('/capabilities/')
 )
 const isMyActive = computed(() => {
-  if (route.path === '/my') return true
-  return ['/agents/', '/skills/', '/tools/', '/mcp/', '/workflows/'].some((p) =>
+  if (route.path === '/my' || route.path === '/my/secrets') return false
+  return ['/agents/', '/skills/', '/tools/', '/mcp/', '/workflows/', '/rules/', '/commands/', '/hooks/'].some((p) =>
     route.path.startsWith(p)
   )
 })
+const isMyCapsActive = computed(() => route.path === '/my')
+const isMySecretsActive = computed(() => route.path === '/my/secrets')
 const adminSection = computed(() =>
   route.path.startsWith('/admin/') ? String(route.params.section || '') : ''
 )
@@ -65,6 +67,17 @@ async function loadAdminBadge() {
     adminState.reviewingCount = s.reviewing_count || 0
   } catch {
     adminState.reviewingCount = 0
+  }
+}
+
+async function openNotice(n) {
+  showNotify.value = false
+  if (n.link && n.link.startsWith('/') && !n.link.startsWith('//')) {
+    if (!n.read) {
+      n.read = true
+      api.post(`/notifications/${n.id}/read`).catch(() => {})
+    }
+    router.push(n.link)
   }
 }
 
@@ -120,11 +133,16 @@ watch(isAdmin, loadAdminBadge)
           <router-link
             to="/my"
             class="nav-item"
-            active-class="nav-rr"
-            exact-active-class="nav-rr"
-            :class="{ active: isMyActive }"
+            :class="{ active: isMyCapsActive || isMyActive }"
           >
             我的能力
+          </router-link>
+          <router-link
+            to="/my/secrets"
+            class="nav-item"
+            :class="{ active: isMySecretsActive }"
+          >
+            业务密钥
           </router-link>
         </template>
         <router-link v-else to="/login" class="nav-item">登录后管理</router-link>
@@ -160,6 +178,13 @@ watch(isAdmin, loadAdminBadge)
           :class="{ active: adminSection === 'gateway' }"
         >
           MCP 网关
+        </router-link>
+        <router-link
+          to="/admin/tokens"
+          class="nav-item"
+          :class="{ active: adminSection === 'tokens' }"
+        >
+          服务令牌
         </router-link>
       </div>
     </div>
@@ -233,15 +258,17 @@ watch(isAdmin, loadAdminBadge)
           <button class="btn btn-sm" type="button" @click="readAll">全部已读</button>
         </div>
         <div v-if="notifications.length === 0" class="muted mt-8">暂无通知</div>
-        <div
+        <button
           v-for="n in notifications"
           :key="n.id"
+          type="button"
           class="notify-item"
-          :class="{ unread: !n.read }"
+          :class="{ unread: !n.read, link: !!n.link }"
+          @click="openNotice(n)"
         >
           <div>{{ n.title }}</div>
           <div class="muted" style="font-size: 12px">{{ n.body || n.content || '' }}</div>
-        </div>
+        </button>
       </div>
     </div>
   </aside>
@@ -420,10 +447,18 @@ watch(isAdmin, loadAdminBadge)
   box-shadow: var(--shadow-lg);
 }
 .notify-item {
+  display: block;
+  width: 100%;
+  text-align: left;
   padding: 8px 0;
+  border: none;
   border-bottom: 1px solid var(--border);
+  background: transparent;
   font-size: 13px;
+  color: inherit;
 }
+.notify-item.link { cursor: pointer; }
+.notify-item.link:hover { color: var(--primary); }
 .notify-item.unread { color: var(--text); }
 .notify-item:last-child { border-bottom: none; }
 .btn-block { width: 100%; justify-content: center; }

@@ -1,6 +1,10 @@
-"""平台轨 M1：能力元数据扩展 / 同步 API 网关关联 / since 增量同步。"""
+"""平台轨：能力元数据扩展 / 同步 API 网关关联。
 
-import asyncio
+since 增量语义（不折叠、非法值 422）由 gitlab 生产实现与
+``test_phase1_governance.py::test_capability_metadata_and_sync_since`` 覆盖，
+本文件不再重复断言，只保留 M1 真增量：sync 的 mcp `gateway` 关联与绑定 CRUD。
+"""
+
 import json
 
 import pytest
@@ -122,7 +126,7 @@ async def test_metadata_roundtrip_create_update_sync(client, publisher_headers, 
         "",
     )
 
-    # 非法枚举 / 超长自由文本
+    # 非法枚举 / 超长自由文本（gitlab 口径 max_length=64）
     r = await client.post(
         f"{API}/publish/capabilities",
         headers=publisher_headers,
@@ -132,7 +136,7 @@ async def test_metadata_roundtrip_create_update_sync(client, publisher_headers, 
     r = await client.post(
         f"{API}/publish/capabilities",
         headers=publisher_headers,
-        json={"name": "meta-long", "type": "tool", "version": "1.0.0", "data_domain": "x" * 51},
+        json={"name": "meta-long", "type": "tool", "version": "1.0.0", "data_domain": "x" * 65},
     )
     assert r.status_code == 422
     r = await client.put(
@@ -220,42 +224,6 @@ async def test_sync_gateway_null_and_name_fallback(client, publisher_headers, ad
     assert gateway is not None
     assert gateway["name"] == "gw-fallback"
     assert gateway["stream_url"] == "/api/mcp-gateway/gw-fallback/stream"
-
-
-@pytest.mark.asyncio
-async def test_sync_since_incremental(client, publisher_headers, admin_headers):
-    """since 只返回其后更新的能力；非法 since 返回 400。"""
-    old_cap = await _create_capability(client, publisher_headers, "since-old", "tool")
-    old_body = await _publish(
-        client, publisher_headers, admin_headers, old_cap["id"], _tool_zip("since-old")
-    )
-    old_updated = old_body["updated_at"]
-    await asyncio.sleep(1.1)
-
-    new_cap = await _create_capability(client, publisher_headers, "since-new", "tool")
-    new_body = await _publish(
-        client, publisher_headers, admin_headers, new_cap["id"], _tool_zip("since-new")
-    )
-
-    # 全量：两条都在（种子里已有其他已发布能力，只比较本用例创建的两条）
-    names = {i["name"] for i in await _sync(client)}
-    assert {"since-old", "since-new"} <= names
-
-    # 增量：旧能力（updated_at == since）不再返回，新能力返回
-    names = {i["name"] for i in await _sync(client, since=old_updated)}
-    assert names == {"since-new"}
-
-    # 用新能力的 updated_at 过滤 → 空
-    assert await _sync(client, since=new_body["updated_at"]) == []
-
-    # 空字符串等价于不传
-    names = {i["name"] for i in await _sync(client, since="")}
-    assert {"since-old", "since-new"} <= names
-
-    r = await client.get(f"{API}/capabilities/sync", params={"since": "not-a-date"})
-    assert r.status_code == 400
-    r = await client.get(f"{API}/capabilities/sync", params={"since": "2026-13-45T99:99:99"})
-    assert r.status_code == 400
 
 
 @pytest.mark.asyncio

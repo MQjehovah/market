@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
 from app.models import Capability, UsageEvent, User
-from app.services.capabilities import get_visible_capabilities, parse_semver
+from app.services.capabilities import get_visible_capabilities, parse_semver, split_cap_ref
 from app.services.visibility import is_capability_visible
 from app.storage import get_storage
 
@@ -19,6 +19,8 @@ from app.storage import get_storage
 async def resolve_capability(
     db: AsyncSession, user: User | None, name: str, version: str | None = None
 ) -> Capability:
+    name, ref_ver = split_cap_ref(name)
+    version = version or ref_ver
     stmt = select(Capability).options(
         selectinload(Capability.artifacts), joinedload(Capability.author)
     ).where(Capability.name == name)
@@ -42,6 +44,10 @@ async def record_usage(
     action: str,
     params: dict[str, Any] | None = None,
     result_status: str = "ok",
+    *,
+    duration_ms: int = 0,
+    conversation_id: str = "",
+    source: str = "platform",
 ) -> None:
     if cap.status not in ("published", "deprecated", "reviewing"):
         raise HTTPException(status.HTTP_409_CONFLICT, f"能力 {cap.name} 当前状态不可使用")
@@ -55,9 +61,13 @@ async def record_usage(
         UsageEvent(
             user_id=user.id,
             capability_id=cap.id,
+            capability_version=cap.version or "",
             action=action,
             params=params or {},
             result_status=result_status,
+            duration_ms=max(0, int(duration_ms or 0)),
+            conversation_id=(conversation_id or "")[:128],
+            source=source or "platform",
         )
     )
 
@@ -89,6 +99,99 @@ async def instantiate_agent(
         "binding": binding.name if binding else ("adhoc" if adhoc else None),
         "note": "模拟实例化：真实环境中将从市场加载 Agent 配置目录并初始化会话。",
     }
+
+
+# 加入助手时一并授权的依赖 kind（与 cap install 主路径对齐；不含 workflow）
+_JOINABLE_DEP_TYPES = frozenset({"skill", "mcp", "tool"})
+
+
+def _extend_dep_manifest(manifest: list[dict[str, Any]], raw: Any) -> None:
+    if not isinstance(raw, list):
+        return
+    for item in raw:
+        if isinstance(item, dict) and item.get("name") and item.get("type"):
+            manifest.append(
+                {
+                    "name": str(item["name"]),
+                    "type": str(item["type"]),
+                    "version": str(item.get("version") or ""),
+                }
+            )
+
+
+def _read_agent_join_manifest(cap: Capability) -> list[dict[str, Any]]:
+    """加入「我的能力」用的依赖清单：dependencies.json / agent.json + 可市场关联的内嵌项。"""
+    manifest: list[dict[str, Any]] = []
+    arts = list(getattr(cap, "artifacts", None) or [])
+    if arts:
+        try:
+            content = get_storage().open(arts[-1].uri).read()
+            with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                names = set(zf.namelist())
+                if "dependencies.json" in names:
+                    _extend_dep_manifest(
+                        manifest, json.loads(zf.read("dependencies.json").decode("utf-8"))
+                    )
+                elif "agent.json" in names:
+                    meta = json.loads(zf.read("agent.json").decode("utf-8"))
+                    if isinstance(meta, dict):
+                        _extend_dep_manifest(manifest, meta.get("dependencies"))
+        except Exception:  # noqa: BLE001
+            pass
+
+    schema = cap.input_schema or {}
+    if not manifest:
+        _extend_dep_manifest(manifest, schema.get("dependencies"))
+
+    for item in schema.get("embedded_skills") or []:
+        if isinstance(item, dict) and item.get("name"):
+            manifest.append({"name": str(item["name"]), "type": "skill", "version": ""})
+    for item in schema.get("embedded_mcp") or []:
+        if isinstance(item, dict) and item.get("name"):
+            manifest.append({"name": str(item["name"]), "type": "mcp", "version": ""})
+    return manifest
+
+
+async def agent_dependency_capability_ids(
+    db: AsyncSession, user: User | None, cap: Capability
+) -> list[str]:
+    """解析助手依赖中可单独加入「我的能力」的已发布能力 id（skill/mcp/tool）。"""
+    if cap.type != "agent":
+        return []
+    manifest = _read_agent_join_manifest(cap)
+    if not manifest:
+        return []
+
+    visible = await get_visible_capabilities(db, user)
+    ids: list[str] = []
+    seen: set[str] = set()
+    for dep in manifest:
+        dep_type = str(dep.get("type") or "")
+        if dep_type not in _JOINABLE_DEP_TYPES:
+            continue
+        matches = [
+            c
+            for c in visible
+            if c.name == dep.get("name")
+            and c.type == dep_type
+            and c.status in ("published", "deprecated")
+            and c.id != cap.id
+        ]
+        if not matches:
+            continue
+        version = str(dep.get("version") or "").strip()
+        if version:
+            locked = [c for c in matches if c.version == version]
+            dep_cap = (
+                locked[0] if locked else max(matches, key=lambda c: parse_semver(c.version))
+            )
+        else:
+            dep_cap = max(matches, key=lambda c: parse_semver(c.version))
+        if dep_cap.id in seen:
+            continue
+        seen.add(dep_cap.id)
+        ids.append(dep_cap.id)
+    return ids
 
 
 async def _resolve_runtime(
@@ -180,14 +283,87 @@ async def invoke_tool(db: AsyncSession, user: User, cap: Capability, params: dic
     }
 
 
+def read_skill_md(cap: Capability, *, max_chars: int = 50000) -> str:
+    """从能力包读取 SKILL.md 正文（线上网关按需注入上下文，非远程执行）。"""
+    from app.services.mcp_gateway import read_package_files
+
+    raw = read_package_files(cap).get("SKILL.md")
+    if not raw:
+        return ""
+    text = raw.decode("utf-8", errors="replace")
+    return text[:max_chars] if max_chars > 0 else text
+
+
 async def activate_skill(db: AsyncSession, user: User, cap: Capability, context: str) -> dict[str, Any]:
-    await record_usage(db, user, cap, "activate", {"context": context})
+    """激活技能：返回 SKILL.md 正文供调用方注入上下文（不做远程执行）。"""
+    if cap.type != "skill":
+        raise ValueError(f"{cap.name} 不是 skill 能力")
+    skill_md = read_skill_md(cap)
+    await record_usage(
+        db,
+        user,
+        cap,
+        "activate",
+        {"context": context, "skill_md_chars": len(skill_md)},
+    )
+    note = (
+        "请按下方 SKILL.md 执行任务（线上仅下发文本，不在市场侧执行）。"
+        if skill_md
+        else "技能包缺少 SKILL.md，无法提供执行指引。"
+    )
     return {
         "skill": cap.name,
         "version": cap.version,
-        "activated": True,
+        "activated": bool(skill_md),
         "context": context,
-        "note": "技能已激活，将按 SKILL.md 定义的工作流执行。",
+        "skill_md": skill_md,
+        "note": note,
+    }
+
+
+def read_agent_prompt(cap: Capability, *, max_chars: int = 50000) -> str:
+    """从能力包读取 PROMPT.md（桌面人设 / 模型按需注入，非远程执行）。"""
+    from app.services.mcp_gateway import read_package_files
+
+    raw = read_package_files(cap).get("PROMPT.md")
+    if not raw:
+        return ""
+    text = raw.decode("utf-8", errors="replace")
+    return text[:max_chars] if max_chars > 0 else text
+
+
+async def fetch_agent_persona(db: AsyncSession, user: User, cap: Capability) -> dict[str, Any]:
+    """线上拉取助手人设：返回 PROMPT.md + 可加入的依赖清单（不下载 zip、不跑任务）。"""
+    if cap.type != "agent":
+        raise ValueError(f"{cap.name} 不是 agent 能力")
+    prompt = read_agent_prompt(cap)
+    deps = [
+        {
+            "name": str(d.get("name") or ""),
+            "type": str(d.get("type") or ""),
+            "version": str(d.get("version") or ""),
+        }
+        for d in _read_agent_join_manifest(cap)
+        if d.get("name") and d.get("type")
+    ]
+    await record_usage(
+        db,
+        user,
+        cap,
+        "persona",
+        {"prompt_chars": len(prompt), "deps": len(deps)},
+    )
+    note = (
+        "请将 PROMPT.md 用作本地人设；依赖 skill/mcp/tool 需另装或走线上网关。"
+        if prompt
+        else "助手包缺少 PROMPT.md，无法提供人设。"
+    )
+    return {
+        "agent": cap.name,
+        "version": cap.version,
+        "prompt": prompt,
+        "dependencies": deps,
+        "note": note,
     }
 
 
@@ -199,6 +375,7 @@ async def install_mcp(db: AsyncSession, user: User, cap: Capability, config: dic
         probe_tools,
         read_package_files,
     )
+    from app.services.secret_vault import attach_user_env, resolve_user_env
 
     files = read_package_files(cap)
     raw = files.get("connection.json")
@@ -236,6 +413,8 @@ async def install_mcp(db: AsyncSession, user: User, cap: Capability, config: dic
             "error": f"暂不支持 transport={transport}",
             "tools": [],
         }
+    user_env = await resolve_user_env(db, user.id, capability_id=cap.id)
+    cfg = attach_user_env(dict(cfg), user_env)
     try:
         tools = await probe_tools(cfg, files)
     except Exception as exc:  # noqa: BLE001
@@ -254,6 +433,7 @@ async def install_mcp(db: AsyncSession, user: User, cap: Capability, config: dic
         "installed": True,
         "transport": cfg["transport"],
         "tools": [t["name"] for t in tools],
+        "secrets_injected": sorted(user_env.keys()),
     }
 
 

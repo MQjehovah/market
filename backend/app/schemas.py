@@ -5,7 +5,20 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-CAPABILITY_TYPES = ("agent", "tool", "skill", "mcp", "workflow", "plugin")
+CAPABILITY_TYPES = (
+    "agent",
+    "tool",
+    "skill",
+    "mcp",
+    "workflow",
+    "plugin",
+    "rule",
+    "command",
+    "hook",
+)
+CapabilityType = Literal[
+    "agent", "tool", "skill", "mcp", "workflow", "plugin", "rule", "command", "hook"
+]
 VISIBILITY_LEVELS = ("private", "team", "internal", "public")
 STATUS_LEVELS = ("draft", "reviewing", "published", "deprecated", "archived", "rejected", "returned")
 ROLES = ("admin", "publisher", "user")
@@ -65,7 +78,7 @@ class TokenOut(BaseModel):
 class CapabilityBase(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str = Field(default="", max_length=20000)
-    type: Literal["agent", "tool", "skill", "mcp", "workflow", "plugin"]
+    type: CapabilityType
     version: str = Field(default="0.1.0", max_length=50)
     category: str = Field(default="", max_length=100)
     tags: list[str] = Field(default_factory=list)
@@ -75,7 +88,7 @@ class CapabilityBase(BaseModel):
     install_policy: Literal["optional", "default_on", "required"] = "optional"
     distribution: Literal["local", "remote", "both"] = "both"
     risk_default: Literal["read", "write", "destructive"] = "read"
-    data_domain: str = Field(default="", max_length=50, description="数据域，如 设备/客户/财务/知识")
+    data_domain: str = Field(default="", max_length=64)
 
     @field_validator("version")
     @classmethod
@@ -90,6 +103,11 @@ class CapabilityBase(BaseModel):
     def validate_tags(cls, v: list[str]) -> list[str]:
         return [t.strip()[:32] for t in v if t.strip()][:20]
 
+    @field_validator("data_domain")
+    @classmethod
+    def validate_data_domain(cls, v: str) -> str:
+        return (v or "").strip()[:64]
+
 
 class CapabilityCreate(CapabilityBase):
     pass
@@ -97,7 +115,7 @@ class CapabilityCreate(CapabilityBase):
 
 class CapabilityUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
-    type: Literal["agent", "tool", "skill", "mcp", "workflow", "plugin"] | None = None
+    type: CapabilityType | None = None
     description: str | None = None
     category: str | None = Field(default=None, max_length=100)
     tags: list[str] | None = None
@@ -107,7 +125,7 @@ class CapabilityUpdate(BaseModel):
     install_policy: Literal["optional", "default_on", "required"] | None = None
     distribution: Literal["local", "remote", "both"] | None = None
     risk_default: Literal["read", "write", "destructive"] | None = None
-    data_domain: str | None = Field(default=None, max_length=50)
+    data_domain: str | None = Field(default=None, max_length=64)
 
 
 class InstallPolicyUpdate(BaseModel):
@@ -190,6 +208,9 @@ class CapabilityOut(CapabilityBase):
     # skill/mcp：被哪些 agent/plugin 引用；plugin 子能力：父插件 id
     used_by: list[dict[str, Any]] = Field(default_factory=list)
     parent_plugin_id: str | None = None
+    # 桌面消费投影；plugin 的已发布子能力（与 input_schema.components 同源）
+    consumers: dict[str, Any] = Field(default_factory=dict)
+    components: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class CapabilityPage(BaseModel):
@@ -197,6 +218,25 @@ class CapabilityPage(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class TaskSearchHitOut(CapabilityOut):
+    """任务搜索单条：在 CapabilityOut 上附带打分与命中词。"""
+
+    match_score: float = 0.0
+    matched_terms: list[str] = Field(default_factory=list)
+
+
+class TaskSearchOut(BaseModel):
+    """按要办的事搜索：分组结果。"""
+
+    q: str = ""
+    terms: list[str] = Field(default_factory=list)
+    agents: list[TaskSearchHitOut] = Field(default_factory=list)
+    skills: list[TaskSearchHitOut] = Field(default_factory=list)
+    mcps: list[TaskSearchHitOut] = Field(default_factory=list)
+    plugins: list[TaskSearchHitOut] = Field(default_factory=list)
+    others: list[TaskSearchHitOut] = Field(default_factory=list)
 
 
 class ReviewRequest(BaseModel):
@@ -214,6 +254,7 @@ class NotificationOut(BaseModel):
     id: str
     title: str
     body: str
+    link: str = ""
     read: bool
     created_at: datetime
 
@@ -235,10 +276,79 @@ class UsageEventOut(BaseModel):
     id: str
     user_id: str
     capability_id: str
+    capability_version: str = ""
     action: str
     params: dict
     result_status: str
+    duration_ms: int = 0
+    conversation_id: str = ""
+    source: str = "platform"
     created_at: datetime
+
+
+class UserSecretUpsert(BaseModel):
+    key_name: str = Field(min_length=1, max_length=128)
+    value: str = Field(min_length=1, max_length=8192)
+    # 空=全局；填 capability_id 为该能力专用覆盖
+    scope: str = Field(default="", max_length=36)
+    label: str = Field(default="", max_length=128)
+
+
+class UserSecretBulkUpsert(BaseModel):
+    secrets: dict[str, str] = Field(default_factory=dict, description="key_name → 明文值")
+    scope: str = Field(default="", max_length=36, description="空=全局；或 capability_id")
+
+
+class UserSecretOut(BaseModel):
+    id: str
+    key_name: str
+    scope: str = ""
+    label: str = ""
+    has_value: bool = True
+    updated_at: datetime | None = None
+    created_at: datetime | None = None
+
+
+class UserSecretStatusOut(BaseModel):
+    required: list[str] = Field(default_factory=list)
+    filled: list[str] = Field(default_factory=list)
+    missing: list[str] = Field(default_factory=list)
+    complete: bool = False
+
+
+class ServiceTokenCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    scopes: list[str] = Field(default_factory=lambda: ["runtime", "gateway", "sync"])
+    expires_days: int | None = Field(default=365, ge=1, le=3650)
+    # 绑定已有用户；留空则自动创建 svc_<slug> 服务账号
+    user_id: str | None = None
+
+
+class ServiceTokenOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    token_prefix: str
+    user_id: str
+    username: str = ""
+    scopes: list[str] = Field(default_factory=list)
+    expires_at: datetime | None = None
+    last_used_at: datetime | None = None
+    revoked: bool = False
+    created_by: str
+    created_at: datetime
+
+
+class ServiceTokenCreated(ServiceTokenOut):
+    """创建时一次性返回明文 token。"""
+
+    token: str
+
+
+class AccessPolicyUpdate(BaseModel):
+    access_policy: Literal["open", "admin_only", "restricted"] = "open"
+    allowed_users: list[str] = Field(default_factory=list, description="restricted 时的白名单用户名")
 
 
 class RuntimeResult(BaseModel):
@@ -268,7 +378,7 @@ class McpCallRequest(BaseModel):
 
 class AssembleDependency(BaseModel):
     name: str = Field(min_length=1, max_length=255)
-    type: Literal["tool", "skill", "mcp"]
+    type: Literal["tool", "skill", "mcp", "rule", "command", "hook"]
     version: str = Field(default="", max_length=50, description="留空取最新发布版")
 
 
@@ -381,6 +491,40 @@ class SkillEditOut(BaseModel):
 
 class SkillEditSave(BaseModel):
     skill_md: str = Field(default="", max_length=500000)
+    description: str = Field(default="", max_length=20000)
+    category: str = Field(default="", max_length=100)
+    tags: list[str] = Field(default_factory=list)
+    new_version: str = Field(default="", max_length=50, description="留空则基于最新版本 patch+1")
+
+
+class MarkdownKindEditOut(BaseModel):
+    capability: CapabilityOut
+    body: str = ""
+    files: list[dict[str, Any]] = Field(default_factory=list)
+    base_version: str = ""
+    always_apply: bool = False
+    globs: str = ""
+
+
+class MarkdownKindEditSave(BaseModel):
+    body: str = Field(default="", max_length=500000)
+    description: str = Field(default="", max_length=20000)
+    category: str = Field(default="", max_length=100)
+    tags: list[str] = Field(default_factory=list)
+    new_version: str = Field(default="", max_length=50, description="留空则基于最新版本 patch+1")
+    always_apply: bool | None = None
+    globs: str = Field(default="", max_length=500)
+
+
+class HookEditOut(BaseModel):
+    capability: CapabilityOut
+    hooks_json: str = ""
+    files: list[dict[str, Any]] = Field(default_factory=list)
+    base_version: str = ""
+
+
+class HookEditSave(BaseModel):
+    hooks_json: str = Field(default="", max_length=500000)
     description: str = Field(default="", max_length=20000)
     category: str = Field(default="", max_length=100)
     tags: list[str] = Field(default_factory=list)
@@ -517,6 +661,26 @@ class MyCapabilityAdd(BaseModel):
     capability_id: str
 
 
-class AccessPolicyUpdate(BaseModel):
-    access_policy: Literal["open", "admin_only", "restricted"] = "open"
-    allowed_users: list[str] = Field(default_factory=list, description="restricted 时的白名单用户名")
+class MyCapabilityPatch(BaseModel):
+    enabled: bool
+
+
+class HostSyncItem(BaseModel):
+    """宿主（零号员工 / 桌面）应安装的一条已加入且启用能力。"""
+
+    id: str
+    name: str
+    type: str
+    version: str
+    description: str = ""
+    enabled: bool = True
+    download_url: str = ""
+    consumers: dict[str, Any] = Field(default_factory=dict)
+
+
+class HostSyncOut(BaseModel):
+    items: list[HostSyncItem] = Field(default_factory=list)
+    hint: str = (
+        "只含已加入且启用的项。宿主安装后应尊重 enabled："
+        "停用后下次同步请忽略或卸载，不必再复制 cap install。"
+    )

@@ -13,6 +13,7 @@ from app.models import (
     Notification,
     Rating,
     Review,
+    ServiceToken,
     Subscription,
     UsageEvent,
     User,
@@ -24,6 +25,9 @@ from app.schemas import (
     CapabilityOut,
     MessageOut,
     ReviewRequest,
+    ServiceTokenCreate,
+    ServiceTokenCreated,
+    ServiceTokenOut,
     StatsOut,
     UserAdminCreate,
     UserAdminUpdate,
@@ -31,6 +35,11 @@ from app.schemas import (
 )
 from app.services.capabilities import change_status, parse_semver, review_capability
 from app.services.capabilities import to_capability_out
+from app.services.service_tokens import (
+    create_service_token,
+    list_service_tokens,
+    revoke_service_token,
+)
 from app.services.stats import build_stats
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -184,6 +193,8 @@ async def delete_user(user_id: str, db: DbSession, user: CurrentUser):
     await db.execute(delete(Rating).where(Rating.user_id == user_id))
     await db.execute(delete(Notification).where(Notification.user_id == user_id))
     await db.execute(delete(UsageEvent).where(UsageEvent.user_id == user_id))
+    await db.execute(delete(ServiceToken).where(ServiceToken.user_id == user_id))
+    await db.execute(delete(ServiceToken).where(ServiceToken.created_by == user_id))
     await db.execute(delete(AgentBinding).where(AgentBinding.created_by == user_id))
     await db.execute(delete(A2ATask).where(A2ATask.created_by == user_id))
     await db.execute(delete(WorkflowExecution).where(WorkflowExecution.created_by == user_id))
@@ -230,3 +241,84 @@ async def own_stats(db: DbSession, user: CurrentUser):
     if user.role == "user":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "普通用户无权查看统计")
     return await build_stats(db, user, scope="own")
+
+
+@router.get("/service-tokens", response_model=list[ServiceTokenOut])
+async def admin_list_service_tokens(db: DbSession, user: CurrentUser):
+    require_admin(user)
+    rows = await list_service_tokens(db)
+    user_ids = {r.user_id for r in rows}
+    names: dict[str, str] = {}
+    if user_ids:
+        for u in (await db.scalars(select(User).where(User.id.in_(user_ids)))).all():
+            names[u.id] = u.username
+    return [
+        ServiceTokenOut(
+            id=r.id,
+            name=r.name,
+            token_prefix=r.token_prefix,
+            user_id=r.user_id,
+            username=names.get(r.user_id, ""),
+            scopes=list(r.scopes or []),
+            expires_at=r.expires_at,
+            last_used_at=r.last_used_at,
+            revoked=r.revoked,
+            created_by=r.created_by,
+            created_at=r.created_at,
+        )
+        for r in rows
+    ]
+
+
+@router.post(
+    "/service-tokens",
+    response_model=ServiceTokenCreated,
+    status_code=status.HTTP_201_CREATED,
+)
+async def admin_create_service_token(
+    data: ServiceTokenCreate, db: DbSession, user: CurrentUser
+):
+    require_admin(user)
+    row, raw = await create_service_token(
+        db,
+        admin=user,
+        name=data.name,
+        scopes=data.scopes,
+        expires_days=data.expires_days,
+        user_id=data.user_id,
+    )
+    svc = await db.get(User, row.user_id)
+    return ServiceTokenCreated(
+        id=row.id,
+        name=row.name,
+        token_prefix=row.token_prefix,
+        user_id=row.user_id,
+        username=svc.username if svc else "",
+        scopes=list(row.scopes or []),
+        expires_at=row.expires_at,
+        last_used_at=row.last_used_at,
+        revoked=row.revoked,
+        created_by=row.created_by,
+        created_at=row.created_at,
+        token=raw,
+    )
+
+
+@router.post("/service-tokens/{token_id}/revoke", response_model=ServiceTokenOut)
+async def admin_revoke_service_token(token_id: str, db: DbSession, user: CurrentUser):
+    require_admin(user)
+    row = await revoke_service_token(db, token_id)
+    svc = await db.get(User, row.user_id)
+    return ServiceTokenOut(
+        id=row.id,
+        name=row.name,
+        token_prefix=row.token_prefix,
+        user_id=row.user_id,
+        username=svc.username if svc else "",
+        scopes=list(row.scopes or []),
+        expires_at=row.expires_at,
+        last_used_at=row.last_used_at,
+        revoked=row.revoked,
+        created_by=row.created_by,
+        created_at=row.created_at,
+    )

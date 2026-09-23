@@ -1,14 +1,16 @@
-"""Plugin 拆包：支持 Agent Plugins / 兼容插件目录结构。
+"""Plugin 拆包：支持 Agent Plugins / Cursor Plugin 目录结构。
 
 典型目录结构：
-    plugin.json                 # 或兼容插件清单路径
-    agents/<name>/agent.json
-    agents/<name>/PROMPT.md
-    skills/<name>/SKILL.md      # 可选 skill.json
-    mcp.json                    # mcpServers 风格，或顶层 connection 文件
-    tools/<name>/...            # 可选的 tool 子目录
+    plugin.json 或 .cursor-plugin/plugin.json
+    agents/<name>/PROMPT.md     # 市场助手；或 agents/*.md 子代理
+    skills/<name>/SKILL.md
+    rules/*.mdc                 # Cursor rules
+    commands/*.md               # 斜杠命令
+    hooks/hooks.json + scripts/
+    mcp.json
+    tools/<name>/...
 
-上传后自动拆为 agent / skill / mcp / tool 子草稿并挂到 plugin；
+上传后自动拆为 agent / skill / mcp / tool / rule / command / hook 子草稿；
 审核通过时一并发布子能力。
 """
 
@@ -16,6 +18,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import zipfile
 from typing import Any
 
@@ -186,8 +189,90 @@ def _rewrite_plugin_root_paths(value: Any) -> Any:
     return value
 
 
+_RULE_EXTS = (".mdc", ".md", ".markdown")
+_COMMAND_EXTS = (".md", ".mdc", ".markdown", ".txt")
+_AGENT_MD_EXTS = (".md", ".mdc", ".markdown")
+
+
+def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
+    """Parse simple YAML-like --- frontmatter; unknown structure is ignored."""
+    raw = text.lstrip("\ufeff")
+    if not raw.startswith("---"):
+        return {}, text
+    rest = raw[3:].lstrip("\r\n")
+    idx = rest.find("\n---")
+    if idx < 0:
+        return {}, text
+    block = rest[:idx]
+    body = rest[idx + 4 :].lstrip("\r\n")
+    meta: dict[str, Any] = {}
+    for line in block.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or ":" not in line:
+            continue
+        key, val = line.split(":", 1)
+        key = key.strip()
+        val = val.strip().strip('"').strip("'")
+        low = val.lower()
+        if low in ("true", "yes"):
+            meta[key] = True
+        elif low in ("false", "no"):
+            meta[key] = False
+        elif val.startswith("[") and val.endswith("]"):
+            inner = val[1:-1].strip()
+            meta[key] = (
+                [p.strip().strip('"').strip("'") for p in inner.split(",") if p.strip()]
+                if inner
+                else []
+            )
+        else:
+            meta[key] = val
+    return meta, body
+
+
+def _safe_comp_name(name: str) -> str:
+    s = re.sub(r"[^\w.\-]+", "-", str(name).strip(), flags=re.UNICODE).strip("-.")
+    return s or "item"
+
+
+def _file_stem(path: str) -> str:
+    name = path.replace("\\", "/").rsplit("/", 1)[-1]
+    if "." in name:
+        return name.rsplit(".", 1)[0]
+    return name
+
+
+def _norm_plugin_path(value: str) -> str:
+    return str(value).replace("\\", "/").lstrip("./").rstrip("/")
+
+
+def _manifest_prefixes(plugin: dict[str, Any], field: str, default: str) -> list[str]:
+    raw = plugin.get(field)
+    if raw is None:
+        return [default]
+    if isinstance(raw, str):
+        p = _norm_plugin_path(raw)
+        return [p] if p else [default]
+    if isinstance(raw, list):
+        out = [_norm_plugin_path(str(v)) for v in raw if v]
+        return out or [default]
+    return [default]
+
+
+def _iter_ext_files(files: dict[str, bytes], prefix: str, exts: tuple[str, ...]) -> list[str]:
+    p = prefix if prefix.endswith("/") else prefix + "/"
+    found: list[str] = []
+    for path in files:
+        if not path.startswith(p):
+            continue
+        lower = path.lower()
+        if any(lower.endswith(ext) for ext in exts):
+            found.append(path)
+    return sorted(found)
+
+
 def extract_plugin_components(files: dict[str, bytes], plugin: dict[str, Any]) -> list[dict[str, Any]]:
-    """从 plugin 包中抽取子能力列表（agent/skill/mcp/tool）。"""
+    """从 plugin 包中抽取子能力列表（agent/skill/mcp/tool/rule/command/hook）。"""
     components: list[dict[str, Any]] = []
     version = str(plugin.get("version") or "0.1.0")
     primary = plugin.get("primary_agent") or plugin.get("main_agent") or ""
@@ -295,6 +380,43 @@ def extract_plugin_components(files: dict[str, bytes], plugin: dict[str, Any]) -
                 }
             )
 
+    existing_agent_names = {c["name"] for c in components if c["type"] == "agent"}
+    existing_agent_dirs = set(_subdir_names(files, "agents"))
+    for prefix in _manifest_prefixes(plugin, "agents", "agents"):
+        for path in _iter_ext_files(files, prefix, _AGENT_MD_EXTS):
+            rest = path[len(prefix) :].lstrip("/") if path.startswith(prefix) else path
+            if "/" in rest:
+                continue
+            stem = _file_stem(path)
+            if stem in existing_agent_dirs:
+                continue
+            try:
+                text = files[path].decode("utf-8-sig")
+            except UnicodeDecodeError:
+                continue
+            fm, body = parse_frontmatter(text)
+            name = _safe_comp_name(str(fm.get("name") or stem))
+            if name in existing_agent_names:
+                continue
+            desc = str(fm.get("description") or plugin.get("description") or "")
+            meta = {"name": name, "description": desc, "version": version}
+            pkg_files = {
+                "agent.json": _json_bytes(meta),
+                "PROMPT.md": (body or text).encode("utf-8"),
+            }
+            role = "primary" if not existing_agent_names else "agent"
+            components.append(
+                {
+                    "type": "agent",
+                    "name": name,
+                    "version": version,
+                    "description": desc,
+                    "role": role,
+                    "package": _zip_bytes(pkg_files),
+                }
+            )
+            existing_agent_names.add(name)
+
     for skill_name in _subdir_names(files, "skills"):
         base = f"skills/{skill_name}/"
         pkg_files = _collect_prefix(files, base)
@@ -327,6 +449,32 @@ def extract_plugin_components(files: dict[str, bytes], plugin: dict[str, Any]) -
                 "name": str(meta.get("name") or skill_name),
                 "version": str(meta.get("version") or version),
                 "description": str(meta.get("description") or ""),
+                "role": "skill",
+                "package": _zip_bytes(pkg_files),
+            }
+        )
+
+    if "SKILL.md" in files and not any(c["type"] == "skill" for c in components):
+        fm, body = parse_frontmatter(files["SKILL.md"].decode("utf-8-sig", errors="replace"))
+        skill_name = _safe_comp_name(str(fm.get("name") or plugin.get("name") or "skill"))
+        meta = {
+            "name": skill_name,
+            "description": str(fm.get("description") or plugin.get("description") or ""),
+            "version": version,
+        }
+        pkg_files = {
+            "SKILL.md": (body or files["SKILL.md"].decode("utf-8-sig", errors="replace")).encode("utf-8"),
+            "skill.json": _json_bytes(meta),
+        }
+        from app.services.packages import validate_skill_meta
+
+        validate_skill_meta(meta, "SKILL.md", require_version=True)
+        components.append(
+            {
+                "type": "skill",
+                "name": skill_name,
+                "version": version,
+                "description": str(meta["description"]),
                 "role": "skill",
                 "package": _zip_bytes(pkg_files),
             }
@@ -480,10 +628,135 @@ def extract_plugin_components(files: dict[str, bytes], plugin: dict[str, Any]) -
             }
         )
 
+    seen_rule_names = set()
+    for prefix in _manifest_prefixes(plugin, "rules", "rules"):
+        for path in _iter_ext_files(files, prefix, _RULE_EXTS):
+            try:
+                text = files[path].decode("utf-8-sig")
+            except UnicodeDecodeError as exc:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY, f"{path} 不是合法 UTF-8：{exc}"
+                ) from exc
+            fm, body = parse_frontmatter(text)
+            name = _safe_comp_name(str(fm.get("name") or _file_stem(path)))
+            if name in seen_rule_names:
+                continue
+            seen_rule_names.add(name)
+            desc = str(fm.get("description") or plugin.get("description") or "")
+            globs = fm.get("globs") or ""
+            if isinstance(globs, list):
+                globs = ",".join(str(g) for g in globs)
+            always = bool(fm.get("alwaysApply") or fm.get("always_apply"))
+            meta = {
+                "name": name,
+                "description": desc,
+                "version": version,
+                "alwaysApply": always,
+                "globs": globs,
+            }
+            pkg_files = {
+                "rule.json": _json_bytes(meta),
+                "RULE.mdc": (body or text).encode("utf-8"),
+            }
+            components.append(
+                {
+                    "type": "rule",
+                    "name": name,
+                    "version": version,
+                    "description": desc,
+                    "role": "rule",
+                    "package": _zip_bytes(pkg_files),
+                }
+            )
+
+    seen_cmd_names = set()
+    for prefix in _manifest_prefixes(plugin, "commands", "commands"):
+        for path in _iter_ext_files(files, prefix, _COMMAND_EXTS):
+            try:
+                text = files[path].decode("utf-8-sig")
+            except UnicodeDecodeError as exc:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY, f"{path} 不是合法 UTF-8：{exc}"
+                ) from exc
+            fm, body = parse_frontmatter(text)
+            name = _safe_comp_name(str(fm.get("name") or _file_stem(path)))
+            if name in seen_cmd_names:
+                continue
+            seen_cmd_names.add(name)
+            desc = str(fm.get("description") or plugin.get("description") or "")
+            meta = {"name": name, "description": desc, "version": version}
+            pkg_files = {
+                "command.json": _json_bytes(meta),
+                "COMMAND.md": (body or text).encode("utf-8"),
+            }
+            components.append(
+                {
+                    "type": "command",
+                    "name": name,
+                    "version": version,
+                    "description": desc,
+                    "role": "command",
+                    "package": _zip_bytes(pkg_files),
+                }
+            )
+
+    hooks_cfg: dict[str, Any] | None = None
+    hooks_scripts: dict[str, bytes] = {}
+    hooks_field = plugin.get("hooks")
+    if isinstance(hooks_field, dict) and (
+        isinstance(hooks_field.get("hooks"), dict) or hooks_field.get("version") is not None
+    ):
+        hooks_cfg = hooks_field
+        hooks_scripts = _collect_prefix(files, "scripts")
+    else:
+        hook_path = "hooks/hooks.json"
+        if isinstance(hooks_field, str) and hooks_field.strip():
+            hook_path = _norm_plugin_path(hooks_field)
+            if not hook_path.endswith(".json"):
+                hook_path = f"{hook_path}/hooks.json" if hook_path else "hooks/hooks.json"
+        if hook_path in files:
+            try:
+                loaded = json.loads(files[hook_path].decode("utf-8-sig"))
+            except Exception as exc:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY, f"{hook_path} 解析失败：{exc}"
+                ) from exc
+            if isinstance(loaded, dict):
+                hooks_cfg = loaded
+                hooks_scripts = _collect_prefix(files, "scripts")
+                extra = _collect_prefix(files, "hooks/")
+                for rel, data in extra.items():
+                    if rel == "hooks.json":
+                        continue
+                    hooks_scripts.setdefault(rel, data)
+    if hooks_cfg is not None:
+        hook_name = _safe_comp_name(str(plugin.get("name") or "plugin") + "-hooks")
+        events = hooks_cfg.get("hooks") if isinstance(hooks_cfg.get("hooks"), dict) else {}
+        desc = f"来自插件 {plugin.get('name')} 的 Hooks"
+        if isinstance(events, dict) and events:
+            desc = f"{desc}（{', '.join(list(events.keys())[:6])}）"
+        meta = {"name": hook_name, "description": desc, "version": version}
+        pkg_files = {
+            "hook.json": _json_bytes(meta),
+            "hooks.json": _json_bytes(hooks_cfg),
+        }
+        for rel, data in hooks_scripts.items():
+            pkg_files[f"scripts/{rel}"] = data
+        components.append(
+            {
+                "type": "hook",
+                "name": hook_name,
+                "version": version,
+                "description": desc,
+                "role": "hook",
+                "package": _zip_bytes(pkg_files),
+            }
+        )
+
     if not components:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "plugin 包需至少包含 agents/、extensions 指向的 Agent、skills/、tools/ 或 mcp.json 之一",
+            "plugin 包需至少包含 agents/、skills/、rules/、commands/、hooks/、tools/ 或 mcp.json 之一",
         )
     agents = [c for c in components if c["type"] == "agent"]
     if agents and not any(c.get("role") == "primary" for c in agents):
@@ -623,6 +896,7 @@ async def _cleanup_orphan_components(
                     user_id=row.author_id,
                     title=f"插件组件 {row.name} v{row.version} 已从插件断开并弃用",
                     body=f"父插件 {plugin_cap.name} 重新上传后不再包含该组件。",
+                    link=f"/capabilities/{row.id}",
                 )
             )
     return detached

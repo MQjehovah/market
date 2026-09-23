@@ -55,7 +55,7 @@ class Capability(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     description: Mapped[str] = mapped_column(Text, default="")
-    type: Mapped[str] = mapped_column(String(16), index=True, nullable=False)  # agent|tool|skill|mcp|workflow|plugin
+    type: Mapped[str] = mapped_column(String(16), index=True, nullable=False)  # agent|tool|skill|mcp|workflow|plugin|rule|command|hook
     version: Mapped[str] = mapped_column(String(50), nullable=False)
     changelog: Mapped[str] = mapped_column(Text, default="")
     readme_md: Mapped[str] = mapped_column(Text, default="")
@@ -74,11 +74,11 @@ class Capability(Base):
     install_policy: Mapped[str] = mapped_column(String(20), default="optional")
     # optional | default_on | required
     distribution: Mapped[str] = mapped_column(String(16), default="both")
-    # local（仅内网/本地部署）| remote（仅远程调用）| both
-    risk_default: Mapped[str] = mapped_column(String(16), default="read")
-    # read | write | destructive（默认风险级别）
-    data_domain: Mapped[str] = mapped_column(String(50), default="")
-    # 数据域自由文本：设备 / 客户 / 财务 / 知识…
+    # local | remote | both —— 本地安装 / 平台网关 / 双形态
+    risk_default: Mapped[str] = mapped_column(String(20), default="read")
+    # read | write | destructive
+    data_domain: Mapped[str] = mapped_column(String(64), default="")
+    # 设备/客户/财务/… 业务域标签
     validation_report: Mapped[dict] = mapped_column(JSON, default=dict)
     # 最近一次上传包的结构校验摘要：{ok, warnings, errors?, files}
     usage_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -182,11 +182,35 @@ class UsageEvent(Base):
     capability_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("capabilities.id"), index=True
     )
+    capability_version: Mapped[str] = mapped_column(String(50), default="")
     action: Mapped[str] = mapped_column(String(32), nullable=False)
-    # instantiate | invoke | activate | install | discover | fork
+    # instantiate | invoke | activate | install | discover | fork | mcp_connect | mcp_call | gateway_call
     params: Mapped[dict] = mapped_column(JSON, default=dict)
     result_status: Mapped[str] = mapped_column(String(16), default="ok")
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    conversation_id: Mapped[str] = mapped_column(String(128), default="", index=True)
+    source: Mapped[str] = mapped_column(String(16), default="platform")
+    # platform | local —— 平台轨 / 本地轨
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+
+
+class ServiceToken(Base):
+    """服务令牌（M2M）：Agent / CI / 网关消费方用 Bearer，不绑交互式登录。"""
+
+    __tablename__ = "service_tokens"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    token_prefix: Mapped[str] = mapped_column(String(16), default="")
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    scopes: Mapped[list] = mapped_column(JSON, default=list)
+    # runtime | gateway | sync | admin
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_by: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
 class Notification(Base):
@@ -196,6 +220,7 @@ class Notification(Base):
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     body: Mapped[str] = mapped_column(Text, default="")
+    link: Mapped[str] = mapped_column(String(255), default="")
     read: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
@@ -312,7 +337,7 @@ class MCPGatewayCall(Base):
     user_id: Mapped[str] = mapped_column(String(36), default="", index=True)
     username: Mapped[str] = mapped_column(String(64), default="")
     source: Mapped[str] = mapped_column(String(16), default="")
-    # server_token | jwt | sso | anonymous
+    # jwt | sso | service_token | server_token | anonymous
     method: Mapped[str] = mapped_column(String(20), default="other")
     # initialize | tools_list | tools_call | other
     tool: Mapped[str] = mapped_column(String(255), default="")
@@ -334,6 +359,28 @@ class UserCapability(Base):
     capability_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("capabilities.id"), index=True
     )
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     capability: Mapped["Capability"] = relationship()
+
+
+class UserSecret(Base):
+    """用户业务密钥托管（Fernet 密文）。scope=空为全局；填 capability_id 为能力级覆盖。"""
+
+    __tablename__ = "user_secrets"
+    __table_args__ = (
+        UniqueConstraint("user_id", "key_name", "scope", name="uq_user_secret_key_scope"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    key_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    # "" = 全局；否则为 capability.id，解析时能力级优先于全局
+    scope: Mapped[str] = mapped_column(String(36), default="", index=True)
+    ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    label: Mapped[str] = mapped_column(String(128), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )

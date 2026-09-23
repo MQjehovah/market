@@ -3,6 +3,8 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../api'
 import StatusBadge from '../components/StatusBadge.vue'
+import MarkdownEditor from '../components/MarkdownEditor.vue'
+import { bindUnsavedGuard } from '../utils/unsaved'
 
 const route = useRoute()
 const agentName = computed(() => route.params.name)
@@ -12,6 +14,24 @@ const notice = ref('')
 const saved = ref(null)
 const baseVersion = ref('')
 const catalog = ref({ tool: [], skill: [], mcp: [] })
+const baseline = ref(null)
+
+function formSnap() {
+  return JSON.stringify({
+    prompt: form.prompt,
+    description: form.description,
+    category: form.category,
+    tagsText: form.tagsText,
+    newVersion: form.newVersion,
+    deps: form.deps
+  })
+}
+
+function markClean() {
+  baseline.value = formSnap()
+}
+
+bindUnsavedGuard(() => baseline.value !== null && formSnap() !== baseline.value)
 
 const TYPE_LABELS = { tool: '工具', skill: '技能', mcp: 'MCP' }
 
@@ -54,6 +74,7 @@ async function load() {
     form.tagsText = (body.capability.tags || []).join(',')
     form.deps = (body.dependencies || []).map((d) => ({ ...d }))
     if (!form.deps.length) form.deps = [newDepRow()]
+    markClean()
   } catch (e) {
     error.value = e.message
   } finally {
@@ -83,6 +104,7 @@ async function save() {
     form.prompt = body.prompt
     form.deps = (body.dependencies || []).map((d) => ({ ...d }))
     if (!form.deps.length) form.deps = [newDepRow()]
+    markClean()
     notice.value =
       body.capability.status === 'draft'
         ? `已保存为 v${body.capability.version} 草稿，提交审核后发布`
@@ -150,7 +172,7 @@ onMounted(() => {
 
       <div class="field mt-16">
         <label>提示词（PROMPT.md）</label>
-        <textarea v-model="form.prompt" class="textarea" rows="16" spellcheck="false"></textarea>
+        <MarkdownEditor v-model="form.prompt" />
       </div>
 
       <div class="panel mt-16">

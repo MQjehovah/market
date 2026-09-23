@@ -9,13 +9,16 @@
    可以像连接普通 MCP server 一样调用，stdio 服务自动转成 HTTP（mcp-proxy 模式）。
 
 端点约定（挂在 /api/mcp-gateway 下）：
-    GET  /{name}/sse        SSE 传输的 MCP 服务（GET 建立连接）
+    GET  /{name}/sse        SSE 传输的 MCP 服务（GET 建立连接）——管理员登记表
     POST /{name}/messages   SSE 客户端回传 JSON-RPC 消息
     GET/POST/DELETE /{name}/stream   Streamable HTTP 传输的 MCP 服务
+    GET  /cap/{name}/sse    已发布 MCP 能力的桌面入口（Bearer = 市场/SSO/服务令牌）
+    POST /cap/{name}/messages
+    GET/POST/DELETE /cap/{name}/stream
+    能力名支持 name@version 钉版本；鉴权后限流/熔断；调用写 UsageEvent（含 conversation_id/耗时）
 """
 
 import asyncio
-import hashlib
 import hmac
 import io
 import json
@@ -25,12 +28,10 @@ import re
 import shutil
 import sys
 import tempfile
-import threading
 import time
 import zipfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from math import ceil
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -44,6 +45,7 @@ from mcp.server.sse import SseServerTransport
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.server.models import InitializationOptions
 from mcp.types import ServerCapabilities
+from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 logger = logging.getLogger("market.mcp_gateway")
@@ -54,6 +56,68 @@ CALL_TIMEOUT = 120
 _GENERIC_PYTHON = {"python", "python3", "py"}
 
 ConfigLoader = Callable[[str], Awaitable[dict[str, Any] | None]]
+
+
+def _conversation_id_from_scope(scope) -> str:
+    request = Request(scope, None)  # type: ignore[arg-type]
+    for key in ("x-conversation-id", "x-session-id"):
+        val = (request.headers.get(key) or "").strip()
+        if val:
+            return val[:128]
+    qs = scope.get("query_string") or b""
+    if b"conversation_id=" in qs:
+        from urllib.parse import parse_qs
+
+        params = parse_qs(qs.decode("utf-8", errors="ignore"))
+        vals = params.get("conversation_id") or []
+        if vals and vals[0].strip():
+            return vals[0].strip()[:128]
+    return ""
+
+
+async def persist_gateway_usage(
+    *,
+    user_id: str,
+    capability_id: str,
+    capability_version: str,
+    action: str,
+    params: dict[str, Any],
+    result_status: str,
+    duration_ms: int,
+    conversation_id: str,
+) -> None:
+    """网关路径异步落审计（独立会话，避免占用请求会话）。"""
+    from sqlalchemy import update
+
+    from app.database import SessionLocal
+    from app.models import Capability, UsageEvent
+
+    try:
+        async with SessionLocal() as db:
+            cap = await db.get(Capability, capability_id)
+            if cap is None:
+                return
+            await db.execute(
+                update(Capability)
+                .where(Capability.id == capability_id)
+                .values(usage_count=Capability.usage_count + 1)
+            )
+            db.add(
+                UsageEvent(
+                    user_id=user_id,
+                    capability_id=capability_id,
+                    capability_version=capability_version or cap.version or "",
+                    action=action,
+                    params=params,
+                    result_status=result_status,
+                    duration_ms=max(0, int(duration_ms or 0)),
+                    conversation_id=(conversation_id or "")[:128],
+                    source="platform",
+                )
+            )
+            await db.commit()
+    except Exception:  # noqa: BLE001
+        logger.exception("网关审计写入失败 action=%s cap=%s", action, capability_id)
 
 
 def format_connect_error(exc: BaseException, stderr: str = "") -> str:
@@ -121,21 +185,25 @@ def rewrite_stdio_script_arg(tmpdir: Path, arg: str) -> str:
     return arg
 
 
-def resolve_placeholders(value: Any) -> Any:
-    """递归解析 ${VAR} / ${VAR:default} 占位符（env/headers/args 中的敏感信息）。"""
+def resolve_placeholders(value: Any, extra_env: dict[str, str] | None = None) -> Any:
+    """递归解析 ${VAR} / ${VAR:default} 占位符（env/headers/args 中的敏感信息）。
+
+    extra_env：用户托管密钥等覆盖层，优先于进程环境变量。
+    """
+    overlay = extra_env or {}
 
     def _sub(m: re.Match) -> str:
         full = m.group(1).strip()
         var, _, default = full.partition(":")
-        real = os.environ.get(var, "")
+        real = overlay.get(var) or os.environ.get(var, "")
         if not real and default:
             real = default
         return real
 
     if isinstance(value, dict):
-        return {k: resolve_placeholders(v) for k, v in value.items()}
+        return {k: resolve_placeholders(v, extra_env) for k, v in value.items()}
     if isinstance(value, list):
-        return [resolve_placeholders(v) for v in value]
+        return [resolve_placeholders(v, extra_env) for v in value]
     if isinstance(value, str):
         return ENV_PLACEHOLDER.sub(_sub, value)
     return value
@@ -189,7 +257,11 @@ async def connect_upstream(
     transport = (config.get("transport") or "stdio").lower()
     cleanup: list[Path] = []
     errlog = None
+    if package_files is None:
+        raw_files = config.get("package_files")
+        package_files = raw_files if isinstance(raw_files, dict) else None
 
+    user_env = config.get("_user_env") if isinstance(config.get("_user_env"), dict) else {}
     try:
         if transport == "stdio":
             command = config.get("command") or "python"
@@ -197,7 +269,7 @@ async def connect_upstream(
             if str(command).strip().lower() in _GENERIC_PYTHON:
                 command = sys.executable
             args = list(config.get("args") or [])
-            env = resolve_placeholders(config.get("env") or {})
+            env = resolve_placeholders(config.get("env") or {}, user_env)
             cwd: str | None = config.get("cwd") or None
             if package_files:
                 tmpdir = Path(tempfile.mkdtemp(prefix=f"mcp-gw-{sanitize(config['name'])}-"))
@@ -207,6 +279,8 @@ async def connect_upstream(
                     args = [rewrite_stdio_script_arg(tmpdir, a) for a in args]
             merged_env = dict(os.environ)
             merged_env["PYTHONUNBUFFERED"] = "1"
+            if user_env:
+                merged_env.update({str(k): str(v) for k, v in user_env.items()})
             merged_env.update(env)
             params = StdioServerParameters(command=command, args=args, env=merged_env, cwd=cwd)
             # 真实文件描述符：anyio/subprocess 不能把 stderr 接到 StringIO
@@ -238,7 +312,7 @@ async def connect_upstream(
             url = config.get("url") or ""
             if not url:
                 raise RuntimeError("http 传输需要配置 url")
-            headers = resolve_placeholders(config.get("headers") or {})
+            headers = resolve_placeholders(config.get("headers") or {}, user_env)
             timeout = httpx.Timeout(
                 connect=CONNECT_TIMEOUT, read=CALL_TIMEOUT, write=CALL_TIMEOUT, pool=CALL_TIMEOUT
             )
@@ -257,7 +331,7 @@ async def connect_upstream(
             url = config.get("url") or ""
             if not url:
                 raise RuntimeError("sse 传输需要配置 url")
-            headers = resolve_placeholders(config.get("headers") or {})
+            headers = resolve_placeholders(config.get("headers") or {}, user_env)
             async with asyncio.timeout(CONNECT_TIMEOUT):
                 async with sse_client(
                     url, headers=headers, timeout=CONNECT_TIMEOUT, sse_read_timeout=CALL_TIMEOUT
@@ -304,10 +378,154 @@ async def load_gateway_config_by_name(db, name: str) -> dict[str, Any] | None:
     return row_to_config(row) if row is not None else None
 
 
-def make_forward_server(name: str, upstream: ClientSession) -> MCPServer:
+def _bearer_token(scope) -> str | None:
+    request = Request(scope, None)  # type: ignore[arg-type]
+    auth = request.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        token = auth[7:].strip()
+        return token or None
+    return None
+
+
+async def find_published_mcp(db, name: str, version: str | None = None):
+    """已发布/弃用期内的 MCP 能力（含制品）；version 为空取最新。"""
+    from sqlalchemy import select
+    from sqlalchemy.orm import joinedload, selectinload
+
+    from app.models import Capability
+    from app.services.capabilities import parse_semver, split_cap_ref
+
+    name, ref_ver = split_cap_ref(name)
+    version = version or ref_ver
+    stmt = (
+        select(Capability)
+        .options(selectinload(Capability.artifacts), joinedload(Capability.author))
+        .where(
+            Capability.name == name,
+            Capability.type == "mcp",
+            Capability.status.in_(("published", "deprecated")),
+        )
+    )
+    if version:
+        stmt = stmt.where(Capability.version == version)
+    rows = list((await db.scalars(stmt)).all())
+    if not rows:
+        return None
+    if version:
+        return rows[0]
+    return max(rows, key=lambda c: parse_semver(c.version))
+
+
+async def upstream_config_from_capability(db, cap) -> dict[str, Any] | None:
+    """已发布 MCP → connect_upstream 配置（stdio 带 package_files；gateway 解析登记表）。"""
+    files = read_package_files(cap)
+    raw = files.get("connection.json")
+    if not raw:
+        return None
+    try:
+        conn = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        raise RuntimeError("connection.json 解析失败") from None
+    if not isinstance(conn, dict):
+        raise RuntimeError("connection.json 顶层必须是对象")
+    transport = str(conn.get("transport") or conn.get("type") or "stdio").strip().lower()
+    if transport == "gateway":
+        cfg = await load_gateway_config_by_name(db, conn.get("server") or "")
+        if cfg is None:
+            raise RuntimeError(f"网关服务 {conn.get('server') or ''} 不存在")
+        cfg = dict(cfg)
+        cfg["enabled"] = True
+        return cfg
+    if transport not in ("http", "streamable_http", "sse", "stdio"):
+        raise RuntimeError(f"不支持 transport={transport}")
+    return {
+        "name": cap.name,
+        "transport": "streamable_http" if transport == "http" else transport,
+        "url": conn.get("url") or "",
+        "headers": conn.get("headers") or {},
+        "command": conn.get("command") or "python",
+        "args": list(conn.get("args") or []),
+        "env": conn.get("env") or {},
+        "cwd": conn.get("cwd") or "",
+        "enabled": True,
+        "package_files": files,
+    }
+
+
+async def authorize_capability_gateway(
+    scope, name: str
+) -> tuple[dict[str, Any] | None, int | None, dict | None]:
+    """能力级网关鉴权：Bearer（HS256|SSO|服务令牌）+ runtime 门禁 + 限流/熔断。
+
+    返回 (config, err_status, err_body)。config 含 `_audit` 元数据供调用审计。
+    """
+    from fastapi import HTTPException
+
+    from app.auth import get_current_user
+    from app.database import SessionLocal
+    from app.permissions import require_runtime_access
+    from app.services.capabilities import split_cap_ref
+    from app.services.gateway_governance import check_circuit, check_rate_limit
+
+    token = _bearer_token(scope)
+    if not token:
+        return None, 401, {"detail": "请先完成企业 SSO 登录（访问能力 MCP 网关需要 Bearer）"}
+
+    cap_name, _ = split_cap_ref(name)
+    circuit_key = f"mcp:{cap_name}"
+    ok, reason = check_circuit(circuit_key)
+    if not ok:
+        return None, 503, {"detail": reason}
+
+    async with SessionLocal() as db:
+        try:
+            user = await get_current_user(token, db)
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+            return None, int(exc.status_code), {"detail": detail}
+
+        ok, reason = check_rate_limit(f"user:{user.id}")
+        if not ok:
+            return None, 429, {"detail": reason}
+
+        cap = await find_published_mcp(db, name)
+        if cap is None:
+            return None, 404, {"detail": f"已发布 MCP {name} 不存在"}
+        dist = getattr(cap, "distribution", None) or "both"
+        if dist == "local":
+            return None, 403, {"detail": f"能力 {cap.name} 仅支持本地分发（distribution=local）"}
+        try:
+            await require_runtime_access(user, cap, db)
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+            return None, int(exc.status_code), {"detail": detail}
+        try:
+            config = await upstream_config_from_capability(db, cap)
+        except RuntimeError as exc:
+            return None, 502, {"detail": str(exc)[:300]}
+        if config is None:
+            return None, 404, {"detail": f"MCP {name} 缺少 connection.json"}
+        config = dict(config)
+        from app.services.secret_vault import attach_user_env, resolve_user_env
+
+        user_env = await resolve_user_env(db, user.id, capability_id=cap.id)
+        config = attach_user_env(config, user_env)
+        config["_audit"] = {
+            "user_id": user.id,
+            "capability_id": cap.id,
+            "capability_version": cap.version,
+            "capability_name": cap.name,
+            "conversation_id": _conversation_id_from_scope(scope),
+            "circuit_key": circuit_key,
+        }
+        return config, None, None
+
+
+def make_forward_server(name: str, upstream: ClientSession, audit: dict[str, Any] | None = None) -> MCPServer:
     """构建转发型低层 MCP server：tools/list 与 tools/call 全部转发到上游。"""
 
     server = MCPServer(f"gateway-{name}")
+    audit = audit or {}
 
     @server.list_tools()
     async def list_tools():
@@ -316,25 +534,54 @@ def make_forward_server(name: str, upstream: ClientSession) -> MCPServer:
 
     @server.call_tool()
     async def call_tool(tool_name: str, arguments: dict[str, Any]):
-        return await upstream.call_tool(tool_name, arguments or {})
+        from app.services.gateway_governance import record_failure, record_success
+
+        t0 = time.monotonic()
+        result_status = "ok"
+        try:
+            result = await upstream.call_tool(tool_name, arguments or {})
+            if audit.get("circuit_key"):
+                record_success(audit["circuit_key"])
+            return result
+        except Exception:
+            result_status = "error"
+            if audit.get("circuit_key"):
+                record_failure(audit["circuit_key"])
+            raise
+        finally:
+            if audit.get("user_id") and audit.get("capability_id"):
+                await persist_gateway_usage(
+                    user_id=audit["user_id"],
+                    capability_id=audit["capability_id"],
+                    capability_version=audit.get("capability_version") or "",
+                    action="gateway_call",
+                    params={
+                        "tool": tool_name,
+                        "capability": audit.get("capability_name") or name,
+                        "version": audit.get("capability_version") or "",
+                    },
+                    result_status=result_status,
+                    duration_ms=int((time.monotonic() - t0) * 1000),
+                    conversation_id=audit.get("conversation_id") or "",
+                )
 
     return server
-
 
 class _ServerProxy:
     """StreamableHTTPSessionManager 使用的“按会话建上游”的 server 代理。
 
     manager 每个客户端会话会调用一次 run()，我们在该会话内连接独立的上游，
     保证 stdio 子进程 / HTTP 会话的生命周期与客户端会话一致。
+    配置优先用 GatewayEndpoints 在鉴权后缓存的 config（能力级 /cap/{name}），
+    否则回退登记表 loader。
     """
 
-    def __init__(self, name: str, loader: ConfigLoader) -> None:
-        self.name = name
-        self._loader = loader
+    def __init__(self, endpoints: "GatewayEndpoints") -> None:
+        self._ep = endpoints
 
     def create_initialization_options(self, **kwargs) -> InitializationOptions:
         return InitializationOptions(
-            server_name=f"gateway-{self.name}",
+            server_name=f"gateway-{self._ep.name}",
             server_version="1.0.0",
             capabilities=ServerCapabilities(tools={}),
         )
@@ -348,11 +595,13 @@ class _ServerProxy:
         raise_exceptions: bool = False,
         stateless: bool = False,
     ) -> None:
-        config = await self._loader(self.name)
+        config = await self._ep.resolve_config()
         if config is None or not config.get("enabled", True):
-            raise RuntimeError(f"网关服务 {self.name} 不存在或已停用")
+            raise RuntimeError(f"网关服务 {self._ep.name} 不存在或已停用")
         async with connect_upstream(config) as upstream:
-            server = make_forward_server(self.name, upstream)
+            server = make_forward_server(
+                self._ep.name, upstream, audit=config.get("_audit")
+            )
             await server.run(
                 read_stream,
                 write_stream,
@@ -368,10 +617,19 @@ class GatewayEndpoints:
     def __init__(self, name: str, loader: ConfigLoader) -> None:
         self.name = name
         self._loader = loader
+        self._cached_config: dict[str, Any] | None = None
         self.sse = SseServerTransport(endpoint=f"/{name}/messages/")
         self._stream_manager: StreamableHTTPSessionManager | None = None
         self._stream_task: asyncio.Task | None = None
         self._stream_ready = asyncio.Event()
+
+    def cache_config(self, config: dict[str, Any] | None) -> None:
+        self._cached_config = config
+
+    async def resolve_config(self) -> dict[str, Any] | None:
+        if self._cached_config is not None:
+            return self._cached_config
+        return await self._loader(self.name)
 
     async def ensure_stream_manager(self) -> None:
         if self._stream_task is None:
@@ -380,7 +638,7 @@ class GatewayEndpoints:
 
     async def _run_stream_manager(self) -> None:
         manager = StreamableHTTPSessionManager(
-            _ServerProxy(self.name, self._loader), json_response=True
+            _ServerProxy(self), json_response=True
         )
         self._stream_manager = manager
         try:
@@ -394,9 +652,28 @@ class GatewayEndpoints:
             self._stream_ready.set()
 
     async def handle_sse(self, scope, receive, send, config: dict[str, Any]) -> None:
+        self.cache_config(config)
+        audit = config.get("_audit") or {}
+        if audit.get("user_id") and audit.get("capability_id"):
+            await persist_gateway_usage(
+                user_id=audit["user_id"],
+                capability_id=audit["capability_id"],
+                capability_version=audit.get("capability_version") or "",
+                action="mcp_connect",
+                params={
+                    "transport": "sse",
+                    "capability": audit.get("capability_name") or self.name,
+                    "version": audit.get("capability_version") or "",
+                },
+                result_status="ok",
+                duration_ms=0,
+                conversation_id=audit.get("conversation_id") or "",
+            )
         async with self.sse.connect_sse(scope, receive, send) as streams:
             async with connect_upstream(config) as upstream:
-                server = make_forward_server(self.name, upstream)
+                server = make_forward_server(
+                    self.name, upstream, audit=config.get("_audit")
+                )
                 await server.run(
                     streams[0], streams[1], server.create_initialization_options()
                 )
@@ -404,7 +681,25 @@ class GatewayEndpoints:
     async def handle_messages(self, scope, receive, send) -> None:
         await self.sse.handle_post_message(scope, receive, send)
 
-    async def handle_stream(self, scope, receive, send) -> None:
+    async def handle_stream(self, scope, receive, send, config: dict[str, Any] | None = None) -> None:
+        if config is not None:
+            self.cache_config(config)
+            audit = config.get("_audit") or {}
+            if audit.get("user_id") and audit.get("capability_id"):
+                await persist_gateway_usage(
+                    user_id=audit["user_id"],
+                    capability_id=audit["capability_id"],
+                    capability_version=audit.get("capability_version") or "",
+                    action="mcp_connect",
+                    params={
+                        "transport": "stream",
+                        "capability": audit.get("capability_name") or self.name,
+                        "version": audit.get("capability_version") or "",
+                    },
+                    result_status="ok",
+                    duration_ms=0,
+                    conversation_id=audit.get("conversation_id") or "",
+                )
         await self.ensure_stream_manager()
         await self._stream_manager.handle_request(scope, receive, send)
 
@@ -440,13 +735,17 @@ class GatewayRegistry:
 
 @dataclass
 class GatewayIdentity:
-    """入站请求身份：来源 server_token | jwt | sso | anonymous。"""
+    """入站请求身份来源：server_token | jwt | sso | service_token | anonymous。
+
+    仅用于审计归因；鉴权动作仍由 authorize_capability_gateway（/cap）与
+    check_token（服务级）执行，匿名仅服务级路由在未配置令牌时可能出现。
+    """
 
     source: str
     user_id: str | None = None
     username: str = ""
     role: str = ""
-    user: Any = None  # ORM User；仅 jwt/sso 来源非空
+    user: Any = None  # ORM User；仅 jwt/sso/service_token 来源非空
 
 
 class GatewayAuthError(Exception):
@@ -461,15 +760,8 @@ def _header(scope, name: str) -> str:
     return ""
 
 
-def _bearer_token(scope) -> str:
-    auth = _header(scope, "authorization")
-    if auth.lower().startswith("bearer "):
-        return auth[7:].strip()
-    return ""
-
-
 async def _resolve_bearer_identity(token: str) -> GatewayIdentity | None:
-    """Bearer → 本地 JWT / SSO 身份；均不匹配返回 None（短会话，无依赖注入）。"""
+    """Bearer → 本地 JWT / 服务令牌 / SSO 身份；均不匹配返回 None（短会话，无依赖注入）。"""
     from app.auth import resolve_user_by_bearer
     from app.database import SessionLocal
 
@@ -492,20 +784,21 @@ async def _resolve_bearer_identity(token: str) -> GatewayIdentity | None:
 
 
 async def authenticate_request(config: dict[str, Any], scope) -> GatewayIdentity:
-    """网关端点鉴权：per-server token → 本地 JWT → SSO → 匿名/401。
+    """识别入站请求身份来源（供审计）：per-server token → Bearer → 匿名。
 
-    1) api_token 非空时，X-Gateway-Token / Bearer 精确匹配（原行为，文案不变）；
-    2) Bearer 依次尝试本地 HS256 JWT 与 SSO RS256（复用 auth 双轨解析）；
-    3) 都不匹配：mcp_gateway_require_token=True → GatewayAuthError；False → 匿名。
+    1) api_token 非空时，X-Gateway-Token / Bearer 精确匹配 → server_token；
+    2) Bearer 依次尝试本地 JWT / 服务令牌 / SSO；
+    3) 都不匹配：api_token 非空或 require_token=True 抛 GatewayAuthError，
+       否则匿名（仅服务级路由可能出现）。
     """
     from app.config import get_settings
 
     expected = config.get("api_token") or ""
     if expected:
-        candidates = (_header(scope, "x-gateway-token"), _bearer_token(scope))
+        candidates = (_header(scope, "x-gateway-token"), _bearer_token(scope) or "")
         if any(c and hmac.compare_digest(c, expected) for c in candidates):
             return GatewayIdentity(source="server_token")
-    bearer = _bearer_token(scope)
+    bearer = _bearer_token(scope) or ""
     if bearer:
         identity = await _resolve_bearer_identity(bearer)
         if identity is not None:
@@ -513,53 +806,6 @@ async def authenticate_request(config: dict[str, Any], scope) -> GatewayIdentity
     if expected or get_settings().mcp_gateway_require_token:
         raise GatewayAuthError("网关令牌无效")
     return GatewayIdentity(source="anonymous")
-
-
-RATE_WINDOW_SECONDS = 60.0
-_rate_hits: dict[str, list[float]] = {}
-_rate_lock = threading.Lock()
-_rate_last_cleanup = 0.0
-
-
-def rate_limit_key(identity: GatewayIdentity, config: dict[str, Any], scope) -> str:
-    """限流身份键：登录用户 → 网关令牌指纹 → 客户端 IP。"""
-    if identity.user_id:
-        return f"user:{identity.user_id}"
-    token = config.get("api_token") or ""
-    if token:
-        return "token:" + hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
-    client = scope.get("client") or ("", 0)
-    return f"ip:{client[0]}"
-
-
-def check_rate_limit(key: str, limit: int, now: float | None = None) -> tuple[bool, int]:
-    """60s 滑动窗口限流（纯函数）。limit<=0 关闭；返回 (allowed, retry_after 秒)。"""
-    global _rate_last_cleanup
-
-    if limit <= 0:
-        return True, 0
-    now = time.monotonic() if now is None else now
-    with _rate_lock:
-        hits = [t for t in _rate_hits.get(key, []) if now - t < RATE_WINDOW_SECONDS]
-        if len(hits) >= limit:
-            _rate_hits[key] = hits
-            return False, max(1, ceil(RATE_WINDOW_SECONDS - (now - hits[0])))
-        hits.append(now)
-        _rate_hits[key] = hits
-        if now - _rate_last_cleanup >= RATE_WINDOW_SECONDS:
-            _rate_last_cleanup = now
-            for stale in [k for k, v in _rate_hits.items() if not v or now - v[-1] >= RATE_WINDOW_SECONDS]:
-                _rate_hits.pop(stale, None)
-        return True, 0
-
-
-def reset_rate_limits() -> None:
-    """清空滑动窗口状态（测试 / 本地重置用）。"""
-    global _rate_last_cleanup
-
-    with _rate_lock:
-        _rate_hits.clear()
-        _rate_last_cleanup = 0.0
 
 
 _METHOD_NAMES = {"initialize": "initialize", "tools/list": "tools_list", "tools/call": "tools_call"}
@@ -640,27 +886,32 @@ async def record_gateway_calls(
     ok: bool,
     error: str = "",
 ) -> None:
-    """能力级审计 + 用量：每条 JSON-RPC 消息一行；写失败仅告警不阻断请求。"""
+    """消息级审计：每条 JSON-RPC 消息写一行 MCPGatewayCall；写失败仅告警不阻断。
+
+    不做用量计数（UsageEvent/usage_count 由 persist_gateway_usage 负责，避免双记账）。
+    """
     if not calls:
         return
     from app.database import SessionLocal
-    from app.models import Capability, MCPGatewayCall, User
-    from app.services.marketplace import record_usage
+    from app.models import Capability, MCPGatewayCall
 
     error = (error or "")[:300]
     try:
         async with SessionLocal() as db:
+            audit = config.get("_audit") or {}
+            cap_id = config.get("capability_id") or audit.get("capability_id") or ""
             cap = None
-            cap_id = config.get("capability_id") or ""
             if cap_id:
                 cap = await db.get(Capability, cap_id)
-            usable = cap is not None and cap.status in ("published", "deprecated", "reviewing")
+            cap_version = audit.get("capability_version") or (
+                cap.version if cap is not None else ""
+            )
             for call in calls:
                 db.add(
                     MCPGatewayCall(
                         server_name=server_name,
                         capability_id=cap_id,
-                        capability_version=cap.version if cap is not None else "",
+                        capability_version=cap_version,
                         user_id=identity.user_id or "",
                         username=identity.username,
                         source=identity.source,
@@ -672,20 +923,6 @@ async def record_gateway_calls(
                         error=error,
                     )
                 )
-                if identity.user_id and usable and call.method == "tools_call":
-                    try:
-                        user = await db.get(User, identity.user_id)
-                        if user is not None:
-                            await record_usage(
-                                db,
-                                user,
-                                cap,
-                                "mcp_call",
-                                {"tool": call.tool, "server": server_name},
-                                result_status="ok" if ok else "failed",
-                            )
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning("MCP 网关用量写入失败 server=%s: %s", server_name, exc)
             await db.commit()
     except Exception as exc:  # noqa: BLE001
         logger.warning("MCP 网关审计写入失败 server=%s: %s", server_name, exc)
@@ -731,13 +968,32 @@ async def _read_body(receive) -> tuple[bytes, Callable[[], Awaitable[dict]]]:
     return b"".join(chunks), replay
 
 
+async def check_token(config: dict[str, Any], scope) -> bool:
+    """网关端点鉴权：X-Gateway-Token 或 Authorization: Bearer。
+
+    留空令牌：默认内部免鉴权；若 settings.mcp_gateway_require_token=True 则拒绝。
+    """
+    from app.config import get_settings
+
+    expected = config.get("api_token") or ""
+    if not expected:
+        return not get_settings().mcp_gateway_require_token
+    request = Request(scope, None)  # type: ignore[arg-type]
+    provided = request.headers.get("x-gateway-token", "")
+    if not provided:
+        auth = request.headers.get("authorization", "")
+        if auth.lower().startswith("bearer "):
+            provided = auth[7:].strip()
+    return bool(provided) and hmac.compare_digest(provided, expected)
+
+
 async def send_json(scope, receive, send, status: int, body: dict) -> None:
     response = JSONResponse(body, status_code=status)
     await response(scope, receive, send)
 
 
 class GatewayASGIApp:
-    """挂在 /api/mcp-gateway 下的分发器：/{name}/{sse|messages|stream}。"""
+    """挂在 /api/mcp-gateway 下的分发器：/{name}/{sse|messages|stream} 与 /cap/{name}/…。"""
 
     def __init__(self, registry: GatewayRegistry, loader: ConfigLoader) -> None:
         self._registry = registry
@@ -748,67 +1004,82 @@ class GatewayASGIApp:
             await send_json(scope, receive, send, 404, {"detail": "Not Found"})
             return
         # 挂载在 /api/mcp-gateway 下时，scope["path"] 仍是完整路径，
-        # 需要去掉 root_path（挂载前缀）后再解析 /{name}/{kind}
+        # 需要去掉 root_path（挂载前缀）后再解析 /{name}/{kind} 或 /cap/{name}/{kind}
         root = scope.get("root_path") or ""
         raw_path = scope.get("path") or ""
         if root and raw_path.startswith(root):
             raw_path = raw_path[len(root):]
-        parts = [p for p in raw_path.split("/") if p]
-        if len(parts) != 2:
+        from urllib.parse import unquote
+
+        parts = [unquote(p) for p in raw_path.split("/") if p]
+        cap_route = len(parts) == 3 and parts[0] == "cap"
+        if cap_route:
+            name, kind = parts[1], parts[2]
+            registry_key = f"cap/{name}"
+            config, err_status, err_body = await authorize_capability_gateway(scope, name)
+            if err_status is not None:
+                await send_json(scope, receive, send, err_status, err_body or {"detail": "未授权"})
+                return
+            if config is None:
+                await send_json(scope, receive, send, 502, {"detail": "无法构建上游配置"})
+                return
+        elif len(parts) == 2:
+            name, kind = parts
+            registry_key = name
+            config = await self._loader(name)
+            if config is None or not config.get("enabled", True):
+                await send_json(scope, receive, send, 404, {"detail": f"网关服务 {name} 不存在或已停用"})
+                return
+            if not await check_token(config, scope):
+                await send_json(
+                    scope, receive, send, 401, {"detail": "网关令牌无效（X-Gateway-Token 或 Bearer）"}
+                )
+                return
+        else:
             await send_json(scope, receive, send, 404, {"detail": "网关端点不存在"})
             return
-        name, kind = parts
-        config = await self._loader(name)
-        if config is None or not config.get("enabled", True):
-            await send_json(scope, receive, send, 404, {"detail": f"网关服务 {name} 不存在或已停用"})
-            return
-        try:
-            identity = await authenticate_request(config, scope)
-        except GatewayAuthError:
-            await send_json(
-                scope, receive, send, 401, {"detail": "网关令牌无效（X-Gateway-Token 或 Bearer）"}
-            )
-            return
-        from app.config import get_settings
-
-        allowed, retry_after = check_rate_limit(
-            rate_limit_key(identity, config, scope),
-            get_settings().mcp_gateway_rate_limit_per_min,
-        )
-        if not allowed:
-            response = JSONResponse(
-                {"detail": "请求过于频繁，请稍后重试"},
-                status_code=429,
-                headers={"Retry-After": str(retry_after)},
-            )
-            await response(scope, receive, send)
-            return
-        ep = self._registry.get(name)
+        ep = self._registry.get(registry_key)
+        identity = await self._audit_identity(config, scope)
         try:
             if kind == "sse":
                 await ep.handle_sse(scope, receive, send, config)
-            elif kind in ("messages", "stream"):
-                await self._handle_jsonrpc(kind, name, config, identity, scope, receive, send, ep)
+            elif kind == "messages":
+                await self._handle_jsonrpc(kind, registry_key, config, identity, scope, receive, send, ep)
+            elif kind == "stream":
+                await self._handle_jsonrpc(kind, registry_key, config, identity, scope, receive, send, ep)
             else:
                 await send_json(scope, receive, send, 404, {"detail": "网关端点不存在"})
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
-            logger.exception("网关服务 %s 处理失败", name)
+            logger.exception("网关服务 %s 处理失败", registry_key)
             try:
                 await send_json(scope, receive, send, 502, {"detail": str(exc)[:300]})
             except Exception:  # noqa: BLE001
                 pass
 
-    async def _handle_jsonrpc(self, kind, name, config, identity, scope, receive, send, ep) -> None:
-        """带审计/超时的 JSON-RPC 转发：/stream 的 POST 与 SSE 的 /messages。"""
+    async def _audit_identity(self, config: dict[str, Any], scope) -> GatewayIdentity:
+        """身份来源仅用于审计归因；鉴权已在前一步完成，失败回退匿名。"""
+        try:
+            identity = await authenticate_request(config, scope)
+        except GatewayAuthError:
+            identity = GatewayIdentity(source="anonymous")
+        audit = config.get("_audit") or {}
+        if identity.user_id is None and audit.get("user_id"):
+            identity.user_id = audit["user_id"]
+        return identity
+
+    async def _handle_jsonrpc(
+        self, kind, name, config, identity, scope, receive, send, ep
+    ) -> None:
+        """带消息级审计与 /stream 单请求超时的 JSON-RPC 转发（/messages 不设总超时）。"""
         from app.config import get_settings
 
         body, replay = await _read_body(receive)
         calls = parse_mcp_calls(body)
         if not calls:
             if kind == "stream":
-                await ep.handle_stream(scope, replay, send)
+                await ep.handle_stream(scope, replay, send, config)
             else:
                 await ep.handle_messages(scope, replay, send)
             return
@@ -820,9 +1091,11 @@ class GatewayASGIApp:
         try:
             if kind == "stream":
                 if timeout > 0:
-                    await asyncio.wait_for(ep.handle_stream(scope, replay, capture), timeout=timeout)
+                    await asyncio.wait_for(
+                        ep.handle_stream(scope, replay, capture, config), timeout=timeout
+                    )
                 else:
-                    await ep.handle_stream(scope, replay, capture)
+                    await ep.handle_stream(scope, replay, capture, config)
             else:
                 await ep.handle_messages(scope, replay, capture)
         except asyncio.TimeoutError:

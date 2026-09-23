@@ -42,7 +42,7 @@ def create_access_token(user: User) -> str:
 
 
 def decode_local_token(token: str) -> dict | None:
-    """解本地 HS256 token；签名或格式无效返回 None（由调用方决定是否走 SSO 轨）。"""
+    """解本地 HS256 token；签名或格式无效返回 None（由调用方决定是否走 SSO/服务令牌轨）。"""
     settings = get_settings()
     try:
         return jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
@@ -69,9 +69,14 @@ async def get_current_user(
     命中但已禁用 -> 403。两轨返回同类型 User 对象。
     """
     credentials_exc = _credentials_exception()
-    payload = decode_local_token(token)
-    if payload is None:
-        # 轨1失败：尝试 SSO 轨
+    settings = get_settings()
+    try:
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+    except jwt.PyJWTError:
+        # 轨1失败：先试服务令牌，再试 SSO
+        svc_user = await _resolve_service_token_user(db, token)
+        if svc_user is not None:
+            return svc_user
         return await _resolve_sso_user(db, token, credentials_exc)
     user_id = payload.get("sub")
     if not user_id:
@@ -83,10 +88,11 @@ async def get_current_user(
 
 
 async def resolve_user_by_bearer(db: AsyncSession, token: str) -> tuple[User, str] | None:
-    """非依赖注入场景（MCP 网关等纯 ASGI）的双轨 Bearer 解析。
+    """非依赖注入场景（MCP 网关等纯 ASGI）的 Bearer 解析，仅用于识别身份来源。
 
-    成功返回 (User, "jwt" | "sso")；token 无效、用户不存在/已禁用返回 None，
-    由调用方决定回退匿名还是 401。SSO 轨复用 _resolve_sso_user 的校验与映射。
+    顺序与 get_current_user 一致：本地 HS256 JWT → 服务令牌 → SSO。
+    成功返回 (User, "jwt" | "service_token" | "sso")；token 无效、用户不存在/
+    已禁用返回 None，由调用方决定回退匿名还是 401。
     """
     payload = decode_local_token(token)
     if payload is not None:
@@ -97,11 +103,20 @@ async def resolve_user_by_bearer(db: AsyncSession, token: str) -> tuple[User, st
         if user is None or not user.is_active:
             return None
         return user, "jwt"
+    svc_user = await _resolve_service_token_user(db, token)
+    if svc_user is not None:
+        return svc_user, "service_token"
     try:
         user = await _resolve_sso_user(db, token, _credentials_exception())
     except HTTPException:
         return None
     return user, "sso"
+
+
+async def _resolve_service_token_user(db: AsyncSession, token: str) -> User | None:
+    from app.services.service_tokens import resolve_service_token
+
+    return await resolve_service_token(db, token)
 
 
 async def _resolve_sso_user(
@@ -113,6 +128,7 @@ async def _resolve_sso_user(
     """SSO 轨：校验 RS256 token 后按 username=工号 查/建 User。
 
     校验失败 -> 401（与轨1同文案）；命中已禁用用户 -> 403。
+    audience 用于登录回调轨校验本系统自己的 client_id（资源轨缺省用 sso_audience）。
     """
     try:
         claims = verify_sso_token(token, audience=audience)

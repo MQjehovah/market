@@ -76,5 +76,54 @@ async def _auto_migrate(conn) -> None:
             sync_conn.exec_driver_sql(
                 "ALTER TABLE capabilities ADD COLUMN readme_md TEXT DEFAULT ''"
             )
+        if "distribution" not in cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE capabilities ADD COLUMN distribution VARCHAR(16) DEFAULT 'both'"
+            )
+        if "risk_default" not in cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE capabilities ADD COLUMN risk_default VARCHAR(20) DEFAULT 'read'"
+            )
+        if "data_domain" not in cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE capabilities ADD COLUMN data_domain VARCHAR(64) DEFAULT ''"
+            )
+        tables = inspector.get_table_names()
+        if "usage_events" in tables:
+            ue_cols = {c["name"] for c in inspector.get_columns("usage_events")}
+            if "capability_version" not in ue_cols:
+                sync_conn.exec_driver_sql(
+                    "ALTER TABLE usage_events ADD COLUMN capability_version VARCHAR(50) DEFAULT ''"
+                )
+            if "duration_ms" not in ue_cols:
+                sync_conn.exec_driver_sql(
+                    "ALTER TABLE usage_events ADD COLUMN duration_ms INTEGER DEFAULT 0"
+                )
+            if "conversation_id" not in ue_cols:
+                sync_conn.exec_driver_sql(
+                    "ALTER TABLE usage_events ADD COLUMN conversation_id VARCHAR(128) DEFAULT ''"
+                )
+            if "source" not in ue_cols:
+                sync_conn.exec_driver_sql(
+                    "ALTER TABLE usage_events ADD COLUMN source VARCHAR(16) DEFAULT 'platform'"
+                )
+        if "user_capabilities" in tables:
+            uc_cols = {c["name"] for c in inspector.get_columns("user_capabilities")}
+            if "enabled" not in uc_cols:
+                sync_conn.exec_driver_sql(
+                    "ALTER TABLE user_capabilities ADD COLUMN enabled BOOLEAN DEFAULT 1"
+                )
+        if "notifications" in tables:
+            n_cols = {c["name"] for c in inspector.get_columns("notifications")}
+            if "link" not in n_cols:
+                sync_conn.exec_driver_sql(
+                    "ALTER TABLE notifications ADD COLUMN link VARCHAR(255) DEFAULT ''"
+                )
+        if "mcp_gateway_servers" in tables:
+            mg_cols = {c["name"] for c in inspector.get_columns("mcp_gateway_servers")}
+            if "capability_id" not in mg_cols:
+                sync_conn.exec_driver_sql(
+                    "ALTER TABLE mcp_gateway_servers ADD COLUMN capability_id VARCHAR(36) DEFAULT ''"
+                )
 
     await conn.run_sync(_do)

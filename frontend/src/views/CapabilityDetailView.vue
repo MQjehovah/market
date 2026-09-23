@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { marked } from 'marked'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
@@ -28,10 +28,14 @@ import {
   isLocalInstallKind,
   ownerProgressIndex,
   editRouteFor,
-  canOnlineEdit
+  canOnlineEdit,
+  mcpTrialMode
 } from '../utils/format'
 import StatusBadge from '../components/StatusBadge.vue'
 import PackagePreview from '../components/PackagePreview.vue'
+import DebugCapabilityModal from '../components/DebugCapabilityModal.vue'
+import ConfirmActionModal from '../components/ConfirmActionModal.vue'
+import AskTrialPanel from '../components/AskTrialPanel.vue'
 
 const __API_BASE__ = (import.meta.env.BASE_URL || '/').replace(/\/$/, '') + '/api'
 
@@ -52,7 +56,10 @@ const versionSuggestions = ref({ current: '', major: '', minor: '', patch: '' })
 const uploading = ref(false)
 const saving = ref(false)
 const myIds = ref(new Set())
+const myEnabled = ref(new Map())
 const myNotice = ref('')
+const confirmRemove = ref(false)
+const hostBusy = ref(false)
 const copyNotice = ref('')
 const accessPolicy = ref('open')
 const installPolicy = ref('optional')
@@ -116,7 +123,7 @@ const isPublished = computed(() => ['published', 'deprecated'].includes(cap.valu
 const kindHint = computed(() => (cap.value ? KIND_HINTS[cap.value.type] : null))
 const shelfName = computed(() => (cap.value ? shelfLabel(cap.value.type) : ''))
 const showTemplateDownload = computed(
-  () => showPackageUpload.value && ['skill', 'mcp', 'tool', 'agent', 'plugin'].includes(cap.value?.type)
+  () => showPackageUpload.value && ['skill', 'mcp', 'tool', 'agent', 'plugin', 'rule', 'command', 'hook'].includes(cap.value?.type)
 )
 const progressIndex = computed(() =>
   ownerProgressIndex(cap.value, { joined: myIds.value.has(props.id) })
@@ -139,6 +146,44 @@ const embeddedMcp = computed(() => {
   return Array.isArray(schema.embedded_mcp) ? schema.embedded_mcp : []
 })
 const usedBy = computed(() => Array.isArray(cap.value?.used_by) ? cap.value.used_by : [])
+const usedByAgents = computed(() =>
+  usedBy.value.filter((u) => u.type === 'agent' && (u.capability_id || u.name))
+)
+const debugCap = ref(null)
+const askTrialRef = ref(null)
+const showAskTrial = computed(() => {
+  if (!cap.value || !isPublished.value) return false
+  if (isAgent.value || isPlugin.value) return true
+  if (['skill', 'mcp'].includes(cap.value.type) && usedByAgents.value.length) return true
+  return false
+})
+const askAgentName = computed(() => {
+  if (!cap.value) return ''
+  if (isAgent.value || isPlugin.value) return cap.value.name
+  return usedByAgents.value[0]?.name || ''
+})
+const askAgentVersion = computed(() => {
+  if (isAgent.value || isPlugin.value) return cap.value?.version || ''
+  return usedByAgents.value[0]?.version || ''
+})
+const askSubjectLabel = computed(() =>
+  ['skill', 'mcp'].includes(cap.value?.type) ? cap.value.name : ''
+)
+const askSuggestions = computed(() =>
+  exampleList.value.filter((s) => !/cap install|POST \/api/i.test(s)).slice(0, 4)
+)
+const askCanRun = computed(() => {
+  if (!authState.token) return false
+  if (isOwner.value || isAdmin.value) return true
+  if (isAgent.value || isPlugin.value) return canRuntime.value
+  // 技能经助手试用：助手也需可访问，或已加入该技能/助手
+  return joined.value || Boolean(usedByAgents.value[0]?.capability_id)
+})
+const askBlockedHint = computed(() => {
+  if (!authState.token) return '登录后才能试用。'
+  if (askCanRun.value) return ''
+  return '先「加入」授权，再问一句。'
+})
 const parentPluginId = computed(() => cap.value?.parent_plugin_id || null)
 const isSkillOrMcp = computed(() => ['skill', 'mcp'].includes(cap.value?.type))
 const hasSiblings = computed(() => (versions.value || []).some((v) => v.id !== cap.value?.id))
@@ -152,7 +197,6 @@ const packageSizeLabel = computed(() =>
 
 const installCommand = computed(() => (cap.value ? installCommandFor(cap.value) : ''))
 const canLocalInstall = computed(() => (cap.value ? isLocalInstallKind(cap.value.type) : false))
-const consumeActionLabel = computed(() => (canLocalInstall.value ? '安装' : '消费'))
 const scenarioList = computed(() => {
   if (!cap.value) return []
   const schema = cap.value.input_schema || {}
@@ -219,9 +263,13 @@ const mcpTransport = computed(() => {
   )
 })
 
+const dashboardConsume = computed(() => cap.value?.consumers?.dashboard || null)
+
 const mcpToolRows = computed(() => {
   if (mcpTools.value.length) return mcpTools.value
-  return normalizeMcpTools(mcpSchema.value?.tools)
+  const fromSchema = normalizeMcpTools(mcpSchema.value?.tools)
+  if (fromSchema.length) return fromSchema
+  return normalizeMcpTools(dashboardConsume.value?.tools)
 })
 
 const mcpEnvRows = computed(() => {
@@ -241,6 +289,92 @@ const mcpEnvRows = computed(() => {
   }))
 })
 
+/** 业务密钥：详情只展示托管状态，填写在工作台 /my/secrets */
+const vaultStatus = ref({ required: [], filled: [], missing: [], complete: false })
+
+async function loadVaultStatus() {
+  if (!authState.token || !cap.value?.id || !mcpEnvRows.value.length) {
+    vaultStatus.value = { required: [], filled: [], missing: [], complete: false }
+    return
+  }
+  const keys = mcpEnvRows.value.map((r) => r.key).join(',')
+  try {
+    vaultStatus.value = await api.get(
+      `/my/secrets/status?keys=${encodeURIComponent(keys)}&capability_id=${encodeURIComponent(cap.value.id)}`
+    )
+  } catch {
+    vaultStatus.value = {
+      required: mcpEnvRows.value.map((r) => r.key),
+      filled: [],
+      missing: mcpEnvRows.value.map((r) => r.key),
+      complete: false
+    }
+  }
+}
+
+watch(
+  () => [cap.value?.id, mcpEnvRows.value.map((r) => r.key).join(','), authState.token],
+  () => {
+    loadVaultStatus()
+  }
+)
+
+const mcpTrial = computed(() =>
+  mcpTrialMode({
+    transport: mcpTransport.value,
+    envKeys: mcpEnvRows.value.map((r) => r.key)
+  })
+)
+const joined = computed(() => Boolean(cap.value && myIds.value.has(cap.value.id)))
+const hostEnabled = computed(() => {
+  if (!cap.value) return false
+  const v = myEnabled.value.get(cap.value.id)
+  return v !== false
+})
+const canRuntime = computed(() => isOwner.value || isAdmin.value || joined.value)
+const canTrialMcp = computed(() => {
+  if (!isMcp.value || !isPublished.value || !authState.token) return false
+  if (isOwner.value || isAdmin.value) return true
+  return joined.value && mcpTrial.value.canOneClick
+})
+const canTrialCurrent = computed(() => {
+  if (!isPublished.value || !authState.token) return false
+  if (isMcp.value) return canTrialMcp.value
+  if (isAgent.value) return canRuntime.value
+  return false
+})
+const nextStep = computed(() => {
+  if (!cap.value || !isPublished.value) return null
+  if (!authState.token) return { kind: 'login', label: '登录后加入' }
+  if (!joined.value) {
+    if (canLocalInstall.value || cap.value.type === 'tool') {
+      return { kind: 'join', label: isPlugin.value ? '加入并启用 · 安装包' : '加入并启用到零号员工' }
+    }
+    return { kind: 'join', label: isPlugin.value ? '加入 · 安装包' : '加入' }
+  }
+  if (canLocalInstall.value || cap.value.type === 'tool') {
+    if (!hostEnabled.value) return { kind: 'host', label: '在零号员工中启用' }
+    return { kind: 'host-done', label: '已列入零号员工清单' }
+  }
+  if (usedByAgents.value.length) {
+    return { kind: 'trial-agent', label: `试用助手 · ${usedByAgents.value[0].name}` }
+  }
+  if (canTrialCurrent.value) return { kind: 'trial', label: isAgent.value ? '问一句试用' : '试用连接器' }
+  return { kind: 'mine', label: '去我的能力' }
+})
+const extraTrial = computed(() => {
+  if (!joined.value || !['host', 'host-done'].includes(nextStep.value?.kind)) return null
+  if (showAskTrial.value && askAgentName.value && (isAgent.value || isPlugin.value)) {
+    return { kind: 'trial', label: '或先问一句试用' }
+  }
+  if (usedByAgents.value.length) {
+    return { kind: 'trial-agent', label: `或先问一句 · ${usedByAgents.value[0].name}` }
+  }
+  if (canTrialCurrent.value) {
+    return { kind: 'trial', label: '或先试用连接器' }
+  }
+  return null
+})
 const mcpClientConfigJson = computed(() => {
   if (!cap.value || !isMcp.value) return ''
   const name = cap.value.name
@@ -388,6 +522,37 @@ async function loadMcpPackageMeta() {
   }
 }
 
+function stubFromCap(c) {
+  return {
+    name: c.name,
+    type: c.type,
+    version: c.latest_version || c.version || ''
+  }
+}
+
+function openTrial() {
+  if (!cap.value) return
+  if (showAskTrial.value && askAgentName.value) {
+    contentTab.value = 'intro'
+    nextTick(() => askTrialRef.value?.focus?.())
+    return
+  }
+  debugCap.value = stubFromCap(cap.value)
+}
+
+function openTrialAgent(u) {
+  if (showAskTrial.value && (u?.name || askAgentName.value)) {
+    contentTab.value = 'intro'
+    nextTick(() => askTrialRef.value?.focus?.())
+    return
+  }
+  debugCap.value = {
+    name: u.name,
+    type: u.type || 'agent',
+    version: u.version || ''
+  }
+}
+
 async function copyMcpClientConfig() {
   const text = mcpClientConfigJson.value
   if (!text) return
@@ -419,32 +584,83 @@ async function loadMy() {
   try {
     const items = await api.get('/my/capabilities?scope=added')
     myIds.value = new Set(items.map((c) => c.id))
+    myEnabled.value = new Map(items.map((c) => [c.id, c.enabled !== false]))
   } catch {
     myIds.value = new Set()
+    myEnabled.value = new Map()
+  }
+}
+
+async function enableForHost() {
+  myNotice.value = ''
+  hostBusy.value = true
+  try {
+    if (!myIds.value.has(props.id)) {
+      await api.post('/my/capabilities', { capability_id: props.id })
+      myIds.value = new Set([...myIds.value, props.id])
+    }
+    await api.patch(`/my/capabilities/${props.id}`, { enabled: true })
+    myEnabled.value = new Map([...myEnabled.value, [props.id, true]])
+    myNotice.value =
+      '已启用并写入宿主同步清单。打开零号员工 / 桌面工作台，刷新「我的能力」后安装；停用后下次同步会忽略。'
+  } catch (e) {
+    myNotice.value = e.message
+  } finally {
+    hostBusy.value = false
   }
 }
 
 async function toggleMy() {
   myNotice.value = ''
-  try {
-    if (myIds.value.has(props.id)) {
-      if ((cap.value?.install_policy || 'optional') === 'required') {
-        myNotice.value = '必装能力不可移除'
-        return
-      }
-      const r = await api.delete(`/my/capabilities/${props.id}`)
-      const next = new Set(myIds.value)
-      next.delete(props.id)
-      myIds.value = next
-      myNotice.value = r.message
-    } else {
-      const r = await api.post('/my/capabilities', { capability_id: props.id })
-      myIds.value = new Set([...myIds.value, props.id])
-      const cmd = installCommand.value
-      myNotice.value = canLocalInstall.value && cmd
-        ? `${r.message} 本地安装：${cmd}`
-        : r.message
+  if (myIds.value.has(props.id)) {
+    if ((cap.value?.install_policy || 'optional') === 'required') {
+      myNotice.value = '必装能力不可移除'
+      return
     }
+    confirmRemove.value = true
+    return
+  }
+  try {
+    const r = await api.post('/my/capabilities', { capability_id: props.id })
+    myIds.value = new Set([...myIds.value, props.id])
+    myEnabled.value = new Map([...myEnabled.value, [props.id, true]])
+    // 助手会随依赖一并加入；刷新「我的」id 集合
+    try {
+      const mine = await api.get('/my/capabilities?scope=added')
+      myIds.value = new Set((mine || []).filter((c) => c.added).map((c) => c.id))
+      myEnabled.value = new Map(
+        (mine || []).filter((c) => c.added).map((c) => [c.id, c.enabled !== false])
+      )
+    } catch {
+      /* ignore refresh errors */
+    }
+    if (r?.message) {
+      myNotice.value = r.message
+    } else if (canLocalInstall.value || cap.value?.type === 'tool') {
+      myNotice.value =
+        '已加入并启用。打开零号员工 / 桌面工作台刷新后即可安装；复制 cap install 仅作兼容。'
+    } else if (usedByAgents.value.length || canTrialCurrent.value) {
+      myNotice.value = '已加入。下一步：先试用，确认可用再启用到宿主。'
+    } else {
+      myNotice.value = '已加入我的能力'
+    }
+  } catch (e) {
+    myNotice.value = e.message
+  }
+}
+
+async function removeMine() {
+  confirmRemove.value = false
+  myNotice.value = ''
+  try {
+    const r = await api.delete(`/my/capabilities/${props.id}`)
+    const next = new Set(myIds.value)
+    next.delete(props.id)
+    myIds.value = next
+    const nextEn = new Map(myEnabled.value)
+    nextEn.delete(props.id)
+    myEnabled.value = nextEn
+    myNotice.value = r.message
   } catch (e) {
     myNotice.value = e.message
   }
@@ -774,6 +990,11 @@ onMounted(() => {
           <span class="badge">{{ TYPE_LABELS[cap.type] }}</span>
           <span v-if="shelfName" class="badge badge-primary">{{ shelfName }}</span>
           <span v-if="isMcp" class="badge">{{ mcpTransport }}</span>
+          <span
+            v-if="isMcp && isPublished"
+            class="badge"
+            :class="mcpTrial.canOneClick ? 'badge-success' : 'badge-warning'"
+          >{{ mcpTrial.label }}</span>
           <span v-if="isMcp && mcpToolRows.length" class="badge badge-primary">{{ mcpToolRows.length }} 工具</span>
         </div>
         <h1 class="detail-title">
@@ -862,6 +1083,29 @@ onMounted(() => {
               >查看全部工具</button>
             </div>
 
+            <div v-if="isMcp && dashboardConsume" class="guide-block">
+              <h3 class="guide-title">桌面工作台</h3>
+              <p class="muted" style="font-size: 13px">
+                本机无法直接拉起时，可连市场能力网关（Authorization: Bearer 员工 SSO）。
+              </p>
+              <table class="table">
+                <tbody>
+                  <tr>
+                    <td>模式</td>
+                    <td><code>{{ dashboardConsume.mode }}</code></td>
+                  </tr>
+                  <tr>
+                    <td>SSE</td>
+                    <td><code>{{ dashboardConsume.sse_url }}</code></td>
+                  </tr>
+                  <tr>
+                    <td>Streamable HTTP</td>
+                    <td><code>{{ dashboardConsume.stream_url }}</code></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
             <div v-if="isMcp" class="guide-block">
               <h3 class="guide-title">配置参数</h3>
               <table class="table">
@@ -904,24 +1148,96 @@ onMounted(() => {
                   </tr>
                 </tbody>
               </table>
+
+              <div v-if="mcpEnvRows.length" class="env-fill-box">
+                <h4 class="env-fill-title">业务凭据</h4>
+                <p class="muted" style="font-size: 13px; margin: 0 0 10px">
+                  平台轨密钥请在工作台「业务密钥」托管（加密存库，线上试用自动注入）。
+                  本地轨可用 <code>cap install {{ cap.name }} --type mcp</code> 或本机
+                  <code>mcp_servers.json</code>。
+                </p>
+                <p v-if="authState.token" class="muted" style="font-size: 12px; margin: 0 0 10px">
+                  <template v-if="vaultStatus.complete">
+                    托管已齐：
+                    <code v-for="k in vaultStatus.filled" :key="'v-' + k" style="margin-right: 6px">{{ k }}</code>
+                  </template>
+                  <template v-else-if="vaultStatus.filled?.length">
+                    已填
+                    <code v-for="k in vaultStatus.filled" :key="'v-' + k" style="margin-right: 6px">{{ k }}</code>
+                    · 仍缺 {{ (vaultStatus.missing || []).join(', ') }}
+                  </template>
+                  <template v-else>
+                    尚未托管：{{ mcpEnvRows.map((r) => r.key).join(', ') }}
+                  </template>
+                </p>
+                <div class="flex" style="gap: 8px; flex-wrap: wrap">
+                  <router-link
+                    v-if="authState.token"
+                    class="btn btn-primary"
+                    :to="{ path: '/my/secrets', query: { capability_id: cap.id } }"
+                  >去工作台管理密钥</router-link>
+                  <router-link
+                    v-else
+                    class="btn btn-primary"
+                    :to="{ path: '/login', query: { redirect: `/my/secrets?capability_id=${cap.id}` } }"
+                  >登录后管理密钥</router-link>
+                </div>
+              </div>
             </div>
 
-            <div v-if="isMcp && mcpClientConfigJson" class="guide-block">
-              <div class="flex-between flex-wrap" style="align-items: center; gap: 8px">
-                <h3 class="guide-title" style="margin: 0">快速配置（MCP 客户端）</h3>
+            <AskTrialPanel
+              v-if="showAskTrial && askAgentName"
+              ref="askTrialRef"
+              :agent-name="askAgentName"
+              :agent-version="askAgentVersion"
+              :subject-label="askSubjectLabel"
+              :suggestions="askSuggestions"
+              :can-run="askCanRun"
+              :blocked-hint="askBlockedHint"
+            />
+
+            <div v-if="isMcp && isPublished" class="guide-block trial-block">
+              <h3 class="guide-title">{{ usedByAgents.length ? '高级 · 单独调工具' : '试用连接器' }}</h3>
+              <p class="guide-lead">{{ mcpTrial.hint }}</p>
+              <p v-if="usedByAgents.length" class="muted" style="font-size: 13px; margin: 0 0 10px">
+                日常请用上方「问一句」。这里只验证连接器能否连上并调用工具。
+              </p>
+              <div class="trial-actions">
+                <button
+                  v-if="canTrialMcp"
+                  class="btn"
+                  :class="usedByAgents.length ? '' : 'btn-primary'"
+                  type="button"
+                  @click="debugCap = stubFromCap(cap)"
+                >{{ usedByAgents.length ? '连接并调工具' : '试用连接器' }}</button>
+                <router-link
+                  v-else-if="!authState.token"
+                  :to="{ path: '/login', query: { redirect: route.fullPath } }"
+                  class="btn btn-primary"
+                >登录后试用</router-link>
+                <span v-else-if="!joined" class="muted" style="font-size: 13px">先「加入」授权，再试用。</span>
+              </div>
+            </div>
+
+            <details v-if="isMcp && mcpClientConfigJson" class="guide-block mcp-advanced">
+              <summary class="mcp-advanced-summary">高级 · MCP 客户端 JSON</summary>
+              <p class="muted" style="font-size: 12px; margin: 8px 0 10px">
+                给调试或兼容客户端粘贴 <code>mcpServers</code>。员工日常请加入后随助手安装，不要把这段当主路径。
+              </p>
+              <div class="flex" style="gap: 8px; margin-bottom: 8px">
                 <button class="btn btn-sm" type="button" @click="copyMcpClientConfig">复制 JSON</button>
               </div>
-              <p class="muted" style="font-size: 12px; margin: 8px 0 10px">
-                可粘贴到兼容 MCP 客户端的 <code>mcpServers</code>；生产仍推荐先「加入」再 <code>cap install</code>。
-              </p>
               <pre class="mcp-config-pre">{{ mcpClientConfigJson }}</pre>
               <p v-if="mcpConfigNotice" class="muted" style="font-size: 12px; margin: 8px 0 0">{{ mcpConfigNotice }}</p>
-            </div>
+            </details>
 
-            <div v-if="exampleList.length" class="guide-block">
+            <div v-if="exampleList.length && !showAskTrial" class="guide-block">
               <h3 class="guide-title">示例用法</h3>
               <ul class="guide-list">
-                <li v-for="(s, i) in exampleList" :key="'ex-'+i"><code>{{ s }}</code></li>
+                <li v-for="(s, i) in exampleList" :key="'ex-'+i">
+                  <span v-if="['skill', 'mcp', 'agent', 'plugin'].includes(cap.type)">{{ s }}</span>
+                  <code v-else>{{ s }}</code>
+                </li>
               </ul>
             </div>
             <div v-if="validationReport" class="guide-block">
@@ -951,8 +1267,14 @@ onMounted(() => {
               <div class="guide-body">
                 <p class="guide-lead">{{ TYPE_LABELS[cap.type] }}（{{ shelfName }}）：{{ kindHint.what }}</p>
                 <ul class="guide-list">
-                  <li><strong>装到哪</strong>：{{ kindHint.where }}</li>
-                  <li><strong>谁执行</strong>：{{ kindHint.whoRuns }}</li>
+                  <li>
+                    <strong>{{ ['skill', 'mcp', 'agent', 'plugin'].includes(cap.type) ? '怎么用' : '装到哪' }}</strong>
+                    ：{{ kindHint.where }}
+                  </li>
+                  <li>
+                    <strong>{{ ['skill', 'mcp', 'agent', 'plugin'].includes(cap.type) ? '谁来答' : '谁执行' }}</strong>
+                    ：{{ kindHint.whoRuns }}
+                  </li>
                   <li v-if="PACKAGE_HINTS[cap.type]"><strong>包规范</strong>：{{ PACKAGE_HINTS[cap.type] }}</li>
                 </ul>
                 <div v-if="isAgent" class="guide-note">
@@ -966,7 +1288,7 @@ onMounted(() => {
             <div class="guide-block">
               <h3 class="guide-title">怎么用 · 消费矩阵</h3>
               <div class="guide-body">
-                <p class="guide-lead muted">市场是控制面目录；试用不是门户主路径。</p>
+                <p class="guide-lead muted">市场是控制面目录。日常在零号员工问答里用；试用只验证连接，不是生产主路径。</p>
                 <table class="table">
                   <thead><tr><th>方式</th><th>接口</th><th>适用</th></tr></thead>
                   <tbody>
@@ -988,9 +1310,9 @@ onMounted(() => {
           </div>
 
           <div v-if="usedBy.length" class="panel">
-            <h3>被以下能力使用</h3>
+            <h3>{{ usedByAgents.length && usedByAgents.length === usedBy.length ? '被以下助手使用' : '被以下能力使用' }}</h3>
             <div class="muted" style="font-size: 13px">
-              来自 Agent 内嵌声明或 Plugin 组件引用。
+              {{ isMcp ? '挂到这些助手后，对话里才会动手。' : '来自助手内嵌声明或安装包组件引用。' }}
               <router-link :to="`/?${cap.type}=${encodeURIComponent(cap.name)}&shelf=all`">在目录中筛选</router-link>
             </div>
             <table class="table mt-16">
@@ -1000,7 +1322,15 @@ onMounted(() => {
                   <td>{{ TYPE_LABELS[u.type] || u.type }}</td>
                   <td>{{ u.name }}</td>
                   <td>v{{ u.version }}</td>
-                  <td><router-link v-if="u.capability_id" :to="`/capabilities/${u.capability_id}`">查看</router-link></td>
+                  <td class="used-by-actions">
+                    <router-link v-if="u.capability_id" :to="`/capabilities/${u.capability_id}`">查看</router-link>
+                    <button
+                      v-if="u.type === 'agent' && authState.token && isPublished"
+                      class="btn btn-sm"
+                      type="button"
+                      @click="openTrialAgent(u)"
+                    >试用助手</button>
+                  </td>
                 </tr>
               </tbody>
             </table>
@@ -1094,7 +1424,9 @@ onMounted(() => {
         <div v-show="contentTab === 'bundle'">
           <div v-if="isAgent && (embeddedSkills.length || embeddedMcp.length)" class="panel">
             <h3>包含的 Skills / MCP</h3>
-            <div class="muted" style="font-size: 13px">从包内提取；若市场已收录可跳转。</div>
+            <div class="muted" style="font-size: 13px">
+              从包内提取；若市场已收录可跳转。加入本助手时，已上架的依赖会一并加入「我的能力」。
+            </div>
             <div v-if="embeddedSkills.length" class="mt-16">
               <h4 style="margin: 0 0 8px">Skills（{{ embeddedSkills.length }}）</h4>
               <table class="table">
@@ -1360,46 +1692,83 @@ onMounted(() => {
 
       <aside class="detail-aside">
         <div class="panel aside-card sticky-card">
-          <h3>{{ isPublished ? consumeActionLabel : '下一步' }}</h3>
+          <h3>下一步</h3>
           <template v-if="isPublished">
-            <div class="install-box" :class="{ muted: !canLocalInstall }">
-              <code class="install-cmd">{{ installCommand }}</code>
-              <button class="btn btn-sm" type="button" @click="copyInstallCommand">复制</button>
-            </div>
-            <p v-if="copyNotice" class="muted" style="font-size: 12px; margin: 8px 0 0">{{ copyNotice }}</p>
-            <div class="aside-cta mt-16">
+            <div class="aside-cta">
               <button
-                v-if="authState.token"
-                class="btn btn-block btn-lg"
-                :class="myIds.has(cap.id) ? '' : 'btn-primary'"
+                v-if="nextStep?.kind === 'join'"
+                class="btn btn-block btn-lg btn-primary"
                 type="button"
-                :disabled="myIds.has(cap.id) && (cap.install_policy || 'optional') === 'required'"
                 @click="toggleMy"
-              >
-                {{
-                  myIds.has(cap.id)
-                    ? ((cap.install_policy || 'optional') === 'required'
-                      ? '必装 · 已加入'
-                      : (isPlugin ? '移出安装包' : '已加入'))
-                    : (isPlugin ? '加入 · 安装包' : '加入')
-                }}
-              </button>
+              >{{ nextStep.label }}</button>
+              <router-link
+                v-else-if="nextStep?.kind === 'login'"
+                :to="{ path: '/login', query: { redirect: route.fullPath } }"
+                class="btn btn-block btn-lg btn-primary"
+              >{{ nextStep.label }}</router-link>
               <button
-                class="btn btn-block"
+                v-else-if="nextStep?.kind === 'host'"
+                class="btn btn-block btn-lg btn-primary"
                 type="button"
-                @click="downloadArtifact"
-              >下载 zip{{ packageSizeLabel ? ` · ${packageSizeLabel}` : '' }}</button>
-              <button v-if="authState.token && cap.status === 'published'" class="btn btn-block" type="button" @click="subscribe">订阅更新</button>
-              <router-link v-if="authState.token" to="/my" class="btn btn-block">去我的能力（云端调试）</router-link>
-              <span v-if="myNotice" class="muted" style="font-size: 12px; display: block; margin-top: 8px">{{ myNotice }}</span>
+                :disabled="hostBusy"
+                @click="enableForHost"
+              >{{ hostBusy ? '启用中…' : nextStep.label }}</button>
+              <div v-else-if="nextStep?.kind === 'host-done'" class="aside-host-done">
+                <span class="badge badge-success">{{ nextStep.label }}</span>
+                <router-link to="/my" class="aside-link">管理启用状态</router-link>
+              </div>
+              <button
+                v-else-if="nextStep?.kind === 'trial-agent'"
+                class="btn btn-block btn-lg btn-primary"
+                type="button"
+                @click="openTrialAgent(usedByAgents[0])"
+              >{{ nextStep.label }}</button>
+              <button
+                v-else-if="nextStep?.kind === 'trial'"
+                class="btn btn-block btn-lg btn-primary"
+                type="button"
+                @click="openTrial"
+              >{{ nextStep.label }}</button>
+              <router-link
+                v-else-if="nextStep?.kind === 'mine'"
+                to="/my"
+                class="btn btn-block btn-lg btn-primary"
+              >{{ nextStep.label }}</router-link>
+              <button
+                v-if="extraTrial"
+                class="aside-link"
+                type="button"
+                @click="extraTrial.kind === 'trial-agent' ? openTrialAgent(usedByAgents[0]) : openTrial()"
+              >{{ extraTrial.label }}</button>
+              <p v-if="copyNotice" class="muted" style="font-size: 12px; margin: 0">{{ copyNotice }}</p>
+              <span v-if="myNotice" class="muted" style="font-size: 12px">{{ myNotice }}</span>
+            </div>
+            <div class="aside-more">
+              <button
+                v-if="joined && (cap.install_policy || 'optional') !== 'required'"
+                class="aside-link"
+                type="button"
+                @click="toggleMy"
+              >移出</button>
+              <button
+                v-if="canLocalInstall && installCommand"
+                class="aside-link"
+                type="button"
+                @click="copyInstallCommand"
+              >高级 · 复制 cap install</button>
+              <button class="aside-link" type="button" @click="downloadArtifact">
+                下载 zip{{ packageSizeLabel ? ` · ${packageSizeLabel}` : '' }}
+              </button>
+              <button v-if="authState.token" class="aside-link" type="button" @click="subscribe">订阅更新</button>
+              <router-link v-if="authState.token && nextStep?.kind !== 'mine'" to="/my" class="aside-link">我的能力</router-link>
             </div>
             <p class="aside-hint muted">
-              <template v-if="canLocalInstall">
-                {{ JOIN_VS_INSTALL_HINT }}
+              <template v-if="!joined">先加入，完成授权。{{ JOIN_VS_INSTALL_HINT }}</template>
+              <template v-else-if="['host', 'host-done'].includes(nextStep?.kind)">
+                启用后进入 <code>GET /api/my/host-sync</code>；零号员工 / 桌面按清单安装。{{ isMcp ? mcpTrial.hint : '' }}
               </template>
-              <template v-else>
-                本类型不支持本地 cap install。「加入」仅授权；请用上方云端接口或在能力编排中引用。
-              </template>
+              <template v-else-if="isMcp">{{ mcpTrial.hint }}</template>
+              <template v-else>本类型不走宿主清单。加入后请用云端接口，或在能力编排中引用。</template>
             </p>
           </template>
           <template v-else>
@@ -1440,6 +1809,7 @@ onMounted(() => {
             <div v-if="cap.category"><dt>分类</dt><dd>{{ cap.category }}</dd></div>
             <div><dt>作者</dt><dd>{{ cap.author_name || '-' }}</dd></div>
             <div v-if="isMcp"><dt>传输</dt><dd>{{ mcpTransport }}</dd></div>
+            <div v-if="isMcp && isPublished"><dt>试用</dt><dd>{{ mcpTrial.label }}</dd></div>
             <div v-if="isMcp && mcpToolRows.length"><dt>工具</dt><dd>{{ mcpToolRows.length }} 个</dd></div>
             <div v-if="isMcp && mcpEnvRows.length"><dt>环境变量</dt><dd>{{ mcpEnvRows.length }} 项</dd></div>
             <div><dt>更新</dt><dd>{{ formatDate(cap.updated_at) }}</dd></div>
@@ -1466,6 +1836,20 @@ onMounted(() => {
         </div>
       </aside>
     </div>
+    <ConfirmActionModal
+      :show="confirmRemove"
+      title="确定移除？"
+      :body="`移除后，「${cap.name}」将不再出现在自定义列表中，不影响目录上架状态。`"
+      ok-text="移除"
+      @ok="removeMine"
+      @cancel="confirmRemove = false"
+    />
+    <DebugCapabilityModal
+      :show="!!debugCap"
+      :cap="debugCap"
+      :title="debugCap?.type === 'agent' ? '试用助手' : (debugCap?.type === 'mcp' ? '试用连接器' : '云端试用')"
+      @close="debugCap = null"
+    />
   </div>
 </template>
 
@@ -1571,6 +1955,18 @@ onMounted(() => {
   background: transparent; border: none; word-break: break-all;
 }
 .aside-hint { margin: 12px 0 0; font-size: 12px; line-height: 1.55; }
+.aside-more {
+  display: flex; flex-wrap: wrap; gap: 8px 14px;
+  margin-top: 12px;
+}
+.aside-link {
+  border: none; background: transparent; padding: 0;
+  color: var(--muted); font-size: 12px; cursor: pointer; text-decoration: underline;
+}
+.aside-link:hover { color: var(--primary); }
+.aside-host-done {
+  display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+}
 .aside-meta {
   margin: 16px 0 0; padding-top: 14px; border-top: 1px solid var(--border);
   display: grid; gap: 8px;
@@ -1639,6 +2035,22 @@ onMounted(() => {
   font-size: 12px; line-height: 1.55; overflow: auto; max-height: 320px;
   color: var(--text); white-space: pre;
 }
+.trial-block .guide-lead { margin-bottom: 10px; }
+.trial-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.env-fill-box {
+  margin-top: 14px; padding: 14px; border-radius: 12px;
+  border: 1px solid var(--border); background: var(--panel-2, #f8fafc);
+}
+.env-fill-title { margin: 0 0 6px; font-size: 14px; }
+.env-fill-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px;
+}
+.mcp-advanced { border: 1px dashed var(--border); border-radius: 12px; padding: 12px 14px; }
+.mcp-advanced-summary {
+  cursor: pointer; font-size: 13px; font-weight: 600; color: var(--muted);
+}
+.mcp-advanced-summary:hover { color: var(--text); }
+.used-by-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field label { font-size: 13px; color: var(--muted); }
 .package-tree { list-style: none; margin: 0; padding: 0; }

@@ -9,6 +9,8 @@ import { authState } from '../stores/auth'
 import { TYPE_CATEGORIES, TYPE_LABELS, formatDate } from '../utils/format'
 import StatusBadge from '../components/StatusBadge.vue'
 import WorkflowNode from '../components/workflow/WorkflowNode.vue'
+import CodeEditor from '../components/CodeEditor.vue'
+import { bindUnsavedGuard } from '../utils/unsaved'
 
 const props = defineProps({ id: { type: String, default: '' } })
 const route = useRoute()
@@ -45,7 +47,7 @@ const capLoadError = reactive({})
 const capSearch = ref('')
 const paramsText = ref('{}')
 const paramsError = ref('')
-const paramsTextarea = ref(null)
+const paramsEditor = ref(null)
 const lockVersion = ref(true)
 
 const jsonOpen = ref(false)
@@ -111,11 +113,14 @@ watch(
 onMounted(() => {
   if (props.id) {
     load(props.id)
-  } else if (route.query) {
+    return
+  }
+  if (route.query) {
     if (route.query.name) meta.name = route.query.name
     if (route.query.version) meta.version = route.query.version
     if (route.query.description) meta.description = route.query.description
   }
+  markWorkflowClean()
 })
 
 async function load(id) {
@@ -149,6 +154,7 @@ async function load(id) {
     }))
     wfSettings.on_error = wf.on_error || 'fail'
     wfSettings.timeout_seconds = Number(wf.timeout_seconds) || 0
+    markWorkflowClean()
   } catch (e) {
     error.value = e.message
   }
@@ -174,6 +180,28 @@ function toEngineWorkflow() {
     timeout_seconds: Number(wfSettings.timeout_seconds) || 0
   }
 }
+
+const workflowBaseline = ref(null)
+
+function markWorkflowClean() {
+  workflowBaseline.value = JSON.stringify({
+    workflow: toEngineWorkflow(),
+    category: meta.category,
+    tags: meta.tags,
+    visibility: meta.visibility
+  })
+}
+
+bindUnsavedGuard(() => {
+  if (workflowBaseline.value === null) return false
+  const current = JSON.stringify({
+    workflow: toEngineWorkflow(),
+    category: meta.category,
+    tags: meta.tags,
+    visibility: meta.visibility
+  })
+  return current !== workflowBaseline.value
+})
 
 function addNode(type, position) {
   const nid = `n${Date.now().toString(36)}${flowNodes.value.length}`
@@ -283,17 +311,12 @@ function applyParams() {
 }
 
 function insertVar(expr) {
-  const el = paramsTextarea.value
-  const start = el ? el.selectionStart : paramsText.value.length
-  const end = el ? el.selectionEnd : paramsText.value.length
-  paramsText.value = paramsText.value.slice(0, start) + expr + paramsText.value.slice(end)
-  nextTick(() => {
-    if (el) {
-      const pos = start + expr.length
-      el.focus()
-      el.setSelectionRange(pos, pos)
-    }
-  })
+  if (paramsEditor.value?.insertAtCursor) {
+    paramsEditor.value.insertAtCursor(expr)
+  } else {
+    paramsText.value += expr
+  }
+  nextTick(applyParams)
 }
 
 function toggleJson() {
@@ -367,6 +390,7 @@ async function save() {
       router.replace(`/workflows/${cap.id}/edit`)
       notice.value = '草稿已创建并保存'
     }
+    markWorkflowClean()
     return true
   } catch (e) {
     error.value = e.message
@@ -547,15 +571,15 @@ function stateLabel(state) {
 
           <div class="field">
             <label>参数（JSON，支持变量引用）</label>
-            <textarea
-              ref="paramsTextarea"
+            <CodeEditor
+              ref="paramsEditor"
               v-model="paramsText"
-              class="textarea code"
-              rows="6"
-              spellcheck="false"
-              :disabled="!canEdit"
-              @input="applyParams"
-            ></textarea>
+              language="json"
+              compact
+              :height="240"
+              :readonly="!canEdit"
+              @update:model-value="applyParams"
+            />
             <div v-if="paramsError" class="muted" style="color: var(--warning); font-size: 12px">{{ paramsError }}</div>
           </div>
 
@@ -632,7 +656,7 @@ function stateLabel(state) {
 
           <div v-if="canTest" class="field">
             <label>测试入参（JSON，试运行时传入）</label>
-            <textarea v-model="testInput" class="textarea code" rows="5" spellcheck="false"></textarea>
+            <CodeEditor v-model="testInput" language="json" compact :height="200" />
           </div>
 
           <div class="muted" style="font-size: 12px; line-height: 1.8">
@@ -678,7 +702,7 @@ function stateLabel(state) {
           <h3 style="margin: 0">workflow.json</h3>
           <button class="modal-close" @click="jsonOpen = false">✕</button>
         </div>
-        <textarea v-model="jsonText" class="textarea code" rows="18" spellcheck="false" style="font-size: 12px"></textarea>
+        <CodeEditor v-model="jsonText" language="json" compact height="min(70vh, 720px)" />
         <div class="modal-foot">
           <span class="muted" style="font-size: 12px">可直接编辑后应用；引擎执行时忽略 position 字段</span>
           <div class="flex">
@@ -830,7 +854,7 @@ function stateLabel(state) {
   position: fixed; inset: 0; background: var(--overlay, rgba(15, 23, 42, 0.45)); z-index: 100;
   display: flex; align-items: center; justify-content: center; padding: 20px;
 }
-.modal { width: 720px; max-width: 100%; max-height: 90vh; overflow: auto; }
+.modal { width: 960px; max-width: 100%; max-height: 94vh; overflow: auto; }
 .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
 .modal-close { background: none; border: none; color: var(--muted); font-size: 16px; cursor: pointer; }
 .modal-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 14px; }

@@ -32,6 +32,21 @@ from app.services.visibility import is_capability_visible
 
 SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
+
+def split_cap_ref(ref: str) -> tuple[str, str | None]:
+    """解析 name 或 name@version；版本须为合法 semver。"""
+    raw = (ref or "").strip()
+    if not raw:
+        return "", None
+    if "@" not in raw:
+        return raw, None
+    name, _, ver = raw.rpartition("@")
+    name, ver = name.strip(), ver.strip()
+    if name and ver and SEMVER_RE.match(ver):
+        return name, ver
+    return raw, None
+
+
 STATUS_FLOW: dict[str, set[str]] = {
     "draft": {"reviewing"},
     "reviewing": {"published", "rejected", "returned", "draft"},
@@ -239,6 +254,9 @@ def to_capability_out(
         data["artifacts"] = [ArtifactOut.model_validate(a) for a in cap.artifacts]
     if versions is not None:
         data["latest"] = is_latest(cap, versions)
+    from app.services.dashboard_consume import attach_consumer_fields
+
+    attach_consumer_fields(data, cap)
     return CapabilityOut(**data)
 
 
@@ -275,9 +293,9 @@ async def create_capability(
         access_policy=data.access_policy,
         allowed_users=list(data.allowed_users or []),
         install_policy=data.install_policy or "optional",
-        distribution=data.distribution,
-        risk_default=data.risk_default,
-        data_domain=data.data_domain,
+        distribution=getattr(data, "distribution", None) or "both",
+        risk_default=getattr(data, "risk_default", None) or "read",
+        data_domain=(getattr(data, "data_domain", None) or "").strip(),
         author_id=user.id,
         organization=user.organization,
         status="draft",
@@ -363,7 +381,7 @@ async def update_capability(
     if data.risk_default is not None:
         cap.risk_default = data.risk_default
     if data.data_domain is not None:
-        cap.data_domain = data.data_domain
+        cap.data_domain = data.data_domain.strip()
     await db.commit()
     await db.refresh(cap)
     return cap
@@ -470,6 +488,7 @@ async def review_capability(
                 user_id=author.id,
                 title=f"能力 {cap.name} v{cap.version} {labels[action]}",
                 body=comment or f"管理员已完成审核：{labels[action]}",
+                link=f"/capabilities/{cap.id}",
             )
         )
 
@@ -511,6 +530,7 @@ async def _deprecate_other_published(db: AsyncSession, cap: Capability) -> None:
                     f"新正式版 v{cap.version} 已发布，旧版本自动转为「已弃用」。"
                     "如需继续使用请迁移到新版本。"
                 ),
+                link=f"/capabilities/{cap.id}",
             )
         )
 
@@ -525,6 +545,7 @@ async def _notify_subscribers(db: AsyncSession, cap: Capability) -> None:
                 user_id=sub.user_id,
                 title=f"你订阅的能力发布新版本：{cap.name} v{cap.version}",
                 body=cap.description[:200] or f"{cap.name} v{cap.version} 已上架，点击查看。",
+                link=f"/capabilities/{cap.id}",
             )
         )
 
@@ -537,6 +558,7 @@ async def change_status(db: AsyncSession, cap: Capability, target: str) -> Capab
                 user_id=cap.author_id,
                 title=f"能力 {cap.name} v{cap.version} 已弃用",
                 body="请迁移到新版本。",
+                link=f"/capabilities/{cap.id}",
             )
         )
         if cap.type == "plugin":

@@ -9,7 +9,8 @@ import {
   MORE_BROWSE_KINDS,
   SHELVES,
   TYPE_CATEGORIES,
-  TYPE_LABELS
+  TYPE_LABELS,
+  isLocalInstallKind
 } from '../utils/format'
 import CapabilityCard from '../components/CapabilityCard.vue'
 
@@ -22,11 +23,20 @@ const caps = ref([])
 const hotCaps = ref([])
 const ratedCaps = ref([])
 const featuredCaps = ref([])
+const taskResults = ref({ agents: [], skills: [], mcps: [], plugins: [], others: [] })
 const loading = ref(false)
 const total = ref(0)
 const page = ref(1)
 const pageSize = 12
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
+
+const emptyTaskGroups = () => ({ agents: [], skills: [], mcps: [], plugins: [], others: [] })
+
+const taskSections = [
+  { key: 'agents', title: '推荐助手', hint: '场景级问答；依赖技能/连接器会一并带出' },
+  { key: 'skills', title: '相关技能', hint: '问答 SOP，装进助手后提问即可按流程回答' },
+  { key: 'mcps', title: '相关连接器', hint: '给助手接外部系统' }
+]
 
 const filters = reactive({
   q: '',
@@ -36,17 +46,18 @@ const filters = reactive({
   skill: '',
   mcp: '',
   sort: 'latest',
-  tab: '' // '', skill, install, agent, more
+  tab: '' // '', agent, skill, mcp, more
 })
 const myIds = ref(new Set())
 const notice = ref('')
+const noticeHref = ref('')
 
 const browseTabs = [
-  { key: '', label: '推荐', hint: '技能、安装包与助手的精选与热门' },
-  { key: 'skill', label: '技能', hint: '可复用 SOP（SKILL.md）' },
-  { key: 'install', label: '安装包', hint: SHELVES.install.description },
-  { key: 'agent', label: '助手', hint: '面向场景的 Agent 人设' },
-  { key: 'more', label: '更多', hint: '连接器、能力编排、编排函数' }
+  { key: '', label: '推荐', hint: '助手与依赖（技能 / 连接器）的精选与热门' },
+  { key: 'agent', label: '助手', hint: '场景级问答助手；依赖随助手生效' },
+  { key: 'skill', label: '技能', hint: '问答 SOP；装进助手后提问即可按该流程回答' },
+  { key: 'mcp', label: '连接器', hint: '给助手接外部系统' },
+  { key: 'more', label: '更多', hint: '能力编排与编排函数' }
 ]
 
 /** 推荐页：无货架、无类型、无搜索、无其它筛选 */
@@ -59,33 +70,49 @@ const showDiscovery = computed(
     !filters.category &&
     !filters.skill &&
     !filters.mcp &&
+    filters.sort === 'latest' &&
     page.value === 1
 )
 
-const showCatalog = computed(() => !showDiscovery.value)
+/** 有关键词时走「按要办的事」分组结果，不再用普通分页列表 */
+const showTaskSearch = computed(() => Boolean(String(filters.q || '').trim()))
+
+const showCatalog = computed(() => !showDiscovery.value && !showTaskSearch.value)
+
+const taskHitCount = computed(() => {
+  const t = taskResults.value
+  return (
+    (t.agents?.length || 0) +
+    (t.skills?.length || 0) +
+    (t.mcps?.length || 0) +
+    (t.others?.length || 0)
+  )
+})
+
+const taskEmpty = computed(() => showTaskSearch.value && !loading.value && taskHitCount.value === 0)
 
 const pageContext = computed(() => {
   if (filters.q) {
     return {
-      eyebrow: '搜索',
-      title: '搜索结果',
-      desc: '跨目录查找能力。'
+      eyebrow: '任务匹配',
+      title: '为你找到这些能力',
+      desc: '按你要办的事匹配，并顺着依赖带出配套助手、技能与连接器。'
     }
   }
   if (filters.tab === 'skill' || filters.type === 'skill') {
-    return { eyebrow: '目录', title: '技能', desc: '可复用 SOP；加入后用 cap install --type skill，或装进助手/安装包。' }
+    return { eyebrow: '目录', title: '技能', desc: '问答 SOP；加入后装进助手，在对话里提问即可按该流程回答。' }
   }
-  if (filters.tab === 'install' || filters.shelf === 'install') {
-    return { eyebrow: '目录', title: '安装包', desc: SHELVES.install.description }
+  if (filters.tab === 'mcp' || filters.type === 'mcp') {
+    return { eyebrow: '目录', title: '连接器', desc: '给助手接外部系统；连上后发现的工具才可调。' }
   }
   if (filters.tab === 'agent' || filters.type === 'agent') {
-    return { eyebrow: '目录', title: '助手', desc: '场景级 Agent；依赖的技能/连接器需已上架，或改用安装包内嵌。' }
+    return { eyebrow: '目录', title: '助手', desc: '场景级问答助手；依赖的技能/连接器会随助手一起生效。' }
   }
   if (filters.tab === 'more' || MORE_BROWSE_KINDS.includes(filters.type)) {
     return {
       eyebrow: '目录',
       title: '更多',
-      desc: '连接器、能力编排与编排函数；进阶发布与编排用。'
+      desc: '能力编排与编排函数等进阶类型。'
     }
   }
   if (filters.shelf && SHELVES[filters.shelf]) {
@@ -93,7 +120,13 @@ const pageContext = computed(() => {
     return { eyebrow: '分类', title: s.label, desc: s.description }
   }
   if (filters.shelf === 'all') {
-    return { eyebrow: '能力总览', title: '搜索结果', desc: '含技能、安装包、助手与更多类型。' }
+    return { eyebrow: '能力总览', title: '搜索结果', desc: '含助手、技能、连接器与更多类型。' }
+  }
+  if (filters.sort === 'usage') {
+    return { eyebrow: '目录', title: '近期热门', desc: '按使用次数排列。范围仍是当前目录。' }
+  }
+  if (filters.sort === 'rating') {
+    return { eyebrow: '目录', title: '高分能力', desc: '按评分排列。范围仍是当前目录。' }
   }
   return {
     eyebrow: '企业内部的 AI 能力',
@@ -104,6 +137,8 @@ const pageContext = computed(() => {
 
 const catalogTitle = computed(() => {
   if (filters.q) return '搜索结果'
+  if (filters.sort === 'usage' && !filters.type && !(filters.shelf && SHELVES[filters.shelf])) return '近期热门'
+  if (filters.sort === 'rating' && !filters.type && !(filters.shelf && SHELVES[filters.shelf])) return '高分能力'
   if (filters.type && TYPE_LABELS[filters.type]) return TYPE_LABELS[filters.type]
   if (filters.shelf && SHELVES[filters.shelf]) return SHELVES[filters.shelf].label
   return '筛选结果'
@@ -131,8 +166,8 @@ const activeBrowseTab = computed(() => {
   if (filters.tab) return filters.tab
   if (filters.type === 'skill') return 'skill'
   if (filters.type === 'agent') return 'agent'
+  if (filters.type === 'mcp') return 'mcp'
   if (MORE_BROWSE_KINDS.includes(filters.type)) return 'more'
-  if (filters.shelf === 'install') return 'install'
   if (filters.shelf === 'all') return ''
   return ''
 })
@@ -168,25 +203,45 @@ async function loadDiscovery() {
       fetchList({ sort: 'usage', page: 1, page_size: 6 }),
       fetchList({ sort: 'rating', page: 1, page_size: 6 })
     ])
-    hotCaps.value = hot.items || []
-    ratedCaps.value = rated.items || []
     const seen = new Set()
     const pool = [...(rated.items || []), ...(hot.items || [])]
-    featuredCaps.value = pool
+    let featured = pool
       .filter((c) => {
         if (seen.has(c.id)) return false
         seen.add(c.id)
         return (Number(c.avg_rating) || 0) >= 4
       })
       .slice(0, 6)
-    if (featuredCaps.value.length < 3) {
-      featuredCaps.value = (rated.items || []).slice(0, 6)
-    }
+    if (featured.length < 3) featured = (rated.items || []).slice(0, 6)
+    const featuredIds = new Set(featured.map((c) => c.id))
+    const hotList = (hot.items || []).filter((c) => !featuredIds.has(c.id))
+    const hotIds = new Set(hotList.map((c) => c.id))
+    featuredCaps.value = featured
+    hotCaps.value = hotList
+    ratedCaps.value = (rated.items || []).filter((c) => !featuredIds.has(c.id) && !hotIds.has(c.id))
   } catch {
     hotCaps.value = []
     ratedCaps.value = []
     featuredCaps.value = []
   }
+}
+
+async function loadTaskSearch() {
+  const q = String(filters.q || '').trim()
+  const body = await api.get(`/capabilities/task-search?q=${encodeURIComponent(q)}`)
+  const next = {
+    agents: body.agents || [],
+    skills: body.skills || [],
+    mcps: body.mcps || [],
+    others: body.others || []
+  }
+  // 安装包保留检索能力但不展示分组
+  taskResults.value = next
+  total.value = next.agents.length + next.skills.length + next.mcps.length + next.others.length
+  caps.value = []
+  hotCaps.value = []
+  ratedCaps.value = []
+  featuredCaps.value = []
 }
 
 async function load() {
@@ -195,9 +250,15 @@ async function load() {
     if (showDiscovery.value) {
       caps.value = []
       total.value = 0
+      taskResults.value = emptyTaskGroups()
       await loadDiscovery()
       return
     }
+    if (showTaskSearch.value) {
+      await loadTaskSearch()
+      return
+    }
+    taskResults.value = emptyTaskGroups()
     const body = await fetchList()
     caps.value = body.items
     total.value = body.total
@@ -207,6 +268,7 @@ async function load() {
   } catch (e) {
     caps.value = []
     total.value = 0
+    taskResults.value = emptyTaskGroups()
     notice.value = e.message || '加载目录失败'
   } finally {
     loading.value = false
@@ -225,23 +287,20 @@ async function loadMy() {
 
 async function addToMy(cap) {
   notice.value = ''
+  noticeHref.value = ''
   try {
     const r = await api.post('/my/capabilities', { capability_id: cap.id })
     myIds.value = new Set([...myIds.value, cap.id])
-    notice.value = r.message
-  } catch (e) {
-    notice.value = e.message
-  }
-}
-
-async function removeFromMy(cap) {
-  notice.value = ''
-  try {
-    const r = await api.delete(`/my/capabilities/${cap.id}`)
-    const next = new Set(myIds.value)
-    next.delete(cap.id)
-    myIds.value = next
-    notice.value = r.message
+    noticeHref.value = `/capabilities/${cap.id}`
+    if (r?.message) {
+      notice.value = r.message
+    } else if (isLocalInstallKind(cap.type)) {
+      notice.value = `已加入「${cap.name}」。下一步：打开详情，在零号员工中启用。`
+    } else if (cap.type === 'agent' || cap.type === 'mcp') {
+      notice.value = `已加入「${cap.name}」。下一步：打开详情试用或启用到宿主。`
+    } else {
+      notice.value = `已加入「${cap.name}」。`
+    }
   } catch (e) {
     notice.value = e.message
   }
@@ -250,19 +309,22 @@ async function removeFromMy(cap) {
 function selectBrowseTab(key) {
   const query = {}
   if (key === 'skill') query.type = 'skill'
-  else if (key === 'install') query.shelf = 'install'
+  else if (key === 'mcp') query.type = 'mcp'
   else if (key === 'agent') query.type = 'agent'
-  else if (key === 'more') query.type = filters.type && MORE_BROWSE_KINDS.includes(filters.type) ? filters.type : 'mcp'
+  else if (key === 'more') {
+    query.type =
+      filters.type && MORE_BROWSE_KINDS.includes(filters.type) ? filters.type : 'workflow'
+  }
   router.push({ path: '/', query })
 }
 
 function selectShelf(key) {
-  // 兼容旧入口：积木→更多(mcp)，配方→助手
+  // 兼容旧入口：积木→技能，配方→助手，安装包→助手（主叙事）
   if (key === 'brick') {
-    selectBrowseTab('more')
+    selectBrowseTab('skill')
     return
   }
-  if (key === 'recipe') {
+  if (key === 'recipe' || key === 'install') {
     selectBrowseTab('agent')
     return
   }
@@ -279,36 +341,35 @@ function reset() {
   router.push({ path: '/' })
 }
 
-function applyFilter() {
-  page.value = 1
+function catalogQuery({ page: p = page.value, sort = filters.sort } = {}) {
   const query = {}
   if (filters.q) query.q = filters.q
   if (filters.type) query.type = filters.type
   else if (filters.shelf && filters.shelf !== 'all') query.shelf = filters.shelf
   else if (filters.q) query.shelf = 'all'
+  if (filters.category) query.category = filters.category
   if (filters.skill) query.skill = filters.skill
   if (filters.mcp) query.mcp = filters.mcp
-  if (filters.sort && filters.sort !== 'latest') query.sort = filters.sort
-  router.push({ path: '/', query })
+  if (sort && sort !== 'latest') query.sort = sort
+  if (p > 1) query.page = String(p)
+  return query
 }
 
+function applyFilter() {
+  page.value = 1
+  router.push({ path: '/', query: catalogQuery({ page: 1 }) })
+}
 
 function goPage(p) {
   if (p < 1 || p > totalPages.value) return
-  page.value = p
-  load()
+  router.push({ path: '/', query: catalogQuery({ page: p }) })
   window.scrollTo({ top: 0 })
 }
 
 function useSort(sort) {
   filters.sort = sort
   page.value = 1
-  if (showDiscovery.value) {
-    // 推荐「看热门」→ 安装包货架按使用量（日常主路径）
-    router.push({ path: '/', query: { shelf: 'install', sort } })
-    return
-  }
-  load()
+  router.push({ path: '/', query: catalogQuery({ page: 1, sort }) })
 }
 
 onMounted(() => {
@@ -323,12 +384,16 @@ function syncFromRoute() {
   filters.type = route.query.type ? String(route.query.type) : ''
   filters.shelf = route.query.shelf ? String(route.query.shelf) : ''
   filters.q = route.query.q ? String(route.query.q) : ''
+  filters.category = route.query.category ? String(route.query.category) : ''
   filters.sort = route.query.sort ? String(route.query.sort) : 'latest'
+  const rawPage = Number(route.query.page)
+  page.value = Number.isFinite(rawPage) && rawPage > 0 ? Math.floor(rawPage) : 1
   if (filters.skill || filters.mcp) showAdvanced.value = true
   if (filters.type === 'skill') filters.tab = 'skill'
   else if (filters.type === 'agent') filters.tab = 'agent'
+  else if (filters.type === 'mcp') filters.tab = 'mcp'
   else if (MORE_BROWSE_KINDS.includes(filters.type)) filters.tab = 'more'
-  else if (filters.shelf === 'install') filters.tab = 'install'
+  else if (filters.shelf === 'install') filters.tab = 'agent' // 旧链接落到助手
   else filters.tab = ''
   if ((filters.skill || filters.mcp) && !filters.shelf && !filters.type) {
     filters.shelf = 'all'
@@ -338,7 +403,6 @@ function syncFromRoute() {
 watch(
   () => route.fullPath,
   () => {
-    page.value = 1
     syncFromRoute()
     load()
   }
@@ -374,27 +438,30 @@ watch(
           <input
             v-model="filters.q"
             class="input hero-search-input"
-            placeholder="搜索能力名称、描述或标签…"
-            aria-label="搜索能力"
+            placeholder="想办什么事？例如：处理工单、查知识库"
+            aria-label="按要办的事搜索"
           />
           <button class="btn btn-primary" type="submit">搜索</button>
         </form>
         <div class="hero-actions">
-          <button v-if="isLoggedIn" class="btn btn-primary btn-lg" type="button" @click="goPublish()">发布能力</button>
-          <router-link v-else to="/login" class="btn btn-primary btn-lg">登录后发布</router-link>
-          <button v-if="showDiscovery" class="btn btn-lg" type="button" @click="useSort('usage')">看热门</button>
+          <button v-if="showDiscovery" class="btn btn-primary btn-lg" type="button" @click="useSort('usage')">看热门</button>
+          <button v-if="isLoggedIn" class="btn btn-lg" :class="{ 'btn-primary': !showDiscovery }" type="button" @click="goPublish()">发布能力</button>
+          <router-link v-else to="/login" class="btn btn-lg" :class="{ 'btn-primary': !showDiscovery }">登录后发布</router-link>
         </div>
       </div>
       <div class="hero-stats">
         <div v-if="showDiscovery" class="hero-stat"><strong>{{ hotCaps.length || '—' }}</strong><span>近期热门</span></div>
         <div v-if="showDiscovery" class="hero-stat"><strong>{{ ratedCaps.length || '—' }}</strong><span>高分精选</span></div>
-        <div v-if="showDiscovery" class="hero-stat hero-stat-link" role="button" tabindex="0" @click="selectShelf('install')" @keyup.enter="selectShelf('install')">
-          <strong>安装包</strong><span>去货架浏览 →</span>
+        <div v-if="showDiscovery" class="hero-stat hero-stat-link" role="button" tabindex="0" @click="selectBrowseTab('agent')" @keyup.enter="selectBrowseTab('agent')">
+          <strong>助手</strong><span>去目录浏览 →</span>
         </div>
-        <div v-else class="hero-stat"><strong>{{ total }}</strong><span>当前结果</span></div>
+        <div v-else class="hero-stat"><strong>{{ total }}</strong><span>{{ showTaskSearch ? '匹配能力' : '当前结果' }}</span></div>
       </div>
     </section>
-    <div v-if="notice" class="alert alert-success mb-16">{{ notice }}</div>
+    <div v-if="notice" class="alert alert-success mb-16">
+      {{ notice }}
+      <router-link v-if="noticeHref" :to="noticeHref" style="margin-left: 8px">查看详情</router-link>
+    </div>
 
     <div
       v-if="showDiscovery && (featuredCaps.length || hotCaps.length || ratedCaps.length)"
@@ -412,7 +479,6 @@ watch(
             :cap="cap"
             :in-my="myIds.has(cap.id)"
             @add="addToMy"
-            @remove="removeFromMy"
           />
         </div>
       </section>
@@ -428,14 +494,13 @@ watch(
             :cap="cap"
             :in-my="myIds.has(cap.id)"
             @add="addToMy"
-            @remove="removeFromMy"
           />
         </div>
       </section>
       <section v-if="ratedCaps.length" class="discover-block">
         <div class="discover-head">
           <h3>下载热榜 · 高分</h3>
-          <button class="btn btn-sm" type="button" @click="selectShelf('install')">查看安装包</button>
+          <button class="btn btn-sm" type="button" @click="useSort('rating')">查看更多</button>
         </div>
         <div class="grid grid-3">
           <CapabilityCard
@@ -444,17 +509,68 @@ watch(
             :cap="cap"
             :in-my="myIds.has(cap.id)"
             @add="addToMy"
-            @remove="removeFromMy"
           />
         </div>
       </section>
     </div>
 
     <div v-if="showDiscovery" class="discover-footer mb-16">
-      <button class="btn" type="button" @click="selectBrowseTab('skill')">技能</button>
-      <button class="btn" type="button" @click="selectBrowseTab('install')">安装包</button>
       <button class="btn" type="button" @click="selectBrowseTab('agent')">助手</button>
+      <button class="btn" type="button" @click="selectBrowseTab('skill')">技能</button>
+      <button class="btn" type="button" @click="selectBrowseTab('mcp')">连接器</button>
       <button class="btn" type="button" @click="selectBrowseTab('more')">更多</button>
+    </div>
+
+    <div v-if="showTaskSearch" class="task-search mb-16">
+      <div v-if="loading" class="muted" style="padding: 24px 0">正在按任务匹配…</div>
+      <template v-else-if="taskEmpty">
+        <div class="panel" style="padding: 28px 24px; text-align: center">
+          <p style="margin: 0 0 8px; font-size: 15px">没找到相关能力</p>
+          <p class="muted" style="margin: 0 0 16px; font-size: 13px">换个说法试试，或直接去逛技能 / 助手目录。</p>
+          <div style="display: flex; gap: 8px; justify-content: center; flex-wrap: wrap">
+            <button class="btn btn-primary" type="button" @click="selectBrowseTab('skill')">去逛技能</button>
+            <button class="btn" type="button" @click="selectBrowseTab('agent')">去逛助手</button>
+            <button class="btn" type="button" @click="router.push({ path: '/', query: { type: 'mcp' } })">去逛连接器</button>
+          </div>
+        </div>
+      </template>
+      <template v-else>
+        <section
+          v-for="sec in taskSections"
+          v-show="(taskResults[sec.key] || []).length"
+          :key="sec.key"
+          class="discover-block"
+        >
+          <div class="discover-head">
+            <h3>{{ sec.title }}</h3>
+            <span class="muted">{{ sec.hint }}</span>
+          </div>
+          <div class="grid grid-3">
+            <CapabilityCard
+              v-for="cap in taskResults[sec.key]"
+              :key="sec.key + '-' + cap.id"
+              :cap="cap"
+              :in-my="myIds.has(cap.id)"
+              @add="addToMy"
+            />
+          </div>
+        </section>
+        <section v-if="(taskResults.others || []).length" class="discover-block">
+          <div class="discover-head">
+            <h3>其它</h3>
+            <span class="muted">规则、命令、Hooks 等</span>
+          </div>
+          <div class="grid grid-3">
+            <CapabilityCard
+              v-for="cap in taskResults.others"
+              :key="'o-' + cap.id"
+              :cap="cap"
+              :in-my="myIds.has(cap.id)"
+              @add="addToMy"
+            />
+          </div>
+        </section>
+      </template>
     </div>
 
     <div v-if="activeBrowseTab === 'more'" class="panel toolbar mb-16">
@@ -477,7 +593,7 @@ watch(
           v-model="filters.q"
           class="input"
           style="max-width: 280px"
-          placeholder="搜索名称 / 描述 / 标签…"
+          placeholder="想办什么事？例如：处理工单、查知识库"
           @keyup.enter="applyFilter"
         />
         <select v-model="filters.category" class="select" style="max-width: 150px" @change="applyFilter()">
@@ -538,7 +654,6 @@ watch(
           :cap="cap"
           :in-my="myIds.has(cap.id)"
           @add="addToMy"
-          @remove="removeFromMy"
         />
       </div>
       <div v-if="total > 0" class="pagination">

@@ -12,7 +12,10 @@ import sys
 import httpx
 
 BASE = os.environ.get("MARKETPLACE_URL", "http://127.0.0.1:8000").rstrip("/")
-TOKEN = os.environ.get("MARKETPLACE_TOKEN", "")
+TOKEN = (
+    os.environ.get("MARKETPLACE_SSO_TOKEN", "").strip()
+    or os.environ.get("MARKETPLACE_TOKEN", "").strip()
+)
 HEADERS = {"Authorization": f"Bearer {TOKEN}"} if TOKEN else {}
 
 
@@ -62,9 +65,24 @@ def activate_skill(name: str, context: str = "") -> dict:
     return r.json()["result"]
 
 
+def fetch_agent_persona(name: str) -> dict:
+    from urllib.parse import quote
+
+    r = httpx.get(
+        f"{BASE}/api/runtime/agents/{quote(name)}/persona",
+        headers=HEADERS,
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()["result"]
+
+
 def main() -> int:
     if not TOKEN:
-        print("提示：未设置 MARKETPLACE_TOKEN，仅公开能力可访问。登录后 export MARKETPLACE_TOKEN=...")
+        print(
+            "提示：未设置 MARKETPLACE_TOKEN / MARKETPLACE_SSO_TOKEN，"
+            "仅公开能力可访问。登录后 export MARKETPLACE_TOKEN=..."
+        )
 
     print("== 1. 搜索能力 ==")
     for cap in search("数字")[:3]:
@@ -76,8 +94,13 @@ def main() -> int:
     print("\n== 3. 委派 Agent ==")
     print("  ", run_agent("数字中台分析师", "生成上月销售报表")["status"])
 
-    print("\n== 4. 激活技能 ==")
-    print("  ", activate_skill("TDD 开发工作流", "写测试")["activated"])
+    print("\n== 4. 激活技能（返回 SKILL.md 正文）==")
+    sk = activate_skill("TDD 开发工作流", "写测试")
+    print("  activated=", sk.get("activated"), "skill_md_chars=", len(sk.get("skill_md") or ""))
+
+    print("\n== 5. 拉取助手人设（PROMPT.md）==")
+    persona = fetch_agent_persona("数字中台分析师")
+    print("  prompt_chars=", len(persona.get("prompt") or ""), "deps=", len(persona.get("dependencies") or []))
     return 0
 
 

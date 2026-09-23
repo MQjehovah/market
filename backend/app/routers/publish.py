@@ -189,17 +189,22 @@ async def upload_artifact(cap_id: str, db: DbSession, user: CurrentUser, file: U
         schema["embedded_skills"] = embedded["embedded_skills"]
         schema["embedded_mcp"] = embedded["embedded_mcp"]
         cap.input_schema = await enrich_embedded_with_market(db, schema)
-    if cap.type == "skill" and details.get("meta"):
+    if cap.type in ("skill", "rule", "command") and details.get("meta"):
         meta = details["meta"]
         identity = meta.get("identity") if isinstance(meta.get("identity"), dict) else {}
-        cap.input_schema = {
-            "kind": "skill",
+        schema = {
+            "kind": cap.type,
             "name": meta.get("name") or identity.get("name") or cap.name,
             "version": meta.get("version") or identity.get("version") or cap.version,
             "description": meta.get("description") or identity.get("description") or "",
             "category": meta.get("category") or identity.get("category") or cap.category or "",
             "display_name": identity.get("display_name") or meta.get("display_name") or "",
         }
+        if cap.type == "rule":
+            schema["alwaysApply"] = bool(meta.get("alwaysApply") or meta.get("always_apply"))
+            globs = meta.get("globs") or ""
+            schema["globs"] = globs if isinstance(globs, str) else ",".join(globs or [])
+        cap.input_schema = schema
     if cap.type == "mcp":
         meta = details.get("meta") or {}
         conn = details.get("connection") or {}
@@ -258,6 +263,17 @@ async def upload_artifact(cap_id: str, db: DbSession, user: CurrentUser, file: U
             "node_types": sorted(
                 {str(n.get("type")) for n in nodes if isinstance(n, dict) and n.get("type")}
             ),
+        }
+    if cap.type == "hook":
+        meta = details.get("meta") or {}
+        hooks_cfg = details.get("hooks") or {}
+        events = hooks_cfg.get("hooks") if isinstance(hooks_cfg.get("hooks"), dict) else {}
+        cap.input_schema = {
+            "kind": "hook",
+            "name": meta.get("name") or cap.name,
+            "version": meta.get("version") or cap.version,
+            "description": meta.get("description") or "",
+            "events": sorted(str(k) for k in events.keys()) if isinstance(events, dict) else [],
         }
     if cap.type == "plugin":
         from app.services.plugins import materialize_plugin_components

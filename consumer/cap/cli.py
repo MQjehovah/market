@@ -39,7 +39,7 @@ def cmd_sync(args) -> int:
         by_type: dict[str, list[dict]] = {}
         for item in items:
             by_type.setdefault(item["type"], []).append(item)
-        for cap_type in ("agent", "tool", "skill", "mcp", "workflow", "plugin"):
+        for cap_type in ("agent", "tool", "skill", "mcp", "workflow", "plugin", "rule", "command", "hook"):
             group = by_type.get(cap_type)
             if not group:
                 continue
@@ -68,6 +68,17 @@ def cmd_install(args) -> int:
     root = find_agent_root(args.agent_root)
     target = Path(args.target) if args.target else root / "config"
     cap_type = (args.type or "agent").lower()
+    env_overrides: dict[str, str] = {}
+    for item in getattr(args, "env", None) or []:
+        if "=" not in item:
+            raise SystemExit(f"--env 须为 KEY=VALUE，收到：{item}")
+        k, _, v = item.partition("=")
+        if not k.strip():
+            raise SystemExit(f"--env 键名为空：{item}")
+        env_overrides[k.strip()] = v
+    interactive = not bool(getattr(args, "no_interactive", False))
+    if getattr(args, "yes", False):
+        interactive = False
     manifest = install_capability(
         client,
         args.name,
@@ -75,6 +86,8 @@ def cmd_install(args) -> int:
         version=args.version,
         target=target,
         dry_run=args.dry_run,
+        interactive=interactive,
+        env_overrides=env_overrides or None,
     )
     if args.json:
         _print_json(manifest)
@@ -181,17 +194,17 @@ def build_parser() -> argparse.ArgumentParser:
     _common_args(p)
     p.add_argument("name", help="能力名称")
     p.add_argument("--version", "-v", default="", help="版本（默认最新）")
-    p.add_argument("--type", default="", help="能力类型（agent/tool/skill/mcp/plugin，用于目录消歧）")
+    p.add_argument("--type", default="", help="能力类型（agent/tool/skill/mcp/plugin/rule/command/hook，用于目录消歧）")
     p.add_argument("--output", "-o", default="", help="保存路径（默认 <name>-<version>.zip）")
     p.set_defaults(func=cmd_pull)
 
-    p = sub.add_parser("install", help="下载并安装能力（agent/skill/mcp/plugin）")
+    p = sub.add_parser("install", help="下载并安装能力（agent/skill/mcp/plugin/rule/command/hook）")
     _common_args(p)
     p.add_argument("name", help="能力名称")
     p.add_argument(
         "--type",
         default="agent",
-        choices=["agent", "skill", "mcp", "plugin"],
+        choices=["agent", "skill", "mcp", "plugin", "rule", "command", "hook"],
         help="安装类型（默认 agent）",
     )
     p.add_argument("--version", "-v", default="", help="版本（默认最新）")
@@ -199,6 +212,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--agent-root", default="", help="本地 agent 仓库根目录（默认 AGENT_ROOT 或 E:\\ai\\agent）")
     p.add_argument("--dry-run", action="store_true", help="只打印组装计划，不写盘")
     p.add_argument("--json", action="store_true", help="以 JSON 输出")
+    p.add_argument(
+        "--env",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="预填 MCP 环境变量（可重复）；密码类建议交互输入",
+    )
+    p.add_argument(
+        "--no-interactive",
+        action="store_true",
+        help="不交互询问凭据（CI 用；配合 --env）",
+    )
+    p.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="同 --no-interactive",
+    )
     p.set_defaults(func=cmd_install)
 
     p = sub.add_parser("run", help="执行 Agent 任务（本地/云端/A2A 三种模式）")

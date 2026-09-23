@@ -13,13 +13,23 @@ async def test_taxonomy_endpoint(client):
     body = r.json()
     assert "shelves" in body
     assert set(body["shelves"].keys()) == {"brick", "recipe", "install"}
-    assert body["default_browse_kinds"] == ["skill", "plugin", "agent"]
-    assert body["more_browse_kinds"] == ["mcp", "workflow", "tool"]
+    assert body["default_browse_kinds"] == ["agent", "skill", "mcp"]
+    assert body["more_browse_kinds"] == ["workflow", "tool"]
+    assert body["hidden_browse_kinds"] == ["plugin", "rule", "command", "hook"]
     assert "orchestration" in body
     assert body["orchestration"]["capability_dag"]["lands_in_agent_config"] is False
     assert "review_checklist" in body
     assert body["domain"]["note"]
-    assert set(body["local_install_kinds"]) == {"agent", "skill", "mcp", "plugin"}
+    assert set(body["local_install_kinds"]) == {
+        "agent",
+        "skill",
+        "mcp",
+        "plugin",
+        "rule",
+        "command",
+        "hook",
+    }
+    assert body["shelves"]["brick"]["kinds"] == ["skill", "mcp", "tool", "rule", "command", "hook"]
     assert len(body["ref_ways"]) == 3
     assert body["kinds"]["tool"]["local_install"] == "no"
     assert body["kinds"]["workflow"]["local_install"] == "no"
@@ -30,7 +40,7 @@ async def test_taxonomy_endpoint(client):
 
 @pytest.mark.asyncio
 async def test_package_template_download(client):
-    for kind in ("skill", "mcp", "tool", "agent", "plugin"):
+    for kind in ("skill", "mcp", "tool", "agent", "plugin", "rule", "command", "hook"):
         r = await client.get(f"/api/meta/package-templates/{kind}?name=demo")
         assert r.status_code == 200, kind
         assert "zip" in (r.headers.get("content-type") or "")

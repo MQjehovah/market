@@ -3,7 +3,9 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../api'
 import { formatSize } from '../utils/format'
+import { bindUnsavedGuard } from '../utils/unsaved'
 import StatusBadge from '../components/StatusBadge.vue'
+import CodeEditor from '../components/CodeEditor.vue'
 
 const route = useRoute()
 const name = route.params.name
@@ -16,6 +18,22 @@ const tags = ref('')
 const error = ref('')
 const notice = ref('')
 const saving = ref(false)
+const baseline = ref(null)
+
+function formSnap() {
+  return JSON.stringify({
+    schemaText: schemaText.value,
+    implementation: implementation.value,
+    description: description.value,
+    tags: tags.value
+  })
+}
+
+function markClean() {
+  baseline.value = formSnap()
+}
+
+bindUnsavedGuard(() => baseline.value !== null && formSnap() !== baseline.value)
 
 const schemaError = computed(() => {
   try {
@@ -35,6 +53,7 @@ async function load() {
     implementation.value = data.value.implementation || ''
     description.value = data.value.capability?.description || ''
     tags.value = (data.value.capability?.tags || []).join(', ')
+    markClean()
   } catch (e) {
     error.value = e.message
   }
@@ -60,6 +79,7 @@ async function save() {
     schemaText.value = JSON.stringify(body.tool_schema || {}, null, 2)
     implementation.value = body.implementation || ''
     notice.value = `已保存为新版本草稿 v${body.capability.version}，可提交审核`
+    markClean()
   } catch (e) {
     error.value = e.message
   } finally {
@@ -110,13 +130,13 @@ onMounted(load)
       <div>
         <div class="panel">
           <h3>schema.json（输入/输出契约）</h3>
-          <textarea v-model="schemaText" class="textarea code-editor" rows="16" spellcheck="false"></textarea>
+          <CodeEditor v-model="schemaText" language="json" height="min(48vh, 560px)" />
           <div v-if="schemaError" class="muted" style="color: var(--danger); font-size: 12px; margin-top: 6px">{{ schemaError }}</div>
         </div>
 
         <div class="panel mt-16">
           <h3>implementation/tool.py</h3>
-          <textarea v-model="implementation" class="textarea code-editor" rows="14" spellcheck="false"></textarea>
+          <CodeEditor v-model="implementation" language="python" height="min(56vh, 680px)" />
         </div>
 
         <div class="panel mt-16">
@@ -154,12 +174,8 @@ onMounted(load)
 </template>
 
 <style scoped>
-.editor { max-width: 1080px; }
+.editor { max-width: 1520px; }
 h3 { margin: 0 0 12px; }
-.code-editor {
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-  font-size: 13px; line-height: 1.55;
-}
 .file-item {
   display: flex; justify-content: space-between; align-items: center;
   padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px;

@@ -16,7 +16,7 @@ const props = defineProps({
   inMy: { type: Boolean, default: false },
   showJoin: { type: Boolean, default: true }
 })
-const emit = defineEmits(['add', 'remove'])
+const emit = defineEmits(['add'])
 
 const letter = computed(() => TYPE_LETTER[props.cap.type] || '?')
 const color = computed(() => TYPE_COLORS[props.cap.type] || 'var(--primary)')
@@ -71,16 +71,8 @@ const fromPlugin = computed(() => (props.cap.tags || []).includes('plugin-compon
       <span class="muted">{{ VISIBILITY_LABELS[cap.visibility] }} · {{ cap.usage_count }} 次使用</span>
       <div class="flex" style="gap: 8px">
         <span v-if="cap.latest" class="badge badge-primary">最新</span>
-        <button
-          v-if="inMy && canRemove"
-          class="btn btn-sm"
-          type="button"
-          title="从我的能力移除"
-          @click="emit('remove', cap)"
-        >
-          已加入
-        </button>
-        <span v-else-if="inMy" class="badge badge-warning" title="必装能力不可移除">必装</span>
+        <span v-if="inMy && !canRemove" class="badge badge-warning" title="必装能力不可移除">必装</span>
+        <span v-else-if="inMy" class="badge badge-success">已加入</span>
         <button
           v-else-if="showJoin"
           class="btn btn-sm btn-primary"

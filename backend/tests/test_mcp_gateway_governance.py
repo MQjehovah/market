@@ -1,8 +1,10 @@
-"""MCP 网关治理测试：鉴权贯通、能力级审计、限流与超时。
+"""MCP 网关治理测试：身份来源识别、消息级审计与 /stream 超时。
 
 说明：本机 mcp 2.x 的 StreamableHTTPSessionManager 与网关 _ServerProxy 不兼容
 （基线既有失败），治理逻辑不依赖上游 SDK，因此用 stub 替换 handle_stream，
-覆盖 ASGI 全链路的鉴权/限流/审计/超时。
+覆盖 ASGI 全链路的鉴权/审计/超时。
+限流与熔断由 gateway_governance 承担，见 test_phase1_governance.py；本文件的
+authenticate_request 仅用于识别审计身份来源，不再承担鉴权动作。
 """
 
 import asyncio
@@ -10,20 +12,15 @@ import json
 
 import pytest
 from sqlalchemy import select
-from starlette.responses import JSONResponse
 
 from app.config import get_settings
 from app.database import SessionLocal
-from app.models import Capability, MCPGatewayCall, MCPGatewayServer, UsageEvent, User
+from app.models import Capability, MCPGatewayCall, MCPGatewayServer, User
 from app.services.mcp_gateway import (
     GatewayAuthError,
     GatewayEndpoints,
-    GatewayIdentity,
     authenticate_request,
-    check_rate_limit,
     parse_mcp_calls,
-    rate_limit_key,
-    reset_rate_limits,
 )
 
 URL = "/api/mcp-gateway/{name}/stream"
@@ -85,7 +82,7 @@ class _StreamStub:
         self.is_error = False
         self.error_text = "上游工具失败"
 
-    async def handle_stream(self, scope, receive, send) -> None:
+    async def handle_stream(self, scope, receive, send, config=None) -> None:
         body = b""
         while True:
             message = await receive()
@@ -107,6 +104,8 @@ class _StreamStub:
             if self.is_error:
                 result = {"content": [{"type": "text", "text": self.error_text}], "isError": True}
             out = {"jsonrpc": "2.0", "id": payload.get("id"), "result": result}
+        from starlette.responses import JSONResponse
+
         await JSONResponse(out)(scope, receive, send)
 
 
@@ -117,14 +116,7 @@ def stream_stub(monkeypatch):
     return stub
 
 
-@pytest.fixture(autouse=True)
-def _clean_rate_limits():
-    reset_rate_limits()
-    yield
-    reset_rate_limits()
-
-
-# ---------- 鉴权 ----------
+# ---------- 身份来源（仅审计归因） ----------
 
 
 @pytest.mark.asyncio
@@ -139,7 +131,6 @@ async def test_auth_server_token_matches_and_wrong_token_rejected(client):
     identity = await authenticate_request(_config(token="tok"), _scope({"X-Gateway-Token": "tok"}))
     assert identity.source == "server_token"
     assert identity.user_id is None
-    # 兼容原行为：配置了 api_token 时错误令牌仍 401
     with pytest.raises(GatewayAuthError):
         await authenticate_request(_config(token="tok"), _scope({"X-Gateway-Token": "bad"}))
 
@@ -152,7 +143,7 @@ async def test_auth_local_jwt_resolves_user(client, admin_headers, monkeypatch):
     assert identity.username == "admin"
     assert identity.role == "admin"
     assert identity.user_id
-    # require_token 打开时，有效 JWT 依然放行
+    # require_token 打开时，有效 JWT 依然能识别身份
     monkeypatch.setattr(get_settings(), "mcp_gateway_require_token", True)
     identity = await authenticate_request(_config(), _scope({"Authorization": f"Bearer {token}"}))
     assert identity.source == "jwt"
@@ -171,62 +162,29 @@ async def test_auth_sso_token_resolves_user(client, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_auth_service_token_resolves_user(client, admin_headers):
+    r = await client.post(
+        "/api/admin/service-tokens",
+        headers=admin_headers,
+        json={"name": "gw-svc", "scopes": ["runtime", "gateway"]},
+    )
+    assert r.status_code == 201, r.text
+    token = r.json()["token"]
+
+    identity = await authenticate_request(_config(), _scope({"Authorization": f"Bearer {token}"}))
+    assert identity.source == "service_token"
+    assert identity.username == "svc_gw-svc"
+    assert identity.user_id
+
+
+@pytest.mark.asyncio
 async def test_auth_anonymous_allowed_when_not_required(client):
     identity = await authenticate_request(_config(), _scope())
     assert identity.source == "anonymous"
     assert identity.user_id is None
 
 
-def test_rate_limit_key_priority():
-    user = GatewayIdentity(source="jwt", user_id="u-1", username="u")
-    assert rate_limit_key(user, _config(token="tok"), _scope()) == "user:u-1"
-    token_key = rate_limit_key(
-        GatewayIdentity(source="server_token"), _config(token="super-secret-token"), _scope()
-    )
-    assert token_key.startswith("token:")
-    assert "super-secret-token" not in token_key
-    ip_key = rate_limit_key(GatewayIdentity(source="anonymous"), _config(), _scope(client=("10.0.0.8", 1)))
-    assert ip_key == "ip:10.0.0.8"
-
-
-# ---------- 限流 ----------
-
-
-def test_check_rate_limit_sliding_window_and_disable():
-    reset_rate_limits()
-    assert check_rate_limit("k", 2, now=0.0) == (True, 0)
-    assert check_rate_limit("k", 2, now=1.0) == (True, 0)
-    allowed, retry_after = check_rate_limit("k", 2, now=2.0)
-    assert allowed is False
-    assert retry_after == 58  # 60s - (2.0 - 0.0)
-    assert check_rate_limit("k", 2, now=61.0) == (True, 0)
-    assert check_rate_limit("k2", 2, now=2.0) == (True, 0)  # 不同身份键互不影响
-    assert check_rate_limit("off", 0, now=0.0) == (True, 0)
-    assert check_rate_limit("off", 0, now=0.1) == (True, 0)
-
-
-@pytest.mark.asyncio
-async def test_http_rate_limit_returns_429_with_retry_after(client, monkeypatch):
-    await _insert_server("gov-rate")
-    monkeypatch.setattr(get_settings(), "mcp_gateway_rate_limit_per_min", 2)
-    url = "/api/mcp-gateway/gov-rate/nope"
-    assert (await client.post(url)).status_code == 404
-    assert (await client.post(url)).status_code == 404
-    r = await client.post(url)
-    assert r.status_code == 429
-    assert int(r.headers["Retry-After"]) >= 1
-
-
-@pytest.mark.asyncio
-async def test_http_rate_limit_zero_disables(client, monkeypatch):
-    await _insert_server("gov-rate-off")
-    monkeypatch.setattr(get_settings(), "mcp_gateway_rate_limit_per_min", 0)
-    url = "/api/mcp-gateway/gov-rate-off/nope"
-    for _ in range(5):
-        assert (await client.post(url)).status_code == 404
-
-
-# ---------- 审计 ----------
+# ---------- 消息级审计 ----------
 
 
 async def _post_jsonrpc(client, name, payload, headers=None):
@@ -237,7 +195,7 @@ async def _post_jsonrpc(client, name, payload, headers=None):
 
 
 @pytest.mark.asyncio
-async def test_audit_records_tool_call_and_usage(client, admin_headers, stream_stub):
+async def test_audit_records_tool_calls(client, admin_headers, stream_stub):
     cap_id = await _insert_capability()
     await _insert_server("gov-audit", capability_id=cap_id)
     headers = dict(admin_headers)
@@ -276,11 +234,27 @@ async def test_audit_records_tool_call_and_usage(client, admin_headers, stream_s
         assert row.duration_ms >= 0
         assert row.ok is True
         assert row.error == ""
-        usage = (await db.scalars(select(UsageEvent).where(UsageEvent.action == "mcp_call"))).all()
-        assert len(usage) == 1
-        assert usage[0].params["tool"] == "add"
-        cap = await db.get(Capability, cap_id)
-        assert cap.usage_count == 1
+
+
+@pytest.mark.asyncio
+async def test_audit_records_anonymous_calls(client, stream_stub):
+    await _insert_server("gov-anon")
+
+    r = await _post_jsonrpc(
+        client,
+        "gov-anon",
+        {"jsonrpc": "2.0", "id": 5, "method": "tools/list"},
+    )
+    assert r.status_code == 200, r.text
+
+    async with SessionLocal() as db:
+        row = (
+            await db.scalars(select(MCPGatewayCall).where(MCPGatewayCall.server_name == "gov-anon"))
+        ).one()
+        assert row.method == "tools_list"
+        assert row.source == "anonymous"
+        assert row.user_id == ""
+        assert row.username == ""
 
 
 @pytest.mark.asyncio

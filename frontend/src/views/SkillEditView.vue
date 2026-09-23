@@ -3,7 +3,9 @@ import { onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../api'
 import { formatSize } from '../utils/format'
+import { bindUnsavedGuard } from '../utils/unsaved'
 import StatusBadge from '../components/StatusBadge.vue'
+import MarkdownEditor from '../components/MarkdownEditor.vue'
 
 const route = useRoute()
 const name = route.params.name
@@ -15,6 +17,21 @@ const tags = ref('')
 const error = ref('')
 const notice = ref('')
 const saving = ref(false)
+const baseline = ref(null)
+
+function formSnap() {
+  return JSON.stringify({
+    skillMd: skillMd.value,
+    description: description.value,
+    tags: tags.value
+  })
+}
+
+function markClean() {
+  baseline.value = formSnap()
+}
+
+bindUnsavedGuard(() => baseline.value !== null && formSnap() !== baseline.value)
 
 async function load() {
   error.value = ''
@@ -23,6 +40,7 @@ async function load() {
     skillMd.value = data.value.skill_md || ''
     description.value = data.value.capability?.description || ''
     tags.value = (data.value.capability?.tags || []).join(', ')
+    markClean()
   } catch (e) {
     error.value = e.message
   }
@@ -42,6 +60,7 @@ async function save() {
     data.value = body
     skillMd.value = body.skill_md || ''
     notice.value = `已保存为新版本草稿 v${body.capability.version}，可提交审核`
+    markClean()
   } catch (e) {
     error.value = e.message
   } finally {
@@ -90,7 +109,7 @@ onMounted(load)
       <div>
         <div class="panel">
           <h3>SKILL.md（Markdown）</h3>
-          <textarea v-model="skillMd" class="textarea md-editor" rows="24" spellcheck="false"></textarea>
+          <MarkdownEditor v-model="skillMd" />
         </div>
 
         <div class="panel mt-16">
@@ -122,12 +141,8 @@ onMounted(load)
 </template>
 
 <style scoped>
-.editor { max-width: 1080px; }
+.editor { max-width: 1520px; }
 h3 { margin: 0 0 12px; }
-.md-editor {
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-  font-size: 13px; line-height: 1.6;
-}
 .file-item {
   display: flex; justify-content: space-between; align-items: center;
   padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px;

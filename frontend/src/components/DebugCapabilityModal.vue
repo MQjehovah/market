@@ -24,6 +24,9 @@ const copied = ref(false)
 const mcpTools = ref([])
 const mcpSelected = ref('')
 const mcpParams = ref('{}')
+const mcpMode = ref('form')
+const mcpFormParams = reactive({})
+const mcpComplexParams = reactive({})
 const mcpConnecting = ref(false)
 const mcpConnected = ref(false)
 const mcpError = ref('')
@@ -43,6 +46,10 @@ const pluginComponents = computed(() => {
   return Array.isArray(s.components) ? s.components : []
 })
 const selectedMcpTool = computed(() => mcpTools.value.find((t) => t.name === mcpSelected.value) || null)
+const mcpToolSchema = computed(
+  () => selectedMcpTool.value?.inputSchema || selectedMcpTool.value?.input_schema || {}
+)
+const mcpHasSchema = computed(() => Object.keys(mcpToolSchema.value.properties || {}).length > 0)
 
 function defaultValue(prop) {
   if (prop.default !== undefined) return prop.default
@@ -78,6 +85,9 @@ function reset() {
   mcpTools.value = []
   mcpSelected.value = ''
   mcpParams.value = '{}'
+  mcpMode.value = 'form'
+  Object.keys(mcpFormParams).forEach((k) => delete mcpFormParams[k])
+  Object.keys(mcpComplexParams).forEach((k) => delete mcpComplexParams[k])
   mcpConnecting.value = false
   mcpConnected.value = false
   mcpError.value = ''
@@ -98,14 +108,82 @@ function reset() {
 watch(
   () => props.show,
   (v) => {
-    if (v) reset()
+    if (v) {
+      reset()
+      if (props.cap?.type === 'mcp') connectMcp()
+    }
   }
 )
 
+function hydrateMcpForm(schema) {
+  Object.keys(mcpFormParams).forEach((k) => delete mcpFormParams[k])
+  Object.keys(mcpComplexParams).forEach((k) => delete mcpComplexParams[k])
+  const propsMap = schema?.properties || {}
+  mcpMode.value = Object.keys(propsMap).length ? 'form' : 'json'
+  for (const [name, prop] of Object.entries(propsMap)) {
+    if (isComplex(prop)) {
+      mcpComplexParams[name] = JSON.stringify(defaultValue(prop), null, 2)
+    } else {
+      mcpFormParams[name] = defaultValue(prop)
+    }
+  }
+}
+
 watch(mcpSelected, (name) => {
   const tool = mcpTools.value.find((t) => t.name === name)
-  mcpParams.value = JSON.stringify(schemaDefaults(tool?.inputSchema), null, 2)
+  const schema = tool?.inputSchema || tool?.input_schema || {}
+  mcpParams.value = JSON.stringify(schemaDefaults(schema), null, 2)
+  hydrateMcpForm(schema)
 })
+
+function isMcpRequired(name) {
+  return (mcpToolSchema.value.required || []).includes(name)
+}
+
+function collectMcpFormParams() {
+  const input = {}
+  for (const [name, prop] of Object.entries(mcpToolSchema.value.properties || {})) {
+    if (isComplex(prop)) {
+      try {
+        input[name] = JSON.parse(mcpComplexParams[name] || 'null')
+      } catch {
+        throw new Error(`参数 ${name} 不是合法 JSON`)
+      }
+    } else {
+      input[name] = mcpFormParams[name]
+    }
+  }
+  return input
+}
+
+function collectMcpParams() {
+  if (mcpMode.value === 'json' || !mcpHasSchema.value) {
+    return JSON.parse(mcpParams.value || '{}')
+  }
+  return collectMcpFormParams()
+}
+
+function switchMcpMode(m) {
+  if (m === 'json' && mcpHasSchema.value) {
+    try {
+      mcpParams.value = JSON.stringify(collectMcpFormParams(), null, 2)
+    } catch {
+      mcpParams.value = JSON.stringify(schemaDefaults(mcpToolSchema.value), null, 2)
+    }
+  } else if (m === 'form' && mcpHasSchema.value) {
+    try {
+      const parsed = JSON.parse(mcpParams.value || '{}')
+      for (const [name, prop] of Object.entries(mcpToolSchema.value.properties || {})) {
+        const val = parsed[name] !== undefined ? parsed[name] : defaultValue(prop)
+        if (isComplex(prop)) mcpComplexParams[name] = JSON.stringify(val, null, 2)
+        else mcpFormParams[name] = val
+      }
+    } catch {
+      hydrateMcpForm(mcpToolSchema.value)
+    }
+  }
+  mcpMode.value = m
+}
 
 function isRequired(name) {
   return (schema.value.required || []).includes(name)
@@ -188,6 +266,9 @@ async function connectMcp() {
     mcpConnected.value = !!res.connected
     mcpTools.value = res.tools || []
     if (!res.connected) mcpError.value = res.error || '连接失败'
+    else if (mcpTools.value.length && !mcpSelected.value) {
+      mcpSelected.value = mcpTools.value[0].name
+    }
   } catch (e) {
     mcpError.value = e.message
   } finally {
@@ -204,7 +285,7 @@ async function callMcp() {
   try {
     result.value = await api.post(`/runtime/mcp/${encodeURIComponent(cap.name)}/call`, {
       tool: mcpSelected.value,
-      params: JSON.parse(mcpParams.value || '{}')
+      params: collectMcpParams()
     })
   } catch (e) {
     error.value = e.message
@@ -336,19 +417,23 @@ function stepBadge(name) {
         </div>
       </template>
 
-      <!-- MCP：连接 → 发现工具 → 选工具调用 -->
+      <!-- MCP：连接 → 发现工具 → schema 表单调用（JSON 为高级） -->
       <template v-else-if="isMcp">
+        <p class="muted" style="font-size: 13px; margin: 0 0 10px">
+          市场代你当一次客户端：列出工具并填表调用。这只验证连接器能抓，不是一次完整问答。
+        </p>
         <div class="flex mt-8" style="gap: 10px; align-items: center">
           <button class="btn btn-primary" :disabled="mcpConnecting" @click="connectMcp">
             {{ mcpConnecting ? '连接中…' : mcpConnected ? '重新连接并发现工具' : '连接并发现工具' }}
           </button>
           <span v-if="mcpConnected" class="badge badge-success">已连接</span>
+          <span v-else-if="mcpConnecting" class="muted" style="font-size: 12px">正在连接…</span>
         </div>
         <div v-if="mcpError" class="alert alert-error mt-12">{{ mcpError }}</div>
 
         <template v-if="mcpTools.length">
           <div class="field mt-12">
-            <label>选择 MCP 工具</label>
+            <label>选择工具</label>
             <select v-model="mcpSelected" class="select">
               <option value="">选择工具…</option>
               <option v-for="t in mcpTools" :key="t.name" :value="t.name">{{ t.name }}</option>
@@ -357,15 +442,51 @@ function stepBadge(name) {
           <div v-if="selectedMcpTool?.description" class="muted mt-8" style="font-size: 12px">
             {{ selectedMcpTool.description }}
           </div>
-          <div v-if="mcpSelected" class="field mt-12">
-            <label>参数 JSON</label>
-            <textarea v-model="mcpParams" class="textarea" rows="6" spellcheck="false"></textarea>
-          </div>
-          <button v-if="mcpSelected" class="btn btn-primary mt-12" :disabled="busy" @click="callMcp">
-            {{ busy ? '调用中…' : '调用工具' }}
-          </button>
+          <template v-if="mcpSelected">
+            <div v-if="mcpHasSchema" class="mode-bar mt-12">
+              <button class="mode-btn" :class="{ active: mcpMode === 'form' }" type="button" @click="switchMcpMode('form')">参数表单</button>
+              <button class="mode-btn" :class="{ active: mcpMode === 'json' }" type="button" @click="switchMcpMode('json')">JSON（高级）</button>
+            </div>
+            <div v-if="mcpMode === 'form' && mcpHasSchema" class="form-grid">
+              <div v-for="(prop, name) in mcpToolSchema.properties" :key="name" class="field">
+                <label>
+                  <code>{{ name }}</code>
+                  <span v-if="isMcpRequired(name)" class="req">*</span>
+                  <span v-if="prop.description || prop.title" class="muted">（{{ prop.description || prop.title }}）</span>
+                </label>
+                <select v-if="Array.isArray(prop.enum)" v-model="mcpFormParams[name]" class="select">
+                  <option v-for="opt in prop.enum" :key="opt" :value="opt">{{ opt }}</option>
+                </select>
+                <label v-else-if="prop.type === 'boolean'" class="check-line">
+                  <input type="checkbox" v-model="mcpFormParams[name]" />
+                  <span>{{ mcpFormParams[name] ? '是' : '否' }}</span>
+                </label>
+                <input
+                  v-else-if="prop.type === 'number' || prop.type === 'integer'"
+                  v-model.number="mcpFormParams[name]"
+                  type="number"
+                  class="input"
+                />
+                <textarea
+                  v-else-if="isComplex(prop)"
+                  v-model="mcpComplexParams[name]"
+                  class="textarea"
+                  rows="3"
+                  spellcheck="false"
+                ></textarea>
+                <input v-else v-model="mcpFormParams[name]" class="input" :placeholder="prop.description || name" />
+              </div>
+            </div>
+            <div v-else class="field mt-12">
+              <label>参数 JSON</label>
+              <textarea v-model="mcpParams" class="textarea" rows="6" spellcheck="false"></textarea>
+            </div>
+            <button class="btn btn-primary mt-12" :disabled="busy" @click="callMcp">
+              {{ busy ? '调用中…' : '调用工具' }}
+            </button>
+          </template>
         </template>
-        <div v-else-if="mcpConnected" class="muted mt-12" style="font-size: 13px">该 MCP 没有暴露工具</div>
+        <div v-else-if="mcpConnected" class="muted mt-12" style="font-size: 13px">该连接器没有暴露工具</div>
       </template>
 
       <!-- 工作流：JSON 入参 -->

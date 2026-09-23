@@ -4,6 +4,12 @@ import vue from '@vitejs/plugin-vue'
 export default defineConfig({
   base: '/market/',
   plugins: [vue()],
+  optimizeDeps: {
+    include: ['monaco-editor']
+  },
+  worker: {
+    format: 'es'
+  },
   server: {
     host: '127.0.0.1',
     port: 5173,

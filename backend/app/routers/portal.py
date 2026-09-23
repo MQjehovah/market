@@ -1,7 +1,6 @@
 """门户：浏览 / 搜索 / 详情 / 评分 / 订阅 / 通知 / 版本列表。"""
 
 import io
-from datetime import datetime, timezone
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -11,14 +10,7 @@ from sqlalchemy.orm import joinedload, selectinload
 
 from app.auth import CurrentUser, DbSession, OptionalUser
 from app.config import get_settings
-from app.models import (
-    Capability,
-    MCPGatewayServer,
-    Notification,
-    Rating,
-    Subscription,
-    User,
-)
+from app.models import Capability, MCPGatewayServer, Notification, Rating, Subscription, User
 from app.schemas import (
     AccessPolicyUpdate,
     CapabilityOut,
@@ -31,9 +23,12 @@ from app.schemas import (
     RatingCreate,
     RatingOut,
     SubscribeRequest,
+    TaskSearchHitOut,
+    TaskSearchOut,
 )
 from app.services.capabilities import get_visible_capabilities, parse_semver, record_rating
 from app.services.capabilities import to_capability_out
+from app.services.task_search import task_search as run_task_search
 from app.services.visibility import visibility_condition
 from app.services.taxonomy import (
     DEFAULT_BROWSE_KINDS,
@@ -52,23 +47,6 @@ def _to_out(cap: Capability, versions: list[Capability] | None = None) -> Capabi
 def _visibility_where(user: User | None):
     """可见性过滤（SQL 层）：单一判定来源见 ``app.services.visibility``。"""
     return visibility_condition(user)
-
-
-def _parse_since(raw: str) -> datetime:
-    """解析 ISO8601 增量同步起点；非法值返回 400。"""
-    text = raw.strip()
-    if text.endswith(("Z", "z")):
-        text = f"{text[:-1]}+00:00"
-    try:
-        value = datetime.fromisoformat(text)
-    except ValueError as exc:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "since 必须是 ISO8601 时间，如 2026-09-23T00:00:00Z",
-        ) from exc
-    if value.tzinfo is not None:
-        value = value.astimezone(timezone.utc).replace(tzinfo=None)
-    return value
 
 
 def _gateway_payload(
@@ -101,7 +79,7 @@ async def taxonomy():
 
 @router.get("/meta/package-templates/{kind}")
 async def package_template(kind: str, name: str = Query("example", max_length=80)):
-    """下载空能力包模板 zip（skill/mcp/tool/agent/plugin）。"""
+    """下载空能力包模板 zip（skill/mcp/tool/agent/plugin/rule/command/hook）。"""
     from app.services.packages import build_package_template
 
     content = build_package_template(kind, name=name or "example")
@@ -135,9 +113,9 @@ async def browse_capabilities(
 ):
     """浏览市场：默认只展示已发布能力，且每个逻辑能力只保留最新版本。
 
-    默认货架为安装包+配方（plugin/agent/workflow）。积木（skill/mcp/tool）需：
-    - shelf=brick，或
-    - type=某积木 kind，或
+    默认货架为助手+依赖（agent/skill/mcp）。其余 kind 需：
+    - shelf=对应货架，或
+    - type=某 kind，或
     - include_bricks=true。
 
     skill / mcp：按 Agent 内嵌能力名筛选（匹配 input_schema.embedded_*）。
@@ -154,7 +132,7 @@ async def browse_capabilities(
     elif shelf_kinds is not None:
         conditions.append(Capability.type.in_(shelf_kinds))
     elif not include_bricks and not skill and not mcp and not q.strip():
-        # 默认货架：安装包+配方；有关键词搜索时放开全部 kind，避免搜不到积木
+        # 默认货架：助手 + 依赖；有关键词搜索时放开全部 kind
         conditions.append(Capability.type.in_(list(DEFAULT_BROWSE_KINDS)))
 
     if category:
@@ -259,39 +237,106 @@ async def browse_capabilities(
     )
 
 
+@router.get("/capabilities/task-search", response_model=TaskSearchOut)
+async def task_search_capabilities(
+    db: DbSession,
+    user: OptionalUser,
+    q: str = Query("", max_length=200),
+):
+    """按要办的事搜索：关键词打分 + 依赖/used_by 扩展，分组返回助手/技能/连接器/安装包。"""
+    query = (q or "").strip()
+    if not query:
+        return TaskSearchOut()
+
+    conditions: list = [Capability.status == "published"]
+    visibility_where = _visibility_where(user)
+    if visibility_where is not None:
+        conditions.append(visibility_where)
+
+    stmt = (
+        select(Capability)
+        .options(joinedload(Capability.author))
+        .where(and_(*conditions))
+    )
+    caps = [
+        c
+        for c in (await db.scalars(stmt)).all()
+        if "plugin-component" not in (c.tags or [])
+    ]
+    raw = await run_task_search(db, caps, query)
+
+    def _hits(rows: list[dict]) -> list[TaskSearchHitOut]:
+        return [TaskSearchHitOut(**row) for row in rows]
+
+    return TaskSearchOut(
+        q=raw["q"],
+        terms=raw["terms"],
+        agents=_hits(raw["agents"]),
+        skills=_hits(raw["skills"]),
+        mcps=_hits(raw["mcps"]),
+        plugins=_hits(raw["plugins"]),
+        others=_hits(raw["others"]),
+    )
+
+
 @router.get("/capabilities/sync", response_model=list[dict])
-async def sync_capabilities(db: DbSession, user: OptionalUser, since: str = ""):
+async def sync_capabilities(
+    db: DbSession,
+    user: OptionalUser,
+    since: str | None = Query(
+        default=None,
+        description="ISO8601 增量同步：返回 updated_at > since 的已发布能力（含全部变更版本）",
+    ),
+):
     """同步接口：返回各能力的最新发布版本/商业包，供 Agent 等消费者拉取目录。
 
     含已发布的 plugin 拆出组件（skill/mcp 等），便于其他 Agent 依赖复用。
-    ``since``（ISO8601）用于增量同步：仅返回 updated_at 晚于该时刻的能力。
-    mcp 类型附带 ``gateway``（按 capability_id 关联网关注册行，回退同名 enabled 行）。
+    传 since 时改为增量：返回该时刻之后更新的全部 published/deprecated 行（不折叠为最新版）。
     """
-    since_dt = _parse_since(since) if since.strip() else None
+    from datetime import datetime
+
     visible = await get_visible_capabilities(db, user)
     published = [c for c in visible if c.status in ("published", "deprecated")]
-    if since_dt is not None:
-        published = [
-            c for c in published if c.updated_at is not None and c.updated_at > since_dt
-        ]
-    latest: dict[tuple[str, str], Capability] = {}
-    for cap in published:
-        key = (cap.name, cap.type)
-        cur = latest.get(key)
-        if cur is None or parse_semver(cap.version) > parse_semver(cur.version):
-            latest[key] = cap
 
-    latest_caps = sorted(latest.values(), key=lambda c: (c.type, c.name))
+    since_dt = None
+    if since:
+        raw = since.strip().replace("Z", "+00:00")
+        try:
+            since_dt = datetime.fromisoformat(raw)
+        except ValueError as exc:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "since 须为 ISO8601 时间"
+            ) from exc
+        if since_dt.tzinfo is not None:
+            since_dt = since_dt.replace(tzinfo=None)
+        published = [
+            c
+            for c in published
+            if c.updated_at and c.updated_at.replace(tzinfo=None) > since_dt
+        ]
+
+    if since_dt is None:
+        latest: dict[tuple[str, str], Capability] = {}
+        for cap in published:
+            key = (cap.name, cap.type)
+            cur = latest.get(key)
+            if cur is None or parse_semver(cap.version) > parse_semver(cur.version):
+                latest[key] = cap
+        caps_out = sorted(latest.values(), key=lambda c: (c.type, c.name))
+    else:
+        caps_out = sorted(published, key=lambda c: (c.updated_at or c.created_at, c.name))
+
     servers_by_capability: dict[str, MCPGatewayServer] = {}
     servers_by_name: dict[str, MCPGatewayServer] = {}
-    if any(c.type == "mcp" for c in latest_caps):
+    if any(c.type == "mcp" for c in caps_out):
         rows = (await db.scalars(select(MCPGatewayServer))).all()
         servers_by_capability = {r.capability_id: r for r in rows if r.capability_id}
         servers_by_name = {r.name: r for r in rows}
 
     items = []
-    for cap in latest_caps:
+    for cap in caps_out:
         item = {
+            "id": cap.id,
             "name": cap.name,
             "type": cap.type,
             "version": cap.version,
@@ -299,11 +344,15 @@ async def sync_capabilities(db: DbSession, user: OptionalUser, since: str = ""):
             "category": cap.category or "",
             "description": cap.description or "",
             "tags": cap.tags or [],
-            "usage_count": cap.usage_count,
-            "has_artifact": bool(cap.artifacts),
             "distribution": getattr(cap, "distribution", None) or "both",
             "risk_default": getattr(cap, "risk_default", None) or "read",
             "data_domain": getattr(cap, "data_domain", None) or "",
+            "visibility": cap.visibility,
+            "usage_count": cap.usage_count,
+            "has_artifact": bool(cap.artifacts),
+            "updated_at": (cap.updated_at or cap.created_at).isoformat()
+            if (cap.updated_at or cap.created_at)
+            else "",
             "download_url": (
                 f"/api/capabilities/{quote(cap.name, safe='')}/download"
                 f"?version={cap.version}"
@@ -316,12 +365,29 @@ async def sync_capabilities(db: DbSession, user: OptionalUser, since: str = ""):
 
 
 @router.get("/capabilities/{name}/download")
-async def download_capability(name: str, db: DbSession, user: OptionalUser, version: str = ""):
-    """下载已发布能力包（去重 zip）。消费者按名称（可选版本）获取。"""
+async def download_capability(
+    name: str,
+    db: DbSession,
+    user: OptionalUser,
+    version: str = "",
+    type: str = "",
+):
+    """下载已发布能力包（去重 zip）。消费者按名称（可选版本 / type）获取。
+
+    type 用于同名不同 kind 消歧（桌面与 cap 都可能装 skill 与 plugin 撞名）。
+    """
     visible = await get_visible_capabilities(db, user)
     matches = [c for c in visible if c.name == name and c.status in ("published", "deprecated")]
+    type_filter = (type or "").strip().lower()
+    if type_filter:
+        from app.schemas import CAPABILITY_TYPES
+
+        if type_filter not in CAPABILITY_TYPES:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"未知能力类型 {type}")
+        matches = [c for c in matches if c.type == type_filter]
     if not matches:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"能力 {name} 不存在或未发布")
+        hint = f"（type={type_filter}）" if type_filter else ""
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"能力 {name}{hint} 不存在或未发布")
     cap = None
     if version:
         cap = next((c for c in matches if c.version == version), None)
@@ -568,6 +634,16 @@ async def notifications(db: DbSession, user: CurrentUser):
         )
     ).all()
     return list(rows)
+
+
+@router.post("/notifications/{notification_id}/read", response_model=MessageOut)
+async def read_notification(notification_id: str, db: DbSession, user: CurrentUser):
+    item = await db.get(Notification, notification_id)
+    if item is None or item.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "通知不存在")
+    item.read = True
+    await db.commit()
+    return MessageOut(message="已读")
 
 
 @router.post("/notifications/read-all", response_model=MessageOut)

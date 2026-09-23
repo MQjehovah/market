@@ -16,24 +16,30 @@
 | **组件** `brick` | 组件 | `skill` | SOP（SKILL.md） | `config/.../skills/`；Agent 的 `skill` 工具激活 |
 | **组件** | 组件 | `mcp` | 连接器 | `mcp_servers.json`；MCPManager / 网关 / IDE |
 | **组件** | 组件 | `tool` | 沙箱函数，主要给能力编排节点 | 仅云端 invoke；**不是** `src/tools` |
+| **组件** | 组件 | `rule` | 持久指导（RULE.mdc） | `config/rules/<name>/` |
+| **组件** | 组件 | `command` | `/` 斜杠命令（COMMAND.md） | `config/commands/<name>/` |
+| **组件** | 组件 | `hook` | 生命周期脚本（hooks.json） | `config/hooks/<name>/` |
 | **助手** `recipe` | 助手 | `agent` | 人设 + 依赖；可选 **TEAM.md 团队流水线** | `cap install` → `config/agents/<name>/` |
 | **助手** | 助手 | `workflow` | **能力编排**（已上架能力的静态 DAG） | 只云端执行，**不进** Agent 目录 |
-| **安装包** `install` | 安装包 | `plugin` | 一键分发技能+连接器（可选助手） | 拆子能力；IDE 可用 skills+mcp |
+| **安装包** `install` | 安装包 | `plugin` | 一键分发 skill/mcp/rule/command/hook（可选助手） | 拆子能力；兼容 Cursor Plugin |
 
 逛店顶栏：**推荐 | 技能 | 安装包 | 助手 | 更多**。  
-推荐默认浏览：`skill + plugin + agent`。连接器 / 能力编排 / 编排函数进「更多」。`plugin-component` 默认隐藏。
+推荐默认浏览：`skill + plugin + agent`。连接器 / 规则 / 命令 / Hooks / 能力编排 / 编排函数进「更多」。`plugin-component` 默认隐藏。
 
 元数据：`GET /api/meta/taxonomy`。空模板：`GET /api/meta/package-templates/{kind}`。
 
-## skill / tool / mcp / agent 关系
+## kind 关系
 
-四个 kind **不是同一层东西**。市场 `tool`、MCP 发现出的 tools、零号员工 `src/tools` **不是同一种**。
+这些 kind **不是同一层东西**。市场 `tool`、MCP 发现出的 tools、零号员工 `src/tools` **不是同一种**。
 
 | kind | 是什么 | 自己干活吗 | 主消费路径 |
 | --- | --- | --- | --- |
 | **skill** | SOP（`SKILL.md`） | 否；装进 Agent 后由名为 `skill` 的元工具读进上下文 | `cap install` → `skills/` |
 | **mcp** | 连接器（`connection.json`） | 否；连上后 **发现出的 tools** 才可调 | `cap install` → `mcp_servers.json` |
 | **tool** | 云端沙箱 `tool.py` | 是（仅市场沙箱 / workflow 节点） | `POST /api/runtime/tools/{name}/invoke`；**无**本地安装 |
+| **rule** | 持久指导（`RULE.mdc`） | 否；按 alwaysApply / globs 读进上下文 | `cap install --type rule` → `config/rules/` |
+| **command** | 斜杠命令（`COMMAND.md`） | 否；对话里 `/` 唤起 | `cap install --type command` → `config/commands/` |
+| **hook** | 生命周期脚本（`hooks.json`） | 宿主按事件执行 scripts | `cap install --type hook` → `config/hooks/` |
 | **agent** | 人设（`PROMPT.md`）+ 依赖清单 | 对话在零号员工 / A2A | `cap install` → `config/agents/<name>/` |
 
 Agent 日常主路：**skill 当说明书** + **MCP 发现出的 tools 当手**。市场 `tool` 若出现在 `dependencies.json` 里，本地只生成 HTTP 桥，真正执行仍打回市场沙箱。
@@ -44,9 +50,9 @@ Agent 拿到 skill / mcp 的三种来源：
 2. **内嵌**：zip 自带 `skills/`、`mcp/`；不单独逛店；同名上架时详情 `used_by`  
 3. **plugin 拆包**：上传后拆子草稿（`plugin-component`），默认不出现在目录列表  
 
-`cap install` 只支持 `agent / skill / mcp / plugin`。**workflow / tool 不进本地目录。**
+`cap install` 只支持 `agent / skill / mcp / plugin / rule / command / hook`。**workflow / tool 不进本地目录。**
 
-- **plugin**：分发袋，可带 skill / mcp / 可选 agent / 可选 tool  
+- **plugin**：分发袋，可带 skill / mcp / rule / command / hook / 可选 agent / 可选 tool  
 - **workflow**：云端 DAG，节点 `tool|agent|skill|mcp`；与 `TEAM.md`（角色流水线）平行、禁止互转  
 
 ## 双编排（平行，禁止互转）
@@ -91,41 +97,51 @@ cd frontend && npm install && npm run dev
 
 进阶：技能 / 连接器 / 编排函数 / 助手创建后会进入**在线编辑**（保存即生成能力包），再提交审核；也可先上架组件再发助手并在依赖里引用（依赖须已上架）。安装包仍以上传 zip 为主。
 
-MCP 注意：市场包必须是 `mcp.json` + `connection.json` + `tools.json` + `security.json`；不能直接上传 agent 仓里的 `mcp-server.json`。
+MCP 注意：市场包必须是 `mcp.json` + `connection.json` + `tools.json` + `security.json`；不能直接上传 agent 仓里的 `mcp-server.json`。  
+连接器若声明 `env`（如 `ERP_*` / `DB_*`），请在工作台 **业务密钥**（`/my/secrets`）托管；能力详情只显示是否已齐。本地轨仍可用 `cap install … --type mcp` 或本机 `mcp_servers.json`。
 
-## 消费矩阵
+## 消费矩阵（两条主路径）
+
+**员工装机（本地）**：发现 → 加入 → 宿主同步 / `cap install` → 零号员工或桌面本地执行。  
+**模型线上网关（不下载 zip）**：客户端只连 `marketplace_mcp`（或直调 `/api/runtime/*` / `/api/mcp-gateway/cap/*`），按授权在线调能力。
 
 | 方式 | 接口 | 说明 |
 | --- | --- | --- |
-| 目录同步 | `GET /api/capabilities/sync` | 引擎 / CI |
+| 目录同步 | `GET /api/capabilities/sync`（`?since=` 增量） | 引擎 / CI |
+| 宿主同步 | `GET /api/my/host-sync` | 零号员工 / 桌面：已加入且启用 |
 | 下载制品 | `GET /api/capabilities/{name}/download` | SHA-256 校验 |
-| 本地组装 | `cap install` | 对齐 `Agent.initialize` 目录 |
+| 本地组装 | `cap install`（MCP 会提示填写 env；`--env KEY=VAL` / `--no-interactive`） | 员工装机主路径；日常优先宿主同步 |
 | 本地运行 | `cap run --mode local` | 市场不执行 |
-| 云端试用 | `POST /api/runtime/*` | 调试，非门户主路径 |
-| A2A | Agent Card + `tasks/send` | 协议层 |
-| 市场 MCP 桥 | `marketplace_*` | 一个 MCP 进全目录 |
-| MCP HTTP 网关 | `/api/mcp-gateway/{name}` | Dify 等；平台能力非商品 kind |
+| **模型线上网关** | `marketplace_mcp` → `/api/runtime/*` | **推荐**：模型/IDE 不装包，搜目录并线上调 |
+| 云端 runtime | `POST /api/runtime/*`（支持 `name@version`） | tool 沙箱 invoke、agent 任务、skill 返回 SKILL.md、mcp call |
+| A2A | Agent Card + `tasks/send` | Agent 协议委派 |
+| MCP HTTP 网关 | `/api/mcp-gateway/{name}` | 管理员登记的平台连接器 |
+| 能力 MCP 网关 | `/api/mcp-gateway/cap/{name}/sse`（可 `name@version`） | 商品 MCP 代理（桌面 `gateway-sse`）；限流/熔断/审计 |
+| 服务令牌 | `POST /api/admin/service-tokens` | M2M Bearer（`mkt_svc_…`），替代交互式登录 |
 | 加入我的能力 | `/api/my/capabilities` | 调用授权前提之一 |
+| 业务密钥托管 | 工作台 `/my/secrets` → `/api/my/secrets` | 用户 env 加密存库；网关/runtime 按用户注入 |
 
-授权：`RUNTIME_ACCESS_ROLES` ∪ 作者 ∪ 已加入者 ∪ `access_policy`（open / admin_only / restricted）。
+线上可调边界：
 
-## MCP 网关治理（鉴权 / 审计 / 限流 / 超时）
+| kind | 线上（无本地 zip） | 说明 |
+| --- | --- | --- |
+| **tool** | 是 | `POST /api/runtime/tools/{name}/invoke` |
+| **mcp** | 是 | 能力网关或 `POST /api/runtime/mcp/{name}/call` |
+| **agent** | 是 | 跑任务：`/api/runtime/agents/.../tasks` 或 A2A；**人设文本**：`GET /api/runtime/agents/{name}/persona`（PROMPT.md，对齐 skill activate） |
+| **workflow** | 是 | 仅云端 DAG |
+| **skill** | 按需文本 | `POST /api/runtime/skills/{name}/activate` 返回 `SKILL.md`，**不是**远程执行 |
+| rule / command / hook | 否 | 仍须本地安装 |
 
-`/api/mcp-gateway/{name}/{sse|messages|stream}` 入站鉴权顺序（`authenticate_request`）：
+授权：`RUNTIME_ACCESS_ROLES` ∪ 作者 ∪ 已加入者 ∪ `access_policy`（open / admin_only / restricted）。Bearer 支持市场 JWT 或 SSO access_token。
 
-1. per-server `api_token` 精确匹配（`X-Gateway-Token` 或 `Authorization: Bearer`）；
-2. Bearer 走本地 HS256 JWT（与门户登录同签发）；
-3. Bearer 走 SSO/OIDC RS256（复用 `get_current_user` 双轨校验与按工号/邮箱建号）；
-4. 都不匹配：`MCP_GATEWAY_REQUIRE_TOKEN=True` → 401；False → 匿名放行（source=anonymous）。
+## MCP 网关治理（鉴权 / 审计 / 限流熔断 / 超时）
 
-配置了 `api_token` 的服务仍必须令牌匹配或持有效 JWT/SSO；未配置且 require_token=False 时匿名可用。
+- **鉴权**：能力级 `/api/mcp-gateway/cap/{name}/{sse|messages|stream}` 必须 Bearer（市场 JWT / SSO / 服务令牌，`name` 支持 `name@version`），再走运行时准入与 `distribution=local` 拦截；服务级 `/api/mcp-gateway/{name}/…` 用 `X-Gateway-Token`/Bearer 精确匹配登记令牌，未配置令牌时按 `MCP_GATEWAY_REQUIRE_TOKEN` 决定是否放行（匿名仅出现在此轨）。
+- **审计**：`persist_gateway_usage` 写 `UsageEvent`（mcp_connect / gateway_call，含 capability_version/耗时/conversation_id/source=platform）并累计 `usage_count`；另按每条入站 JSON-RPC 消息写 `mcp_gateway_calls` 一行（服务名、绑定能力与版本、用户/来源 `jwt|sso|service_token|server_token|anonymous`、`initialize|tools_list|tools_call|other`、工具名、`X-Conversation-Id`（截断 64）、耗时、成功/错误（截断 300）），匿名与未绑定能力也记录；审计写失败只告警，不影响调用。
+- **限流 / 熔断**：`gateway_governance` 以 `user:{id}` 限流（`MCP_GATEWAY_RATE_LIMIT_PER_MINUTE`，默认 120，超限 429）、以 `mcp:{name}` 熔断（连续失败阈值 / 冷却秒 `MCP_GATEWAY_CIRCUIT_*`，熔断 503）。
+- **超时**：`/stream` 的单条 JSON-RPC 转发受 `MCP_GATEWAY_REQUEST_TIMEOUT`（默认 60s，≤0 关闭）约束，超时返回 JSON-RPC error(-32001) 并审计 ok=False；`/sse` 长连接不设总超时。
 
-- **审计**：`mcp_gateway_calls` 按每条 JSON-RPC 消息一行：服务名、绑定能力与版本、用户/来源、`initialize|tools_list|tools_call|other`、工具名、`X-Conversation-Id`（截断 64）、耗时、成功/错误（截断 300）。匿名与未绑定能力也记录；审计/用量写失败只告警，不影响调用。
-- **用量**：有登录用户且服务绑定了可用状态（published/deprecated/reviewing）的 mcp 能力时，tools/call 同时写 `usage_events`（`action=mcp_call`，含 tool）。
-- **限流**：60s 滑动窗口，身份键 user_id → 令牌指纹 → 客户端 IP；超限 429 + `Retry-After`。`MCP_GATEWAY_RATE_LIMIT_PER_MIN=0` 关闭（默认 120）。
-- **超时**：`/stream` 的 JSON-RPC 转发受 `MCP_GATEWAY_REQUEST_TIMEOUT`（默认 60s，≤0 关闭）约束，超时返回 JSON-RPC error(-32001) 并审计 ok=False；`/sse` 长连接不设总超时。
-
-新表 `mcp_gateway_calls` 由 `create_all` 自动创建，存量库无需手工 ALTER（`capability_id` 等新列走 `init_db` 轻量迁移）。
+新表 `mcp_gateway_calls` 与 `mcp_gateway_servers.capability_id` 由 `create_all` / `init_db` 轻量迁移自动处理，存量库无需手工 ALTER。
 
 ## 生命周期与审核
 
@@ -137,8 +153,10 @@ MCP 注意：市场包必须是 `mcp.json` + `connection.json` + `tools.json` + 
 
 - 市场：Asset 记录、zip、审核、网关、试用 API  
 - 零号员工：`PROMPT` / `TEAM` / `skills` / `mcp_servers.json` + 宿主 `src/tools` + 通道 `src/plugins`  
-- IDE / 客户端：装 Plugin 或连市场 MCP；Rules/Hooks **不进**市场 kind  
+- IDE / 客户端：装 Plugin（含 rules / commands / hooks）或连市场 MCP；rule / command / hook 也可单独上架  
 - **不要**把宿主 BuiltinTool、钉钉/飞书通道插件登记成市场商品  
+
+「我的能力」分两栏：**自定义**（已加入，可启用/停用）与 **我发布的**（草稿/审核）。
 
 `cap install` 目标：
 
@@ -150,6 +168,9 @@ config/agents/<name>/
   skills/<skill>/SKILL.md
   mcp_servers.json
   dependencies.json / installed.json
+config/rules/<name>/
+config/commands/<name>/
+config/hooks/<name>/
 ```
 
 业务函数经 MCP（发现出的 tools）；市场 `tool` 仅云端沙箱 / Workflow。本地 Agent 依赖里的市场 tool 若有，也只是 HTTP 桥，不是宿主 BuiltinTool。
@@ -165,7 +186,7 @@ config/agents/<name>/
 
 **Catalog**：`GET /api/capabilities`（`shelf` / `include_bricks`）、详情、版本、同步、下载、`GET /api/meta/taxonomy`  
 **Governance**：发布/审核、调用权限、安装策略、用户、MCP 网关 CRUD  
-**Consume**：`/api/runtime/*`、A2A、`marketplace_mcp`、`/api/mcp-gateway/*`
+**Consume**：模型线上网关 `marketplace_mcp` → `/api/runtime/*`、A2A、`/api/mcp-gateway/cap/*`；员工装机 `host-sync` / `cap install`
 
 ## 测试
 

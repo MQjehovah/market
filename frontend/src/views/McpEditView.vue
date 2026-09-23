@@ -3,7 +3,9 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../api'
 import { formatSize } from '../utils/format'
+import { bindUnsavedGuard } from '../utils/unsaved'
 import StatusBadge from '../components/StatusBadge.vue'
+import CodeEditor from '../components/CodeEditor.vue'
 
 const route = useRoute()
 const name = route.params.name
@@ -25,6 +27,29 @@ const tags = ref('')
 const error = ref('')
 const notice = ref('')
 const saving = ref(false)
+const baseline = ref(null)
+
+function formSnap() {
+  return JSON.stringify({
+    transport: transport.value,
+    command: command.value,
+    argsText: argsText.value,
+    url: url.value,
+    server: server.value,
+    envText: envText.value,
+    headersText: headersText.value,
+    toolsText: toolsText.value,
+    implementations: implementations.value,
+    description: description.value,
+    tags: tags.value
+  })
+}
+
+function markClean() {
+  baseline.value = formSnap()
+}
+
+bindUnsavedGuard(() => baseline.value !== null && formSnap() !== baseline.value)
 
 const activeFile = computed(() => implementations.value[activeImpl.value] || null)
 
@@ -145,6 +170,7 @@ async function load() {
     applyImplementations(data.value.implementations)
     description.value = data.value.capability?.description || ''
     tags.value = (data.value.capability?.tags || []).join(', ')
+    markClean()
   } catch (e) {
     error.value = e.message
   }
@@ -178,6 +204,7 @@ async function save() {
     toolsText.value = body.tools_json == null ? '' : JSON.stringify(body.tools_json, null, 2)
     applyImplementations(body.implementations)
     notice.value = `已保存为新版本草稿 v${body.capability.version}，可提交审核`
+    markClean()
   } catch (e) {
     error.value = e.message
   } finally {
@@ -260,11 +287,11 @@ onMounted(load)
             </label>
             <label class="full">
               <span>Env（JSON 对象）</span>
-              <textarea v-model="envText" class="textarea code-editor" rows="5" spellcheck="false"></textarea>
+              <CodeEditor v-model="envText" language="json" compact :height="200" />
             </label>
             <label class="full">
               <span>Headers（JSON 对象）</span>
-              <textarea v-model="headersText" class="textarea code-editor" rows="4" spellcheck="false"></textarea>
+              <CodeEditor v-model="headersText" language="json" compact :height="180" />
             </label>
           </div>
           <div v-if="jsonFieldError" class="muted" style="color: var(--danger); font-size: 12px; margin-top: 6px">
@@ -305,24 +332,23 @@ onMounted(load)
             />
             <button class="btn btn-sm" type="button" @click="addImpl">添加</button>
           </div>
-          <textarea
+          <CodeEditor
             v-if="activeFile"
+            :key="activeFile.path"
             v-model="activeFile.content"
-            class="textarea code-editor"
-            rows="16"
-            spellcheck="false"
-          ></textarea>
+            language="python"
+            height="min(64vh, 780px)"
+          />
         </div>
 
         <div class="panel mt-16">
           <h3>tools.json（可选，留空则保留原文件）</h3>
-          <textarea
+          <CodeEditor
             v-model="toolsText"
-            class="textarea code-editor"
-            rows="8"
-            spellcheck="false"
-            placeholder="留空表示不覆盖包内 tools.json"
-          ></textarea>
+            language="json"
+            height="min(36vh, 420px)"
+            compact
+          />
         </div>
 
         <div class="panel mt-16">
@@ -360,12 +386,8 @@ onMounted(load)
 </template>
 
 <style scoped>
-.editor { max-width: 1080px; }
+.editor { max-width: 1520px; }
 h3 { margin: 0 0 12px; }
-.code-editor {
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-  font-size: 13px; line-height: 1.55;
-}
 .field-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
