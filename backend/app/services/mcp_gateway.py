@@ -423,7 +423,7 @@ async def upstream_config_from_capability(db, cap) -> dict[str, Any] | None:
     if not raw:
         return None
     try:
-        conn = json.loads(raw.decode("utf-8"))
+        conn = json.loads(raw.decode("utf-8-sig"))
     except (ValueError, UnicodeDecodeError):
         raise RuntimeError("connection.json 解析失败") from None
     if not isinstance(conn, dict):
