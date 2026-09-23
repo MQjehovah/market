@@ -147,17 +147,41 @@ def dashboard_projection(cap) -> dict[str, Any]:
         else:
             mcp_frag["url"] = urls["sse_url"]
             mcp_frag["headers"] = {"Authorization": "Bearer ${SSO_ACCESS_TOKEN}"}
+
+        required_env = [
+            str(k)
+            for k in (schema.get("required_env") or list((conn.get("env") or {}).keys()))
+            if str(k).strip()
+        ]
+        header_keys = [str(k) for k in (schema.get("header_keys") or []) if str(k).strip()]
+        env_hints = {
+            str(k): str(v)
+            for k, v in (schema.get("env") or {}).items()
+            if str(k).strip()
+        }
+        for k in required_env:
+            env_hints.setdefault(k, f"${{{k}}}")
+
         return {
             "mode": mode,
             "distribution": dist,
             "risk_default": getattr(cap, "risk_default", None) or "read",
             "data_domain": getattr(cap, "data_domain", None) or "",
+            "required_env": required_env,
+            "header_keys": header_keys,
+            "env_hints": env_hints,
+            "needs_credentials": bool(required_env or header_keys),
             "tools": _tools_from_schema(schema),
             "mcp": mcp_frag,
             **urls,
             "note": (
-                "stdio 含 implementation/ 或 env 时走能力级网关；"
-                "当前桌面安装器要求 SSE 无自定义头，Bearer 需由后续桌面版本或手工 mcp.json 注入。"
+                "stdio 含 implementation/ 或 env 时默认走能力级网关；"
+                "本地轨安装前请填写 required_env 后再启用。"
+                if required_env
+                else (
+                    "stdio 含 implementation/ 或 env 时走能力级网关；"
+                    "当前桌面安装器要求 SSE 无自定义头，Bearer 需由后续桌面版本或手工 mcp.json 注入。"
+                )
             ),
         }
 

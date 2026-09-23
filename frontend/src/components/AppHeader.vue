@@ -171,6 +171,13 @@ watch(isAdmin, loadAdminBadge)
         >
           MCP 网关
         </router-link>
+        <router-link
+          to="/admin/tokens"
+          class="nav-item"
+          :class="{ active: adminSection === 'tokens' }"
+        >
+          服务令牌
+        </router-link>
       </div>
     </div>
 

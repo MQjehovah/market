@@ -19,7 +19,8 @@ const ADMIN_TITLES = {
   review: '审核',
   listed: '上架治理',
   users: '用户管理',
-  gateway: 'MCP 网关'
+  gateway: 'MCP 网关',
+  tokens: '服务令牌'
 }
 
 function adminLanding(to) {
@@ -30,6 +31,7 @@ function adminLanding(to) {
     listed: 'listed',
     users: 'users',
     gateway: 'gateway',
+    tokens: 'tokens',
     stats: 'review',
     debug: 'review',
     roles: 'users'

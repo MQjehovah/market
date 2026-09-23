@@ -75,6 +75,111 @@ def _merge_mcp_config(existing: list[dict[str, Any]], incoming: dict[str, Any]) 
     return result
 
 
+_PLACEHOLDER_RE = re.compile(r"^\$\{([^}:]+)(?::[^}]*)?\}$")
+
+
+def _is_placeholder(value: Any) -> bool:
+    if value is None:
+        return True
+    text = str(value).strip()
+    return text == "" or bool(_PLACEHOLDER_RE.match(text))
+
+
+def required_env_keys(conn: dict[str, Any]) -> list[str]:
+    """从 connection.env 提取待填密钥名。"""
+    env = conn.get("env")
+    if not isinstance(env, dict):
+        return []
+    return [str(k) for k in env.keys() if str(k).strip()]
+
+
+def apply_env_overrides(conn: dict[str, Any], overrides: dict[str, str] | None) -> dict[str, Any]:
+    """把 KEY=VALUE 覆盖写入 connection.env（保留其它字段）。"""
+    if not overrides:
+        return conn
+    out = dict(conn)
+    env = dict(out.get("env") or {}) if isinstance(out.get("env"), dict) else {}
+    for key, val in overrides.items():
+        k = str(key).strip()
+        if not k:
+            continue
+        env[k] = str(val)
+    out["env"] = env
+    return out
+
+
+def prompt_mcp_credentials(
+    conn: dict[str, Any],
+    *,
+    interactive: bool = True,
+    env_overrides: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """安装时提醒并帮助填写 env；交互失败或非 TTY 时保留占位。
+
+    - 有 --env 覆盖则先写入
+    - interactive + TTY：逐项提示（密码类用 getpass）
+    - 全部填齐后询问是否 enabled=true
+    """
+    import getpass
+    import sys
+
+    out = apply_env_overrides(dict(conn), env_overrides)
+    keys = required_env_keys(out)
+    if not keys:
+        return out
+
+    env = dict(out.get("env") or {})
+    pending = [k for k in keys if _is_placeholder(env.get(k))]
+    if pending:
+        print(
+            f"\n[凭据] 该 MCP 需配置 {len(pending)} 个环境变量后才能启用："
+            f" {', '.join(pending)}"
+        )
+    if interactive and pending and sys.stdin.isatty():
+        secretish = ("password", "secret", "token", "key", "passwd", "credential")
+        for key in pending:
+            hint = env.get(key) or f"${{{key}}}"
+            label = f"  {key}（占位 {hint}）: "
+            try:
+                if any(s in key.lower() for s in secretish):
+                    val = getpass.getpass(label)
+                else:
+                    val = input(label)
+            except (EOFError, KeyboardInterrupt):
+                print("\n[凭据] 已跳过交互填写，保留占位；请稍后编辑 mcp_servers.json")
+                break
+            if val is None or str(val).strip() == "":
+                print(f"  …跳过 {key}")
+                continue
+            env[key] = str(val).strip()
+        out["env"] = env
+
+    still = [k for k in keys if _is_placeholder(out.get("env", {}).get(k))]
+    if still:
+        print(
+            f"[凭据] 仍有未填项：{', '.join(still)}。"
+            "请编辑 mcp_servers.json 填入真实值后将 enabled 设为 true。"
+        )
+        out["enabled"] = False
+        return out
+
+    if interactive and sys.stdin.isatty():
+        try:
+            ans = input("  凭据已齐，是否立即启用该 MCP？[y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            ans = ""
+        out["enabled"] = ans in ("y", "yes")
+        if out["enabled"]:
+            print("[凭据] 已启用（enabled=true）")
+        else:
+            print("[凭据] 已写入凭据，enabled=false；确认无误后手动改为 true")
+    else:
+        # 非交互但通过 --env 填齐：仍默认不自动启用，避免 CI 误开
+        out.setdefault("enabled", False)
+        print("[凭据] 环境变量已写入；默认 enabled=false，确认后请手动启用")
+    return out
+
+
 def generate_tool_bridge(
     *,
     name: str,
@@ -137,6 +242,8 @@ def install_agent(
     version: str = "",
     target: str | Path,
     dry_run: bool = False,
+    interactive: bool = True,
+    env_overrides: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """下载 Agent 包与依赖并组装到 target/agents/<name>/，返回安装清单。"""
     target_path = Path(target).resolve()
@@ -221,10 +328,13 @@ def install_agent(
                 except (ValueError, UnicodeDecodeError):
                     conn = {}
                 conn.setdefault("name", dep_name)
-                conn.setdefault("enabled", False)  # 连接前需人工提供凭据并显式启用
+                conn.setdefault("enabled", False)
+                conn = prompt_mcp_credentials(
+                    conn, interactive=interactive, env_overrides=env_overrides
+                )
                 mcp_configs = _merge_mcp_config(mcp_configs, conn)
             record["installed"] = True
-            print(f"  [ok] mcp:{dep_name} -> mcp_servers.json（凭据为 ${{VAR}} 占位，需人工提供）")
+            print(f"  [ok] mcp:{dep_name} -> mcp_servers.json")
 
         elif dep_type == "tool":
             try:
@@ -321,6 +431,8 @@ def install_mcp(
     version: str = "",
     target: str | Path,
     dry_run: bool = False,
+    interactive: bool = True,
+    env_overrides: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """独立安装 mcp：合并 connection.json 到 target/mcp_servers.json。"""
     target_path = Path(target).resolve()
@@ -340,6 +452,9 @@ def install_mcp(
             conn = {}
     conn.setdefault("name", name)
     conn.setdefault("enabled", False)
+    conn = prompt_mcp_credentials(
+        conn, interactive=interactive, env_overrides=env_overrides
+    )
 
     existing: list[dict[str, Any]] = []
     if mcp_file.is_file():
@@ -358,8 +473,10 @@ def install_mcp(
         "version": headers.get("x-capability-version") or version or "latest",
         "installed_at": datetime.now(timezone.utc).isoformat(),
         "path": str(mcp_file),
+        "enabled": bool(conn.get("enabled")),
+        "required_env": required_env_keys(conn),
     }
-    print(f"[install] mcp:{name} -> {mcp_file}（凭据为 ${{VAR}} 占位，需人工启用）")
+    print(f"[install] mcp:{name} -> {mcp_file}")
     return manifest
 
 
@@ -538,15 +655,33 @@ def install_capability(
     version: str = "",
     target: str | Path,
     dry_run: bool = False,
+    interactive: bool = True,
+    env_overrides: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """按类型安装能力：agent / skill / mcp / plugin / rule / command / hook。"""
     t = (cap_type or "agent").lower()
     if t == "agent":
-        return install_agent(client, name, version=version, target=target, dry_run=dry_run)
+        return install_agent(
+            client,
+            name,
+            version=version,
+            target=target,
+            dry_run=dry_run,
+            interactive=interactive,
+            env_overrides=env_overrides,
+        )
     if t == "skill":
         return install_skill(client, name, version=version, target=target, dry_run=dry_run)
     if t == "mcp":
-        return install_mcp(client, name, version=version, target=target, dry_run=dry_run)
+        return install_mcp(
+            client,
+            name,
+            version=version,
+            target=target,
+            dry_run=dry_run,
+            interactive=interactive,
+            env_overrides=env_overrides,
+        )
     if t == "plugin":
         return install_plugin(client, name, version=version, target=target, dry_run=dry_run)
     if t == "rule":

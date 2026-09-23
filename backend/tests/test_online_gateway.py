@@ -92,10 +92,19 @@ def test_dashboard_projection_tool_and_skill_online_fields():
     class McpCap:
         type = "mcp"
         name = "pkg-mcp"
+        version = "1.0.0"
+        distribution = "both"
+        risk_default = "read"
+        data_domain = ""
         input_schema = {
             "transport": "stdio",
             "command": "python",
             "args": ["implementation/server.py"],
+            "required_env": ["ERP_API_BASE_URL", "DB_PASSWORD"],
+            "env": {
+                "ERP_API_BASE_URL": "${ERP_API_BASE_URL}",
+                "DB_PASSWORD": "${DB_PASSWORD}",
+            },
             "tools": [{"name": "ping", "description": "p"}],
         }
 
@@ -103,6 +112,9 @@ def test_dashboard_projection_tool_and_skill_online_fields():
     assert mcp["mode"] == "gateway-sse"
     assert mcp["sse_url"] == "/api/mcp-gateway/cap/pkg-mcp/sse"
     assert "Bearer" in str(mcp["mcp"].get("headers") or {})
+    assert mcp.get("needs_credentials") is True
+    assert "ERP_API_BASE_URL" in (mcp.get("required_env") or [])
+    assert "DB_PASSWORD" in (mcp.get("required_env") or [])
 
 
 @pytest.mark.asyncio

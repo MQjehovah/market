@@ -97,7 +97,8 @@ cd frontend && npm install && npm run dev
 
 进阶：技能 / 连接器 / 编排函数 / 助手创建后会进入**在线编辑**（保存即生成能力包），再提交审核；也可先上架组件再发助手并在依赖里引用（依赖须已上架）。安装包仍以上传 zip 为主。
 
-MCP 注意：市场包必须是 `mcp.json` + `connection.json` + `tools.json` + `security.json`；不能直接上传 agent 仓里的 `mcp-server.json`。
+MCP 注意：市场包必须是 `mcp.json` + `connection.json` + `tools.json` + `security.json`；不能直接上传 agent 仓里的 `mcp-server.json`。  
+连接器若声明 `env`（如 `ERP_*` / `DB_*`），安装到零号员工时请用详情页「填写凭据」或 `cap install … --type mcp` 交互填入后再 `enabled: true`。
 
 ## 消费矩阵（两条主路径）
 
@@ -109,7 +110,7 @@ MCP 注意：市场包必须是 `mcp.json` + `connection.json` + `tools.json` + 
 | 目录同步 | `GET /api/capabilities/sync`（`?since=` 增量） | 引擎 / CI |
 | 宿主同步 | `GET /api/my/host-sync` | 零号员工 / 桌面：已加入且启用 |
 | 下载制品 | `GET /api/capabilities/{name}/download` | SHA-256 校验 |
-| 本地组装 | `cap install` | 员工装机主路径；日常优先宿主同步 |
+| 本地组装 | `cap install`（MCP 会提示填写 env；`--env KEY=VAL` / `--no-interactive`） | 员工装机主路径；日常优先宿主同步 |
 | 本地运行 | `cap run --mode local` | 市场不执行 |
 | **模型线上网关** | `marketplace_mcp` → `/api/runtime/*` | **推荐**：模型/IDE 不装包，搜目录并线上调 |
 | 云端 runtime | `POST /api/runtime/*`（支持 `name@version`） | tool 沙箱 invoke、agent 任务、skill 返回 SKILL.md、mcp call |

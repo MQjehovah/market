@@ -10,6 +10,8 @@
 | **员工装机** | 零号员工 / Dashboard | 是（skill/mcp/agent…） | `cap install` / 宿主同步 |
 | **模型线上网关** | IDE / Agent / 任意 MCP 客户端 | 否 | `marketplace_mcp`（见下方） |
 
+MCP 若声明 `env`（如 `ERP_*` / `DB_*`）：`cap install name --type mcp` 会提示填写；`--env KEY=VAL` 可预填，`--no-interactive` 供 CI。填齐后可选择立即 `enabled: true`，否则请编辑 `mcp_servers.json` 再启用。
+
 线上边界：tool / mcp / agent / workflow 可远程调；skill 只返回 `SKILL.md` 文本注入上下文；rule/command/hook 仍须本地装。
 
 ### 模型不装包：只连 marketplace_mcp
