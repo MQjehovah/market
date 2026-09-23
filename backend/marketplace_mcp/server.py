@@ -86,6 +86,7 @@ def _text(value: str) -> dict:
 TOOLS = [
     {
         "name": "marketplace_search",
+        "annotations": {"readOnlyHint": True, "destructiveHint": False},
         "description": "搜索 AI 能力公共市场中的能力（Agent/工具/技能/MCP），返回名称、类型、版本、状态、描述。",
         "inputSchema": {
             "type": "object",
@@ -113,6 +114,7 @@ TOOLS = [
     },
     {
         "name": "marketplace_use_tool",
+        "annotations": {"readOnlyHint": False, "destructiveHint": False},
         "description": "线上调用市场 tool（云端沙箱，无需下载 zip）。调用前须已加入该能力。",
         "inputSchema": {
             "type": "object",
@@ -125,6 +127,7 @@ TOOLS = [
     },
     {
         "name": "marketplace_call_mcp",
+        "annotations": {"readOnlyHint": False, "destructiveHint": False},
         "description": (
             "线上调用市场上架的 MCP 能力所暴露的某个 tool（市场侧连接/代理，无需本机装包）。"
             "可先 marketplace_discover_mcp 或 runtime connect 了解可用工具名。"
@@ -141,6 +144,7 @@ TOOLS = [
     },
     {
         "name": "marketplace_run_agent",
+        "annotations": {"readOnlyHint": False, "destructiveHint": False},
         "description": "线上委派市场上的 Agent 执行任务（云端 runtime，无需下载 zip）。",
         "inputSchema": {
             "type": "object",
@@ -153,6 +157,7 @@ TOOLS = [
     },
     {
         "name": "marketplace_activate_skill",
+        "annotations": {"readOnlyHint": False, "destructiveHint": False},
         "description": (
             "按需获取市场技能的 SKILL.md 正文，注入当前对话上下文后按说明执行。"
             "市场只下发文本，不在服务端执行技能。"
@@ -168,6 +173,7 @@ TOOLS = [
     },
     {
         "name": "marketplace_fetch_agent_persona",
+        "annotations": {"readOnlyHint": True, "destructiveHint": False},
         "description": (
             "按需获取市场助手的 PROMPT.md 人设正文（不下载 zip、不跑任务）。"
             "桌面/宿主用人设落盘时用此接口，勿走编辑 API。"
@@ -182,11 +188,13 @@ TOOLS = [
     },
     {
         "name": "marketplace_discover_mcp",
+        "annotations": {"readOnlyHint": True, "destructiveHint": False},
         "description": "动态发现市场上已发布的 MCP 能力（数据库连接、DevOps 工具等）。",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
         "name": "marketplace_run_workflow",
+        "annotations": {"readOnlyHint": False, "destructiveHint": False},
         "description": "执行市场上已发布的工作流（多步编排：工具/Agent/MCP/技能），输入参数按工作流定义。",
         "inputSchema": {
             "type": "object",

@@ -194,3 +194,30 @@ def test_marketplace_mcp_tools_include_call_mcp():
     assert "marketplace_use_tool" in names
     assert "marketplace_activate_skill" in names
     assert "marketplace_fetch_agent_persona" in names
+
+    by_name = {t["name"]: t for t in mcp_bridge.TOOLS}
+    read_only = {
+        "marketplace_search",
+        "marketplace_fetch_agent_persona",
+        "marketplace_discover_mcp",
+    }
+    for name in names:
+        annotations = by_name[name].get("annotations")
+        assert annotations is not None, f"{name} 缺少 annotations"
+        assert annotations["readOnlyHint"] is (name in read_only), name
+        assert annotations["destructiveHint"] is False, name
+
+
+def test_marketplace_mcp_tools_list_exposes_annotations(monkeypatch):
+    monkeypatch.setattr(mcp_bridge, "TOKEN", "")
+    monkeypatch.setattr("sys.stdin", io.StringIO(
+        json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}) + "\n"
+    ))
+    stdout = io.StringIO()
+    monkeypatch.setattr("sys.stdout", stdout)
+    monkeypatch.setattr("sys.stderr", io.StringIO())
+    assert mcp_bridge.main() == 0
+    response = json.loads(stdout.getvalue().splitlines()[0])
+    tools = {t["name"]: t for t in response["result"]["tools"]}
+    assert tools["marketplace_search"]["annotations"]["readOnlyHint"] is True
+    assert tools["marketplace_run_agent"]["annotations"]["readOnlyHint"] is False
