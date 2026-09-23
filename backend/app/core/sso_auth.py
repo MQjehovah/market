@@ -221,22 +221,50 @@ def exchange_code(code: str) -> str:
     return id_token
 
 
-_states: dict[str, float] = {}
+_states: dict[str, tuple[float, str] | float] = {}
 _states_lock = threading.Lock()
 
 
-def new_state() -> str:
-    """生成一次性 state(随机短串)并记录时间戳。"""
+def safe_next_path(raw: str | None) -> str:
+    """只保留站内相对路径。外链、协议相对地址和登录页本身都丢掉。"""
+    if not raw:
+        return ""
+    value = str(raw).strip()
+    if not value or len(value) > 512:
+        return ""
+    if not value.startswith("/") or value.startswith("//") or value.startswith("/\\"):
+        return ""
+    if "\\" in value or "://" in value or any(ord(ch) < 32 for ch in value):
+        return ""
+    path = value.split("?", 1)[0].split("#", 1)[0]
+    if path == "/login" or path.startswith("/login/"):
+        return ""
+    return value
+
+
+def new_state(next_path: str = "") -> str:
+    """生成一次性 state，并记下登录成功后要回到的站内路径。"""
     st = secrets.token_urlsafe(16)
     with _states_lock:
-        _states[st] = time.time()
+        _states[st] = (time.time(), safe_next_path(next_path))
     return st
+
+
+def consume_state(state: str) -> str | None:
+    """校验并消费 state。失效返回 None；成功返回站内回跳路径（可为空串）。"""
+    with _states_lock:
+        found = _states.pop(state, None)
+    if found is None:
+        return None
+    if isinstance(found, tuple):
+        ts, nxt = found
+    else:
+        ts, nxt = found, ""
+    if (time.time() - ts) > STATE_TTL_SECONDS:
+        return None
+    return nxt if isinstance(nxt, str) else ""
 
 
 def validate_state(state: str) -> bool:
     """校验并消费 state:过期/不存在返回 False。"""
-    with _states_lock:
-        found = _states.pop(state, None)
-    if found is None:
-        return False
-    return (time.time() - found) <= STATE_TTL_SECONDS
+    return consume_state(state) is not None

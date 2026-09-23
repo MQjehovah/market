@@ -83,5 +83,11 @@ async def _auto_migrate(conn) -> None:
                 sync_conn.exec_driver_sql(
                     "ALTER TABLE user_capabilities ADD COLUMN enabled BOOLEAN DEFAULT 1"
                 )
+        if "notifications" in tables:
+            n_cols = {c["name"] for c in inspector.get_columns("notifications")}
+            if "link" not in n_cols:
+                sync_conn.exec_driver_sql(
+                    "ALTER TABLE notifications ADD COLUMN link VARCHAR(255) DEFAULT ''"
+                )
 
     await conn.run_sync(_do)

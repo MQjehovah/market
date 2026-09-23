@@ -11,7 +11,7 @@ SHELVES: dict[str, dict[str, Any]] = {
     "brick": {
         "key": "brick",
         "label": "组件",
-        "description": "技能 / 连接器 / 规则 / 命令 / Hooks / 编排函数。发布与高级筛选用。",
+        "description": "技能 / 连接器 / 编排函数（rule/command/hook 保留能力、逛店默认不展示）。",
         "kinds": ["skill", "mcp", "tool", "rule", "command", "hook"],
     },
     "recipe": {
@@ -23,7 +23,7 @@ SHELVES: dict[str, dict[str, Any]] = {
     "install": {
         "key": "install",
         "label": "安装包",
-        "description": "一次分发技能 + 连接器（可选助手）。不是通道类 src/plugins。",
+        "description": "一次分发技能 + 连接器（可选助手）。能力保留，逛店默认不展示。",
         "kinds": ["plugin"],
     },
 }
@@ -34,9 +34,10 @@ KIND_SHELF: dict[str, str] = {
     for kind in shelf["kinds"]
 }
 
-# 浏览默认：技能 + 安装包 + 助手（连接器/规则/命令/Hooks/编排进「更多」）
-DEFAULT_BROWSE_KINDS = ("skill", "plugin", "agent")
-MORE_BROWSE_KINDS = ("mcp", "workflow", "tool", "rule", "command", "hook")
+# 浏览默认：助手 + 依赖（技能 / 连接器）；安装包与 rule/command/hook 保留能力但不逛店展示
+DEFAULT_BROWSE_KINDS = ("agent", "skill", "mcp")
+MORE_BROWSE_KINDS = ("workflow", "tool")
+HIDDEN_BROWSE_KINDS = ("plugin", "rule", "command", "hook")
 KIND_META: dict[str, dict[str, str]] = {
     "skill": {
         "shelf": "brick",
@@ -142,16 +143,22 @@ ORCHESTRATION = {
 
 CONSUME_WAYS = [
     {"id": "sync", "label": "目录同步", "api": "GET /api/capabilities/sync"},
+    {"id": "host_sync", "label": "宿主同步（已启用）", "api": "GET /api/my/host-sync"},
     {"id": "download", "label": "下载制品", "api": "GET /api/capabilities/{name}/download"},
-    {"id": "install", "label": "本地组装", "api": "cap install"},
+    {"id": "install", "label": "本地组装（员工装机）", "api": "cap install"},
     {"id": "local", "label": "本地运行", "api": "cap run --mode local"},
-    {"id": "trial", "label": "云端试用", "api": "POST /api/runtime/*"},
+    {
+        "id": "online_gateway",
+        "label": "模型线上网关（推荐，不装包）",
+        "api": "marketplace_mcp → POST /api/runtime/*",
+    },
+    {"id": "trial", "label": "云端 runtime", "api": "POST /api/runtime/*"},
     {"id": "a2a", "label": "A2A 互调", "api": "Agent Card + tasks/send"},
     {"id": "mcp_bridge", "label": "市场 MCP 桥", "api": "marketplace_*"},
     {"id": "gateway", "label": "MCP HTTP 网关（管理员登记）", "api": "/api/mcp-gateway/{name}"},
     {
         "id": "cap_gateway",
-        "label": "能力 MCP 网关（桌面）",
+        "label": "能力 MCP 网关（商品代理）",
         "api": "/api/mcp-gateway/cap/{name}/sse",
     },
     {"id": "join", "label": "加入我的能力", "api": "POST /api/my/capabilities"},
@@ -186,6 +193,7 @@ def taxonomy_payload() -> dict[str, Any]:
         "kinds": KIND_META,
         "default_browse_kinds": list(DEFAULT_BROWSE_KINDS),
         "more_browse_kinds": list(MORE_BROWSE_KINDS),
+        "hidden_browse_kinds": list(HIDDEN_BROWSE_KINDS),
         "orchestration": ORCHESTRATION,
         "consume_ways": CONSUME_WAYS,
         "review_checklist": REVIEW_CHECKLIST,
@@ -202,9 +210,9 @@ def taxonomy_payload() -> dict[str, Any]:
             "owner": "author_id + organization",
             "note": (
                 "type 字段即 kind；不必先拆表。"
-                "逛店默认 skill+plugin+agent；"
-                "agent 日常 = skill 说明书 + MCP 发现的 tools；"
-                "rule/command/hook 进「更多」且可 cap install；"
+                "主叙事：助手 + 依赖；逛店默认 agent+skill+mcp；"
+                "plugin/rule/command/hook 保留能力、默认不逛店展示；"
+                "更多仅 workflow/tool；"
                 "市场 tool ≠ MCP tools ≠ 宿主 src/tools；"
                 "cap install：agent/skill/mcp/plugin/rule/command/hook。"
             ),

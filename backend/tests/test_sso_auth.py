@@ -350,6 +350,12 @@ async def test_sso_start_disabled_returns_404(client):
     assert r.status_code == 404
 
 
+def _state_from_location(location: str) -> str:
+    from urllib.parse import parse_qs, urlparse
+
+    return parse_qs(urlparse(location).query)["state"][0]
+
+
 async def test_sso_start_redirects_when_configured(sso_env, client, monkeypatch):
     # sso_env 已打开 issuer;补登录跳转配置
     settings = get_settings()
@@ -360,6 +366,51 @@ async def test_sso_start_redirects_when_configured(sso_env, client, monkeypatch)
     assert loc.startswith(ISSUER + "/authorize?")
     assert "state=" in loc
     assert "client_id=market" in loc
+
+
+async def test_sso_start_keeps_in_app_next(sso_env, client, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "sso_redirect_uri", "http://127.0.0.1:8000/api/auth/oidc/callback")
+    r = await client.get(
+        "/api/auth/sso/start",
+        params={"next": "/capabilities/abc?from=login"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 302
+    assert sso_auth.consume_state(_state_from_location(r.headers["location"])) == "/capabilities/abc?from=login"
+
+
+async def test_sso_start_drops_external_next(sso_env, client, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "sso_redirect_uri", "http://127.0.0.1:8000/api/auth/oidc/callback")
+    r = await client.get(
+        "/api/auth/sso/start",
+        params={"next": "https://evil.example/phish"},
+        follow_redirects=False,
+    )
+    assert sso_auth.consume_state(_state_from_location(r.headers["location"])) == ""
+
+
+async def test_oidc_callback_keeps_next_when_exchange_fails(sso_env, client, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "sso_redirect_uri", "http://127.0.0.1:8000/api/auth/oidc/callback")
+    monkeypatch.setattr(settings, "sso_redirect_target", "/login")
+
+    def _fail(_code):
+        raise SsoAuthError("boom")
+
+    monkeypatch.setattr(sso_auth, "exchange_code", _fail)
+    state = sso_auth.new_state("/capabilities/abc")
+    r = await client.get(
+        "/api/auth/oidc/callback",
+        params={"code": "abc", "state": state},
+        follow_redirects=False,
+    )
+    assert r.status_code == 302
+    loc = r.headers["location"]
+    assert loc.startswith("/login?")
+    assert "error=" in loc
+    assert "redirect=%2Fcapabilities%2Fabc" in loc
 
 
 async def test_oidc_callback_rejects_bad_state(sso_env, client, monkeypatch):

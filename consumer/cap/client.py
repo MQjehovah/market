@@ -68,6 +68,18 @@ class MarketClient:
         r.raise_for_status()
         return r.json()
 
+    def host_sync(self, include_components: bool = False) -> dict[str, Any]:
+        """拉取当前用户已加入且启用的宿主安装清单。"""
+        self.ensure_token()
+        params = {"include_components": "true"} if include_components else {}
+        r = httpx.get(
+            f"{self.base_url}/api/my/host-sync",
+            headers=self._headers(),
+            params=params,
+            timeout=30,
+        )
+        r.raise_for_status()
+        return r.json()
     def find_in_catalog(self, name: str, cap_type: str = "") -> dict[str, Any] | None:
         for item in self.sync():
             if item.get("name") != name:

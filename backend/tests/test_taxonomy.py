@@ -13,8 +13,9 @@ async def test_taxonomy_endpoint(client):
     body = r.json()
     assert "shelves" in body
     assert set(body["shelves"].keys()) == {"brick", "recipe", "install"}
-    assert body["default_browse_kinds"] == ["skill", "plugin", "agent"]
-    assert body["more_browse_kinds"] == ["mcp", "workflow", "tool", "rule", "command", "hook"]
+    assert body["default_browse_kinds"] == ["agent", "skill", "mcp"]
+    assert body["more_browse_kinds"] == ["workflow", "tool"]
+    assert body["hidden_browse_kinds"] == ["plugin", "rule", "command", "hook"]
     assert "orchestration" in body
     assert body["orchestration"]["capability_dag"]["lands_in_agent_config"] is False
     assert "review_checklist" in body

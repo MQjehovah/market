@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../api'
 import { formatSize, TYPE_LABELS } from '../utils/format'
+import { bindUnsavedGuard } from '../utils/unsaved'
 import StatusBadge from '../components/StatusBadge.vue'
 import MarkdownEditor from '../components/MarkdownEditor.vue'
 
@@ -22,6 +23,23 @@ const globs = ref('')
 const error = ref('')
 const notice = ref('')
 const saving = ref(false)
+const baseline = ref(null)
+
+function formSnap() {
+  return JSON.stringify({
+    body: body.value,
+    description: description.value,
+    tags: tags.value,
+    alwaysApply: alwaysApply.value,
+    globs: globs.value
+  })
+}
+
+function markClean() {
+  baseline.value = formSnap()
+}
+
+bindUnsavedGuard(() => baseline.value !== null && formSnap() !== baseline.value)
 
 async function load() {
   error.value = ''
@@ -32,6 +50,7 @@ async function load() {
     tags.value = (data.value.capability?.tags || []).join(', ')
     alwaysApply.value = Boolean(data.value.always_apply)
     globs.value = data.value.globs || ''
+    markClean()
   } catch (e) {
     error.value = e.message
   }
@@ -56,6 +75,7 @@ async function save() {
     data.value = res
     body.value = res.body || ''
     notice.value = `已保存为新版本草稿 v${res.capability.version}，可提交审核`
+    markClean()
   } catch (e) {
     error.value = e.message
   } finally {

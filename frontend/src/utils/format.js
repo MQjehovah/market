@@ -17,7 +17,7 @@ export const SHELVES = {
     key: 'brick',
     label: '组件',
     short: '组件',
-    description: '技能 / 连接器 / 规则 / 命令 / Hooks / 编排函数。发布与高级筛选用；逛店请用「技能」或「更多」。',
+    description: '技能 / 连接器 / 编排函数。发布与高级筛选用；逛店请用「技能」「连接器」或「更多」。',
     kinds: ['skill', 'mcp', 'tool', 'rule', 'command', 'hook']
   },
   recipe: {
@@ -31,16 +31,17 @@ export const SHELVES = {
     key: 'install',
     label: '安装包',
     short: '安装包',
-    description: '一次分发技能 + 连接器（可选助手）。装到零号员工后，在问答里生效。',
+    description: '一次分发技能 + 连接器（可选助手）。能力保留，逛店默认不展示。',
     kinds: ['plugin']
   }
 }
 
-/** 推荐默认：技能 + 安装包 + 助手 */
-export const DEFAULT_BROWSE_KINDS = ['skill', 'plugin', 'agent']
+/** 推荐默认：助手 + 依赖（技能 / 连接器） */
+export const DEFAULT_BROWSE_KINDS = ['agent', 'skill', 'mcp']
 
-/** 「更多」里的高级类型 */
-export const MORE_BROWSE_KINDS = ['mcp', 'workflow', 'tool', 'rule', 'command', 'hook']
+/** 「更多」：进阶编排类；安装包 / rule / command / hook 保留能力但不逛店展示 */
+export const MORE_BROWSE_KINDS = ['workflow', 'tool']
+export const HIDDEN_BROWSE_KINDS = ['plugin', 'rule', 'command', 'hook']
 export const KIND_SHELF = Object.fromEntries(
   Object.values(SHELVES).flatMap((s) => s.kinds.map((k) => [k, s.key]))
 )
@@ -154,15 +155,27 @@ export const SCENARIO_HINTS = {
 
 /** 示例用法（命令或提示级，非对话内唤起） */
 export const EXAMPLE_PROMPTS = {
-  skill: ['帮我按该技能的流程处理这件事', '先加入并装到助手，再在对话里描述任务'],
-  mcp: ['加入后随助手安装；在零号员工启用连接器，再问「帮我查一条示例数据」', '详情页可云端试用：连接并调用只读工具'],
+  skill: [
+    '按这套流程处理：有人提交了一张工单，请你一步步说明你会怎么做',
+    '用三句话说清这个技能适合解决什么问题'
+  ],
+  mcp: [
+    '帮我查一条示例数据并说明用了哪个工具',
+    '先列出会用到的工具，再试着调用一个只读接口'
+  ],
   tool: ['在 Workflow 中添加 tool 节点并选择本能力', 'POST /api/runtime/tools/{name}/invoke 调试'],
   rule: ['cap install <name> --type rule 后由 Agent 按 alwaysApply/globs 加载', '作为安装包组件随 plugin 分发'],
   command: ['cap install <name> --type command 后在对话中输入 /<name>', '把固定操作步骤写成 COMMAND.md'],
   hook: ['cap install <name> --type hook 后由宿主按事件触发 scripts', '在 hooks.json 声明 matcher 与 fail 策略'],
-  agent: ['打开该助手，用自然语言描述任务', 'cap install 后在零号员工中提问'],
+  agent: [
+    '用三句话说清你能帮我做什么',
+    '假设我是新同事，请按你的职责处理一件典型任务'
+  ],
   workflow: ['在市场运行本 Workflow 并查看节点日志', 'marketplace_run_workflow 通过 MCP 桥触发'],
-  plugin: ['加入我的能力后同步到本地引擎', 'cap install <plugin> --type plugin 拆出子能力']
+  plugin: [
+    '用三句话说清这个安装包装完后能做什么',
+    '按场景演示一次你最擅长的任务'
+  ]
 }
 
 
@@ -184,8 +197,9 @@ export const ORCH_LABELS = {
 /** 消费方式（控制面如何被用） */
 export const CONSUME_WAYS = [
   { id: 'sync', label: '目录同步', api: 'GET /api/capabilities/sync', who: '引擎 / CI' },
+  { id: 'host_sync', label: '宿主同步', api: 'GET /api/my/host-sync', who: '零号员工 / 桌面（已加入且启用）' },
   { id: 'download', label: '下载制品', api: 'GET /api/capabilities/{name}/download', who: 'cap / 人工' },
-  { id: 'install', label: '本地组装', api: 'cap install', who: '零号员工' },
+  { id: 'install', label: '本地组装', api: 'cap install', who: 'CLI / 兼容路径' },
   { id: 'local', label: '本地运行', api: 'cap run --mode local', who: '零号员工（市场不执行）' },
   { id: 'trial', label: '云端试用', api: 'POST /api/runtime/*', who: '详情页 / 我的能力（问答验证）' },
   { id: 'a2a', label: 'A2A 互调', api: 'Agent Card + tasks/send', who: 'Agent 之间' },
@@ -273,7 +287,7 @@ export const INSTALL_POLICY_LABELS = {
 
 /** 加入≠安装：统一文案，避免 Browse / My / Detail 各写一套 */
 export const JOIN_VS_INSTALL_HINT =
-  '「加入」只完成授权（加入≠安装）。生产请用 cap install 装到零号员工里的助手，对话才会用到。'
+  '「加入」只完成授权。在「我的能力」里保持启用后，零号员工 / 桌面会按 host-sync 拉取；复制 cap install 仅作兼容。也可以直接写你要办的事。'
 
 /** 连接器线上试用方式：演示免密 / 平台网关 / 需自备凭证 */
 export function mcpTrialMode({ transport = 'stdio', envKeys = [] } = {}) {
@@ -326,27 +340,28 @@ export const TYPE_COLORS = {
   hook: '#4f46e5'
 }
 
-/** 发布三意图：小白默认 Path B = 发安装包优先 */
+/** 发布意图：主叙事「助手 + 依赖」；安装包保留能力但不作为默认发布入口 */
 export const PUBLISH_INTENTS = [
-  {
-    key: 'install',
-    label: '发安装包',
-    blurb: '推荐：一次装齐技能+连接器（可选助手）。审核通过后装到零号员工即可问答。',
-    defaultType: 'plugin'
-  },
   {
     key: 'recipe',
     label: '发助手',
-    blurb: '助手（可含 TEAM.md）或能力编排。网页在线编辑即可；依赖的技能/连接器需先上架，或改发安装包内嵌。',
+    blurb: '推荐：人设 + 依赖（技能 / 连接器）。网页在线编辑即可；依赖可先上架再引用，或包内嵌。',
     defaultType: 'agent'
   },
   {
     key: 'brick',
     label: '发组件',
-    blurb: '技能 / 连接器 / 规则 / 命令 / Hooks / 编排函数。可网页在线编辑；可复用零件，给助手与安装包引用。',
+    blurb: '技能 / 连接器（助手的依赖），或编排函数。可网页在线编辑；给助手引用复用。',
     defaultType: 'skill'
   }
 ]
+
+/** 发组件时可见的 kind（rule/command/hook 保留但不展示） */
+export const VISIBLE_CREATE_KINDS = {
+  recipe: ['agent', 'workflow'],
+  brick: ['skill', 'mcp', 'tool'],
+  install: ['plugin']
+}
 
 /** 所有者发布进度（详情 / 我的） */
 export const OWNER_PROGRESS_STEPS = [

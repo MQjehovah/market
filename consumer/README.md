@@ -3,6 +3,36 @@
 `cap` 是 market **能力平台**的独立消费端：只依赖 `httpx`，不依赖市场后端代码。
 市场是控制面（注册/审核/分发）；本 CLI 把资产落到零号员工 `config/`，或走云端试用 / A2A。
 
+## 两条消费路径
+
+| 路径 | 谁用 | 是否下载 zip | 入口 |
+| --- | --- | --- | --- |
+| **员工装机** | 零号员工 / Dashboard | 是（skill/mcp/agent…） | `cap install` / 宿主同步 |
+| **模型线上网关** | IDE / Agent / 任意 MCP 客户端 | 否 | `marketplace_mcp`（见下方） |
+
+线上边界：tool / mcp / agent / workflow 可远程调；skill 只返回 `SKILL.md` 文本注入上下文；rule/command/hook 仍须本地装。
+
+### 模型不装包：只连 marketplace_mcp
+
+```bash
+# 市场 JWT 或 SSO access_token 均可（Bearer）
+set MARKETPLACE_URL=http://127.0.0.1:8093
+set MARKETPLACE_TOKEN=<Bearer token>
+# 或显式：set MARKETPLACE_SSO_TOKEN=<SSO access_token>
+cd ../backend
+python marketplace_mcp/server.py
+```
+
+Claude Code / Cursor 等把上述命令配成一条 MCP server 即可。工具面：
+
+- `marketplace_search` — 搜目录  
+- `marketplace_use_tool` — 云端沙箱 invoke（无本地 zip）  
+- `marketplace_call_mcp` — 调商品 MCP 暴露的 tool  
+- `marketplace_activate_skill` — 返回 SKILL.md 正文  
+- `marketplace_run_agent` / `marketplace_run_workflow` — 云端执行  
+
+调用前须已加入「我的能力」（或作者 / `RUNTIME_ACCESS_ROLES`）。授权由市场 runtime 门禁统一校验。
+
 | 模式 | 说明 | 命令 |
 | --- | --- | --- |
 | 同步 | 拉取能力清单（Agent / 积木 / 配方 / 安装包） | `cap sync` |

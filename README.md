@@ -99,21 +99,37 @@ cd frontend && npm install && npm run dev
 
 MCP 注意：市场包必须是 `mcp.json` + `connection.json` + `tools.json` + `security.json`；不能直接上传 agent 仓里的 `mcp-server.json`。
 
-## 消费矩阵
+## 消费矩阵（两条主路径）
+
+**员工装机（本地）**：发现 → 加入 → 宿主同步 / `cap install` → 零号员工或桌面本地执行。  
+**模型线上网关（不下载 zip）**：客户端只连 `marketplace_mcp`（或直调 `/api/runtime/*` / `/api/mcp-gateway/cap/*`），按授权在线调能力。
 
 | 方式 | 接口 | 说明 |
 | --- | --- | --- |
 | 目录同步 | `GET /api/capabilities/sync` | 引擎 / CI |
+| 宿主同步 | `GET /api/my/host-sync` | 零号员工 / 桌面：已加入且启用 |
 | 下载制品 | `GET /api/capabilities/{name}/download` | SHA-256 校验 |
-| 本地组装 | `cap install` | 对齐 `Agent.initialize` 目录 |
+| 本地组装 | `cap install` | 员工装机主路径；日常优先宿主同步 |
 | 本地运行 | `cap run --mode local` | 市场不执行 |
-| 云端试用 | `POST /api/runtime/*` | 调试，非门户主路径 |
-| A2A | Agent Card + `tasks/send` | 协议层 |
-| 市场 MCP 桥 | `marketplace_*` | 一个 MCP 进全目录 |
-| MCP HTTP 网关 | `/api/mcp-gateway/{name}` | Dify 等；平台能力非商品 kind |
+| **模型线上网关** | `marketplace_mcp` → `/api/runtime/*` | **推荐**：模型/IDE 不装包，搜目录并线上调 |
+| 云端 runtime | `POST /api/runtime/*` | tool 沙箱 invoke、agent 任务、skill 返回 SKILL.md、mcp call |
+| A2A | Agent Card + `tasks/send` | Agent 协议委派 |
+| MCP HTTP 网关 | `/api/mcp-gateway/{name}` | 管理员登记的平台连接器 |
+| 能力 MCP 网关 | `/api/mcp-gateway/cap/{name}/sse` | 商品 MCP 代理（桌面 `gateway-sse`） |
 | 加入我的能力 | `/api/my/capabilities` | 调用授权前提之一 |
 
-授权：`RUNTIME_ACCESS_ROLES` ∪ 作者 ∪ 已加入者 ∪ `access_policy`（open / admin_only / restricted）。
+线上可调边界：
+
+| kind | 线上（无本地 zip） | 说明 |
+| --- | --- | --- |
+| **tool** | 是 | `POST /api/runtime/tools/{name}/invoke` |
+| **mcp** | 是 | 能力网关或 `POST /api/runtime/mcp/{name}/call` |
+| **agent** | 是 | runtime 任务或 A2A |
+| **workflow** | 是 | 仅云端 DAG |
+| **skill** | 按需文本 | 返回 `SKILL.md` 注入上下文，**不是**远程执行 |
+| rule / command / hook | 否 | 仍须本地安装 |
+
+授权：`RUNTIME_ACCESS_ROLES` ∪ 作者 ∪ 已加入者 ∪ `access_policy`（open / admin_only / restricted）。Bearer 支持市场 JWT 或 SSO access_token。
 
 ## 生命周期与审核
 
@@ -158,7 +174,7 @@ config/hooks/<name>/
 
 **Catalog**：`GET /api/capabilities`（`shelf` / `include_bricks`）、详情、版本、同步、下载、`GET /api/meta/taxonomy`  
 **Governance**：发布/审核、调用权限、安装策略、用户、MCP 网关 CRUD  
-**Consume**：`/api/runtime/*`、A2A、`marketplace_mcp`、`/api/mcp-gateway/*`
+**Consume**：模型线上网关 `marketplace_mcp` → `/api/runtime/*`、A2A、`/api/mcp-gateway/cap/*`；员工装机 `host-sync` / `cap install`
 
 ## 测试
 

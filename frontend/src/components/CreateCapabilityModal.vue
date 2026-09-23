@@ -11,6 +11,8 @@ import {
   SHELVES,
   TYPE_CATEGORIES,
   TYPE_LABELS,
+  VISIBLE_CREATE_KINDS,
+  HIDDEN_BROWSE_KINDS,
   canOnlineEdit,
   needsZipUpload,
   nextRouteAfterCreate
@@ -25,9 +27,9 @@ const router = useRouter()
 
 const step = ref('intent')
 const form = reactive({
-  shelf: 'install',
+  shelf: 'recipe',
   name: '',
-  type: 'plugin',
+  type: 'agent',
   version: '0.1.0',
   description: '',
   category: '',
@@ -40,8 +42,14 @@ const form = reactive({
 const error = ref('')
 const busy = ref(false)
 
-const shelfList = computed(() => Object.values(SHELVES))
-const kindsInShelf = computed(() => SHELVES[form.shelf]?.kinds || [])
+const shelfList = computed(() =>
+  Object.values(SHELVES).filter((s) => s.key !== 'install')
+)
+const kindsInShelf = computed(() => {
+  const visible = VISIBLE_CREATE_KINDS[form.shelf]
+  if (visible) return visible
+  return (SHELVES[form.shelf]?.kinds || []).filter((k) => !HIDDEN_BROWSE_KINDS.includes(k))
+})
 const kindHint = computed(() => KIND_HINTS[form.type] || null)
 const footHint = computed(() => {
   if (form.type === 'workflow') return '创建后进入编排画布；无需上传 zip'
@@ -66,7 +74,12 @@ watch(
     busy.value = false
     step.value = 'intent'
     if (props.initialShelf && SHELVES[props.initialShelf]) {
-      selectIntent(props.initialShelf)
+      if (props.initialShelf === 'install') {
+        // 安装包入口保留但不作为默认意图：落到助手
+        selectIntent('recipe')
+      } else {
+        selectIntent(props.initialShelf)
+      }
     }
   }
 )
@@ -78,7 +91,7 @@ function categories() {
 function selectIntent(key) {
   const intent = PUBLISH_INTENTS.find((i) => i.key === key)
   form.shelf = key
-  form.type = intent?.defaultType || SHELVES[key]?.kinds?.[0] || 'plugin'
+  form.type = intent?.defaultType || SHELVES[key]?.kinds?.[0] || 'agent'
   form.category = ''
   error.value = ''
   step.value = 'form'
@@ -86,9 +99,11 @@ function selectIntent(key) {
 
 function selectShelf(key) {
   form.shelf = key
-  if (key === 'brick') form.type = 'skill'
+  const visible = VISIBLE_CREATE_KINDS[key]
+  if (visible?.length) form.type = visible[0]
+  else if (key === 'brick') form.type = 'skill'
   else if (key === 'recipe') form.type = 'agent'
-  else form.type = SHELVES[key]?.kinds?.[0] || 'plugin'
+  else form.type = SHELVES[key]?.kinds?.[0] || 'agent'
   form.category = ''
   error.value = ''
 }
@@ -171,8 +186,7 @@ async function create() {
 
       <template v-if="step === 'intent'">
         <div class="muted" style="font-size: 13px; line-height: 1.5; margin-bottom: 12px">
-          本站是零号员工问答助手的控制面；技能是说明书，连接器是手。
-          想一次装齐场景能力？优先选「发安装包」。
+          主叙事：助手 + 依赖。技能是说明书，连接器是手；先发助手，再按需发可复用的技能 / 连接器。
         </div>
         <div class="intent-grid">
           <button
@@ -238,7 +252,7 @@ async function create() {
         <div v-if="form.type === 'agent'" class="alert mt-12" style="font-size: 13px">
           有 <code>TEAM.md</code> 时为<strong>{{ ORCH_LABELS.team.name }}</strong>（角色协作，在零号员工执行）。
           不要用能力编排 Workflow 去替代 TEAM.md。
-          依赖的 skill / mcp 需先上架；若想一次内嵌，请改发「安装包」。
+          依赖的 skill / mcp 可先上架再引用，或直接内嵌在助手包内。
         </div>
         <div v-if="form.type === 'workflow'" class="alert mt-12" style="font-size: 13px">
           <strong>{{ ORCH_LABELS.capability.name }}</strong>：节点是已上架能力，只在云端执行，不进 Agent 目录。

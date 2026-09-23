@@ -67,6 +67,17 @@ async function loadAdminBadge() {
   }
 }
 
+async function openNotice(n) {
+  showNotify.value = false
+  if (n.link && n.link.startsWith('/') && !n.link.startsWith('//')) {
+    if (!n.read) {
+      n.read = true
+      api.post(`/notifications/${n.id}/read`).catch(() => {})
+    }
+    router.push(n.link)
+  }
+}
+
 async function readAll() {
   await api.post('/notifications/read-all')
   await loadNotifications()
@@ -232,15 +243,17 @@ watch(isAdmin, loadAdminBadge)
           <button class="btn btn-sm" type="button" @click="readAll">全部已读</button>
         </div>
         <div v-if="notifications.length === 0" class="muted mt-8">暂无通知</div>
-        <div
+        <button
           v-for="n in notifications"
           :key="n.id"
+          type="button"
           class="notify-item"
-          :class="{ unread: !n.read }"
+          :class="{ unread: !n.read, link: !!n.link }"
+          @click="openNotice(n)"
         >
           <div>{{ n.title }}</div>
           <div class="muted" style="font-size: 12px">{{ n.body || n.content || '' }}</div>
-        </div>
+        </button>
       </div>
     </div>
   </aside>
@@ -424,10 +437,18 @@ watch(isAdmin, loadAdminBadge)
   box-shadow: var(--shadow-lg);
 }
 .notify-item {
+  display: block;
+  width: 100%;
+  text-align: left;
   padding: 8px 0;
+  border: none;
   border-bottom: 1px solid var(--border);
+  background: transparent;
   font-size: 13px;
+  color: inherit;
 }
+.notify-item.link { cursor: pointer; }
+.notify-item.link:hover { color: var(--primary); }
 .notify-item.unread { color: var(--text); }
 .notify-item:last-child { border-bottom: none; }
 .btn-block { width: 100%; justify-content: center; }

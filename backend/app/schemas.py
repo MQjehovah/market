@@ -209,6 +209,25 @@ class CapabilityPage(BaseModel):
     page_size: int
 
 
+class TaskSearchHitOut(CapabilityOut):
+    """任务搜索单条：在 CapabilityOut 上附带打分与命中词。"""
+
+    match_score: float = 0.0
+    matched_terms: list[str] = Field(default_factory=list)
+
+
+class TaskSearchOut(BaseModel):
+    """按要办的事搜索：分组结果。"""
+
+    q: str = ""
+    terms: list[str] = Field(default_factory=list)
+    agents: list[TaskSearchHitOut] = Field(default_factory=list)
+    skills: list[TaskSearchHitOut] = Field(default_factory=list)
+    mcps: list[TaskSearchHitOut] = Field(default_factory=list)
+    plugins: list[TaskSearchHitOut] = Field(default_factory=list)
+    others: list[TaskSearchHitOut] = Field(default_factory=list)
+
+
 class ReviewRequest(BaseModel):
     action: Literal["approve", "reject", "return", "take"]
     comment: str = Field(default="", max_length=2000)
@@ -224,6 +243,7 @@ class NotificationOut(BaseModel):
     id: str
     title: str
     body: str
+    link: str = ""
     read: bool
     created_at: datetime
 
@@ -561,6 +581,27 @@ class MyCapabilityAdd(BaseModel):
 
 class MyCapabilityPatch(BaseModel):
     enabled: bool
+
+
+class HostSyncItem(BaseModel):
+    """宿主（零号员工 / 桌面）应安装的一条已加入且启用能力。"""
+
+    id: str
+    name: str
+    type: str
+    version: str
+    description: str = ""
+    enabled: bool = True
+    download_url: str = ""
+    consumers: dict[str, Any] = Field(default_factory=dict)
+
+
+class HostSyncOut(BaseModel):
+    items: list[HostSyncItem] = Field(default_factory=list)
+    hint: str = (
+        "只含已加入且启用的项。宿主安装后应尊重 enabled："
+        "停用后下次同步请忽略或卸载，不必再复制 cap install。"
+    )
 
 
 class AccessPolicyUpdate(BaseModel):

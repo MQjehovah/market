@@ -896,6 +896,7 @@ async def _cleanup_orphan_components(
                     user_id=row.author_id,
                     title=f"插件组件 {row.name} v{row.version} 已从插件断开并弃用",
                     body=f"父插件 {plugin_cap.name} 重新上传后不再包含该组件。",
+                    link=f"/capabilities/{row.id}",
                 )
             )
     return detached

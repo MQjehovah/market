@@ -167,6 +167,8 @@ def dashboard_projection(cap) -> dict[str, Any]:
         return {
             "mode": "local-skill",
             "path": f"localagent/skills/{name}/",
+            "online": f"/api/runtime/skills/{quote(name, safe='')}/activate",
+            "note": "员工装机走本地 path；模型线上网关用 online 返回 SKILL.md 文本。",
         }
 
     if cap_type == "agent":
@@ -181,6 +183,7 @@ def dashboard_projection(cap) -> dict[str, Any]:
             "mode": "remote-tool",
             "invoke": f"/api/runtime/tools/{quote(name, safe='')}/invoke",
             "schema": schema.get("schema") or schema.get("parameters") or {},
+            "note": "不下载 zip；桌面注册 market:<name> 或 marketplace_use_tool 线上 invoke。",
         }
 
     return {"mode": "unsupported"}

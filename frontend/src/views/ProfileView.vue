@@ -1,9 +1,11 @@
 <script setup>
 import { onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { api } from '../api'
 import { authState } from '../stores/auth'
 import { TYPE_LABELS, formatDate , roleLabel } from '../utils/format'
 
+const router = useRouter()
 const stats = ref(null)
 const notifications = ref([])
 const user = authState.user
@@ -17,6 +19,15 @@ async function load() {
       stats.value = null
     }
   }
+}
+
+function openNotice(n) {
+  if (!n.link || !n.link.startsWith('/') || n.link.startsWith('//')) return
+  if (!n.read) {
+    n.read = true
+    api.post(`/notifications/${n.id}/read`).catch(() => {})
+  }
+  router.push(n.link)
 }
 
 onMounted(load)
@@ -66,11 +77,18 @@ onMounted(load)
       <div class="panel">
         <h2>通知</h2>
         <div v-if="notifications.length === 0" class="empty" style="padding: 24px 0">暂无通知</div>
-        <div v-for="n in notifications" :key="n.id" class="notify-item" :class="{ unread: !n.read }">
+        <button
+          v-for="n in notifications"
+          :key="n.id"
+          type="button"
+          class="notify-item"
+          :class="{ unread: !n.read, link: !!n.link }"
+          @click="openNotice(n)"
+        >
           <div>{{ n.title }}</div>
           <div class="muted" style="font-size: 12px">{{ n.body }}</div>
           <div class="muted" style="font-size: 11px">{{ formatDate(n.created_at) }}</div>
-        </div>
+        </button>
       </div>
     </div>
   </div>
@@ -84,7 +102,9 @@ h2 { margin-top: 0; }
 .bar { flex: 1; height: 8px; background: var(--panel-2); border-radius: 4px; overflow: hidden; }
 .bar-fill { height: 100%; background: linear-gradient(90deg, var(--primary), #7a5cff); border-radius: 4px; }
 .top-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
-.notify-item { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.notify-item { display: block; width: 100%; text-align: left; padding: 10px 0; border: none; border-bottom: 1px solid var(--border); background: transparent; color: inherit; }
+.notify-item.link { cursor: pointer; }
+.notify-item.link:hover { color: var(--primary); }
 .notify-item:last-child { border-bottom: none; }
 .notify-item.unread { color: var(--text); }
 </style>

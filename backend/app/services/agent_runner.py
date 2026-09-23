@@ -23,7 +23,6 @@ from app.services.marketplace import (
     record_usage,
     resolve_capability,
 )
-from app.storage import get_storage
 
 logger = logging.getLogger("market.agent_runner")
 
@@ -115,8 +114,7 @@ def _skill_tool_def(skills: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 async def _activate_skill(db: AsyncSession, user: User, args: dict[str, Any]) -> str:
     """执行 skill 工具：读取技能包的 SKILL.md 作为执行指引返回给 LLM。"""
-    import io
-    import zipfile
+    from app.services.marketplace import activate_skill
 
     name = (args or {}).get("skill") or ""
     if not name:
@@ -128,23 +126,18 @@ async def _activate_skill(db: AsyncSession, user: User, args: dict[str, Any]) ->
     if cap.type != "skill":
         return json.dumps({"ok": False, "error": f"{name} 不是技能能力"}, ensure_ascii=False)
     try:
-        content = get_storage().open(cap.artifacts[-1].uri).read() if cap.artifacts else b""
-        with zipfile.ZipFile(io.BytesIO(content)) as zf:
-            md = (
-                zf.read("SKILL.md").decode("utf-8", errors="replace")
-                if "SKILL.md" in zf.namelist()
-                else ""
-            )
+        result = await activate_skill(db, user, cap, str((args or {}).get("context") or ""))
     except Exception as exc:  # noqa: BLE001
         return json.dumps({"ok": False, "error": f"读取技能失败：{exc}"}, ensure_ascii=False)
+    md = result.get("skill_md") or ""
     if not md:
         return json.dumps({"ok": False, "error": "技能包缺少 SKILL.md"}, ensure_ascii=False)
     return json.dumps(
         {
             "ok": True,
-            "skill": cap.name,
-            "version": cap.version,
-            "skill_md": md[:50000],
+            "skill": result.get("skill") or cap.name,
+            "version": result.get("version") or cap.version,
+            "skill_md": md,
         },
         ensure_ascii=False,
     )

@@ -91,6 +91,99 @@ async def instantiate_agent(
     }
 
 
+# 加入助手时一并授权的依赖 kind（与 cap install 主路径对齐；不含 workflow）
+_JOINABLE_DEP_TYPES = frozenset({"skill", "mcp", "tool"})
+
+
+def _extend_dep_manifest(manifest: list[dict[str, Any]], raw: Any) -> None:
+    if not isinstance(raw, list):
+        return
+    for item in raw:
+        if isinstance(item, dict) and item.get("name") and item.get("type"):
+            manifest.append(
+                {
+                    "name": str(item["name"]),
+                    "type": str(item["type"]),
+                    "version": str(item.get("version") or ""),
+                }
+            )
+
+
+def _read_agent_join_manifest(cap: Capability) -> list[dict[str, Any]]:
+    """加入「我的能力」用的依赖清单：dependencies.json / agent.json + 可市场关联的内嵌项。"""
+    manifest: list[dict[str, Any]] = []
+    arts = list(getattr(cap, "artifacts", None) or [])
+    if arts:
+        try:
+            content = get_storage().open(arts[-1].uri).read()
+            with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                names = set(zf.namelist())
+                if "dependencies.json" in names:
+                    _extend_dep_manifest(
+                        manifest, json.loads(zf.read("dependencies.json").decode("utf-8"))
+                    )
+                elif "agent.json" in names:
+                    meta = json.loads(zf.read("agent.json").decode("utf-8"))
+                    if isinstance(meta, dict):
+                        _extend_dep_manifest(manifest, meta.get("dependencies"))
+        except Exception:  # noqa: BLE001
+            pass
+
+    schema = cap.input_schema or {}
+    if not manifest:
+        _extend_dep_manifest(manifest, schema.get("dependencies"))
+
+    for item in schema.get("embedded_skills") or []:
+        if isinstance(item, dict) and item.get("name"):
+            manifest.append({"name": str(item["name"]), "type": "skill", "version": ""})
+    for item in schema.get("embedded_mcp") or []:
+        if isinstance(item, dict) and item.get("name"):
+            manifest.append({"name": str(item["name"]), "type": "mcp", "version": ""})
+    return manifest
+
+
+async def agent_dependency_capability_ids(
+    db: AsyncSession, user: User | None, cap: Capability
+) -> list[str]:
+    """解析助手依赖中可单独加入「我的能力」的已发布能力 id（skill/mcp/tool）。"""
+    if cap.type != "agent":
+        return []
+    manifest = _read_agent_join_manifest(cap)
+    if not manifest:
+        return []
+
+    visible = await get_visible_capabilities(db, user)
+    ids: list[str] = []
+    seen: set[str] = set()
+    for dep in manifest:
+        dep_type = str(dep.get("type") or "")
+        if dep_type not in _JOINABLE_DEP_TYPES:
+            continue
+        matches = [
+            c
+            for c in visible
+            if c.name == dep.get("name")
+            and c.type == dep_type
+            and c.status in ("published", "deprecated")
+            and c.id != cap.id
+        ]
+        if not matches:
+            continue
+        version = str(dep.get("version") or "").strip()
+        if version:
+            locked = [c for c in matches if c.version == version]
+            dep_cap = (
+                locked[0] if locked else max(matches, key=lambda c: parse_semver(c.version))
+            )
+        else:
+            dep_cap = max(matches, key=lambda c: parse_semver(c.version))
+        if dep_cap.id in seen:
+            continue
+        seen.add(dep_cap.id)
+        ids.append(dep_cap.id)
+    return ids
+
+
 async def _resolve_runtime(
     db: AsyncSession, user: User | None, cap: Capability
 ) -> dict[str, list[dict[str, Any]]]:
@@ -180,14 +273,39 @@ async def invoke_tool(db: AsyncSession, user: User, cap: Capability, params: dic
     }
 
 
+def read_skill_md(cap: Capability, *, max_chars: int = 50000) -> str:
+    """从能力包读取 SKILL.md 正文（线上网关按需注入上下文，非远程执行）。"""
+    from app.services.mcp_gateway import read_package_files
+
+    raw = read_package_files(cap).get("SKILL.md")
+    if not raw:
+        return ""
+    text = raw.decode("utf-8", errors="replace")
+    return text[:max_chars] if max_chars > 0 else text
+
+
 async def activate_skill(db: AsyncSession, user: User, cap: Capability, context: str) -> dict[str, Any]:
-    await record_usage(db, user, cap, "activate", {"context": context})
+    """激活技能：返回 SKILL.md 正文供调用方注入上下文（不做远程执行）。"""
+    skill_md = read_skill_md(cap)
+    await record_usage(
+        db,
+        user,
+        cap,
+        "activate",
+        {"context": context, "skill_md_chars": len(skill_md)},
+    )
+    note = (
+        "请按下方 SKILL.md 执行任务（线上仅下发文本，不在市场侧执行）。"
+        if skill_md
+        else "技能包缺少 SKILL.md，无法提供执行指引。"
+    )
     return {
         "skill": cap.name,
         "version": cap.version,
-        "activated": True,
+        "activated": bool(skill_md),
         "context": context,
-        "note": "技能已激活，将按 SKILL.md 定义的工作流执行。",
+        "skill_md": skill_md,
+        "note": note,
     }
 
 

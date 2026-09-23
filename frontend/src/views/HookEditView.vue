@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../api'
 import { formatSize } from '../utils/format'
+import { bindUnsavedGuard } from '../utils/unsaved'
 import StatusBadge from '../components/StatusBadge.vue'
 import CodeEditor from '../components/CodeEditor.vue'
 
@@ -16,6 +17,21 @@ const tags = ref('')
 const error = ref('')
 const notice = ref('')
 const saving = ref(false)
+const baseline = ref(null)
+
+function formSnap() {
+  return JSON.stringify({
+    hooksJson: hooksJson.value,
+    description: description.value,
+    tags: tags.value
+  })
+}
+
+function markClean() {
+  baseline.value = formSnap()
+}
+
+bindUnsavedGuard(() => baseline.value !== null && formSnap() !== baseline.value)
 
 async function load() {
   error.value = ''
@@ -24,6 +40,7 @@ async function load() {
     hooksJson.value = data.value.hooks_json || ''
     description.value = data.value.capability?.description || ''
     tags.value = (data.value.capability?.tags || []).join(', ')
+    markClean()
   } catch (e) {
     error.value = e.message
   }
@@ -43,6 +60,7 @@ async function save() {
     data.value = body
     hooksJson.value = body.hooks_json || ''
     notice.value = `已保存为新版本草稿 v${body.capability.version}，可提交审核`
+    markClean()
   } catch (e) {
     error.value = e.message
   } finally {

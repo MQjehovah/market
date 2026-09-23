@@ -458,6 +458,7 @@ async def review_capability(
                 user_id=author.id,
                 title=f"能力 {cap.name} v{cap.version} {labels[action]}",
                 body=comment or f"管理员已完成审核：{labels[action]}",
+                link=f"/capabilities/{cap.id}",
             )
         )
 
@@ -499,6 +500,7 @@ async def _deprecate_other_published(db: AsyncSession, cap: Capability) -> None:
                     f"新正式版 v{cap.version} 已发布，旧版本自动转为「已弃用」。"
                     "如需继续使用请迁移到新版本。"
                 ),
+                link=f"/capabilities/{cap.id}",
             )
         )
 
@@ -513,6 +515,7 @@ async def _notify_subscribers(db: AsyncSession, cap: Capability) -> None:
                 user_id=sub.user_id,
                 title=f"你订阅的能力发布新版本：{cap.name} v{cap.version}",
                 body=cap.description[:200] or f"{cap.name} v{cap.version} 已上架，点击查看。",
+                link=f"/capabilities/{cap.id}",
             )
         )
 
@@ -525,6 +528,7 @@ async def change_status(db: AsyncSession, cap: Capability, target: str) -> Capab
                 user_id=cap.author_id,
                 title=f"能力 {cap.name} v{cap.version} 已弃用",
                 body="请迁移到新版本。",
+                link=f"/capabilities/{cap.id}",
             )
         )
         if cap.type == "plugin":

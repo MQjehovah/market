@@ -10,6 +10,7 @@ import { TYPE_CATEGORIES, TYPE_LABELS, formatDate } from '../utils/format'
 import StatusBadge from '../components/StatusBadge.vue'
 import WorkflowNode from '../components/workflow/WorkflowNode.vue'
 import CodeEditor from '../components/CodeEditor.vue'
+import { bindUnsavedGuard } from '../utils/unsaved'
 
 const props = defineProps({ id: { type: String, default: '' } })
 const route = useRoute()
@@ -112,11 +113,14 @@ watch(
 onMounted(() => {
   if (props.id) {
     load(props.id)
-  } else if (route.query) {
+    return
+  }
+  if (route.query) {
     if (route.query.name) meta.name = route.query.name
     if (route.query.version) meta.version = route.query.version
     if (route.query.description) meta.description = route.query.description
   }
+  markWorkflowClean()
 })
 
 async function load(id) {
@@ -150,6 +154,7 @@ async function load(id) {
     }))
     wfSettings.on_error = wf.on_error || 'fail'
     wfSettings.timeout_seconds = Number(wf.timeout_seconds) || 0
+    markWorkflowClean()
   } catch (e) {
     error.value = e.message
   }
@@ -175,6 +180,28 @@ function toEngineWorkflow() {
     timeout_seconds: Number(wfSettings.timeout_seconds) || 0
   }
 }
+
+const workflowBaseline = ref(null)
+
+function markWorkflowClean() {
+  workflowBaseline.value = JSON.stringify({
+    workflow: toEngineWorkflow(),
+    category: meta.category,
+    tags: meta.tags,
+    visibility: meta.visibility
+  })
+}
+
+bindUnsavedGuard(() => {
+  if (workflowBaseline.value === null) return false
+  const current = JSON.stringify({
+    workflow: toEngineWorkflow(),
+    category: meta.category,
+    tags: meta.tags,
+    visibility: meta.visibility
+  })
+  return current !== workflowBaseline.value
+})
 
 function addNode(type, position) {
   const nid = `n${Date.now().toString(36)}${flowNodes.value.length}`
@@ -363,6 +390,7 @@ async function save() {
       router.replace(`/workflows/${cap.id}/edit`)
       notice.value = '草稿已创建并保存'
     }
+    markWorkflowClean()
     return true
   } catch (e) {
     error.value = e.message

@@ -22,9 +22,12 @@ from app.schemas import (
     RatingCreate,
     RatingOut,
     SubscribeRequest,
+    TaskSearchHitOut,
+    TaskSearchOut,
 )
 from app.services.capabilities import get_visible_capabilities, parse_semver, record_rating
 from app.services.capabilities import to_capability_out
+from app.services.task_search import task_search as run_task_search
 from app.services.visibility import visibility_condition
 from app.services.taxonomy import (
     DEFAULT_BROWSE_KINDS,
@@ -87,9 +90,9 @@ async def browse_capabilities(
 ):
     """浏览市场：默认只展示已发布能力，且每个逻辑能力只保留最新版本。
 
-    默认货架为安装包+配方（plugin/agent/workflow）。积木（skill/mcp/tool）需：
-    - shelf=brick，或
-    - type=某积木 kind，或
+    默认货架为助手+依赖（agent/skill/mcp）。其余 kind 需：
+    - shelf=对应货架，或
+    - type=某 kind，或
     - include_bricks=true。
 
     skill / mcp：按 Agent 内嵌能力名筛选（匹配 input_schema.embedded_*）。
@@ -106,7 +109,7 @@ async def browse_capabilities(
     elif shelf_kinds is not None:
         conditions.append(Capability.type.in_(shelf_kinds))
     elif not include_bricks and not skill and not mcp and not q.strip():
-        # 默认货架：安装包+配方；有关键词搜索时放开全部 kind，避免搜不到积木
+        # 默认货架：助手 + 依赖；有关键词搜索时放开全部 kind
         conditions.append(Capability.type.in_(list(DEFAULT_BROWSE_KINDS)))
 
     if category:
@@ -208,6 +211,48 @@ async def browse_capabilities(
         total=total,
         page=page,
         page_size=page_size,
+    )
+
+
+@router.get("/capabilities/task-search", response_model=TaskSearchOut)
+async def task_search_capabilities(
+    db: DbSession,
+    user: OptionalUser,
+    q: str = Query("", max_length=200),
+):
+    """按要办的事搜索：关键词打分 + 依赖/used_by 扩展，分组返回助手/技能/连接器/安装包。"""
+    query = (q or "").strip()
+    if not query:
+        return TaskSearchOut()
+
+    conditions: list = [Capability.status == "published"]
+    visibility_where = _visibility_where(user)
+    if visibility_where is not None:
+        conditions.append(visibility_where)
+
+    stmt = (
+        select(Capability)
+        .options(joinedload(Capability.author))
+        .where(and_(*conditions))
+    )
+    caps = [
+        c
+        for c in (await db.scalars(stmt)).all()
+        if "plugin-component" not in (c.tags or [])
+    ]
+    raw = await run_task_search(db, caps, query)
+
+    def _hits(rows: list[dict]) -> list[TaskSearchHitOut]:
+        return [TaskSearchHitOut(**row) for row in rows]
+
+    return TaskSearchOut(
+        q=raw["q"],
+        terms=raw["terms"],
+        agents=_hits(raw["agents"]),
+        skills=_hits(raw["skills"]),
+        mcps=_hits(raw["mcps"]),
+        plugins=_hits(raw["plugins"]),
+        others=_hits(raw["others"]),
     )
 
 
@@ -518,6 +563,16 @@ async def notifications(db: DbSession, user: CurrentUser):
         )
     ).all()
     return list(rows)
+
+
+@router.post("/notifications/{notification_id}/read", response_model=MessageOut)
+async def read_notification(notification_id: str, db: DbSession, user: CurrentUser):
+    item = await db.get(Notification, notification_id)
+    if item is None or item.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "通知不存在")
+    item.read = True
+    await db.commit()
+    return MessageOut(message="已读")
 
 
 @router.post("/notifications/read-all", response_model=MessageOut)

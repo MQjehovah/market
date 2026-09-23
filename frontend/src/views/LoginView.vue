@@ -11,13 +11,23 @@ const error = ref('')
 const loading = ref(false)
 const ssoLoading = ref(false)
 
+function safeRedirect(raw) {
+  if (typeof raw !== 'string') return '/'
+  const value = raw.trim()
+  if (!value.startsWith('/') || value.startsWith('//') || value.startsWith('/\\')) return '/'
+  if (value.includes('\\') || value.includes('://')) return '/'
+  const path = value.split('?')[0].split('#')[0]
+  if (path === '/login' || path.startsWith('/login/')) return '/'
+  return value
+}
+
 async function submit() {
   error.value = ''
   loading.value = true
   try {
     const data = await api.post('/auth/login', form.value)
     setAuth(data.access_token, data.user)
-    router.push(route.query.redirect || '/')
+    router.push(safeRedirect(route.query.redirect))
   } catch (e) {
     error.value = e.message
   } finally {
@@ -29,7 +39,9 @@ function loginWithSso() {
   if (ssoLoading.value) return
   ssoLoading.value = true
   error.value = ''
-  window.location.href = (import.meta.env.BASE_URL || '/').replace(/\/$/, '') + '/api/auth/sso/start'
+  const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '') + '/api/auth/sso/start'
+  const next = safeRedirect(route.query.redirect)
+  window.location.href = next === '/' ? base : `${base}?next=${encodeURIComponent(next)}`
 }
 
 async function handleSsoCallback() {
@@ -43,12 +55,12 @@ async function handleSsoCallback() {
     setAuth(token, { username: '', role: 'user' })
     const user = await api.get('/auth/me')
     setAuth(token, user)
-    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/'
-    await router.replace(redirect)
+    await router.replace(safeRedirect(route.query.redirect))
   } catch (e) {
     clearAuth()
     error.value = e.message || 'SSO 登录失败'
-    await router.replace({ path: '/login' })
+    const back = safeRedirect(route.query.redirect)
+    await router.replace(back === '/' ? { path: '/login' } : { path: '/login', query: { redirect: back } })
   } finally {
     ssoLoading.value = false
   }

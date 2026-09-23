@@ -154,3 +154,103 @@ async def test_my_capabilities_scope_and_join_guard(client, publisher_headers, a
     assert any(c["name"] == tool_name for c in r.json())
     r = await client.get("/api/my/capabilities?scope=owned", headers=user_headers)
     assert not any(c["name"] == tool_name for c in r.json())
+
+
+@pytest.mark.asyncio
+async def test_host_sync_enabled_only(client, publisher_headers, admin_headers, user_headers):
+    """宿主同步只返回已加入且启用、有包（或 tool）的项。"""
+    from test_skill_edit import _skill_zip
+
+    name = "host-sync-skill"
+    await _publish_capability(
+        client, publisher_headers, admin_headers, name, "skill", _skill_zip(name)
+    )
+    r = await client.get("/api/capabilities", params={"q": name, "type": "skill"})
+    cap_id = r.json()["items"][0]["id"]
+
+    r = await client.get("/api/my/host-sync", headers=user_headers)
+    assert r.status_code == 200
+    assert not any(i["name"] == name for i in r.json()["items"])
+
+    await client.post("/api/my/capabilities", headers=user_headers, json={"capability_id": cap_id})
+    r = await client.get("/api/my/host-sync", headers=user_headers)
+    assert r.status_code == 200
+    items = [i for i in r.json()["items"] if i["name"] == name]
+    assert len(items) == 1
+    assert items[0]["enabled"] is True
+    assert items[0]["type"] == "skill"
+    assert "download_url" in items[0] and name in items[0]["download_url"]
+    assert "consumers" in items[0]
+
+    r = await client.patch(
+        f"/api/my/capabilities/{cap_id}",
+        headers=user_headers,
+        json={"enabled": False},
+    )
+    assert r.status_code == 200
+    r = await client.get("/api/my/host-sync", headers=user_headers)
+    assert not any(i["name"] == name for i in r.json()["items"])
+
+
+@pytest.mark.asyncio
+async def test_join_agent_also_joins_dependencies(
+    client, publisher_headers, admin_headers, user_headers
+):
+    """加入助手时，dependencies.json 里已上架的 skill/tool 一并进入「我的能力」。"""
+    import io
+    import json
+    import zipfile
+
+    from test_skill_edit import _skill_zip
+    from test_workflow import _publish_capability, _tool_zip
+
+    skill_name = "join-dep-skill"
+    tool_name = "join-dep-tool"
+    agent_name = "join-dep-agent"
+    await _publish_capability(
+        client, publisher_headers, admin_headers, skill_name, "skill", _skill_zip(skill_name)
+    )
+    await _publish_capability(
+        client, publisher_headers, admin_headers, tool_name, "tool", _tool_zip(tool_name)
+    )
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(
+            "agent.json",
+            json.dumps(
+                {"name": agent_name, "description": "join deps", "version": "1.0.0"},
+                ensure_ascii=False,
+            ),
+        )
+        zf.writestr("PROMPT.md", f"你是{agent_name}。")
+        zf.writestr(
+            "dependencies.json",
+            json.dumps(
+                [
+                    {"name": skill_name, "type": "skill", "version": "1.0.0"},
+                    {"name": tool_name, "type": "tool", "version": ""},
+                ],
+                ensure_ascii=False,
+            ),
+        )
+    await _publish_capability(
+        client, publisher_headers, admin_headers, agent_name, "agent", buf.getvalue()
+    )
+
+    r = await client.get("/api/capabilities", params={"type": "agent", "q": agent_name})
+    assert r.status_code == 200
+    agent_id = next(c["id"] for c in r.json()["items"] if c["name"] == agent_name)
+
+    r = await client.post(
+        "/api/my/capabilities", headers=user_headers, json={"capability_id": agent_id}
+    )
+    assert r.status_code == 201, r.text
+    assert "依赖" in r.json()["message"]
+
+    r = await client.get("/api/my/capabilities", headers=user_headers, params={"scope": "added"})
+    assert r.status_code == 200
+    names = {c["name"] for c in r.json() if c.get("added")}
+    assert agent_name in names
+    assert skill_name in names
+    assert tool_name in names

@@ -38,6 +38,7 @@ const page = ref(1)
 const pageSize = ref(20)
 const confirmAction = ref(null)
 const copiedId = ref('')
+const preferAddedOnFirstLoad = ref(true)
 
 const CUSTOMIZE_TYPES = ['plugin', 'skill', 'mcp', 'rule', 'command', 'hook', 'agent']
 
@@ -142,9 +143,15 @@ async function load() {
   loading.value = true
   try {
     caps.value = await api.get('/my/capabilities?scope=all')
+    if (preferAddedOnFirstLoad.value && route.query.publish !== '1') {
+      const owned = caps.value.some((c) => c.owned)
+      const added = caps.value.some((c) => c.added)
+      if (!owned && added) mainTab.value = 'added'
+    }
   } catch (e) {
     error.value = e.message
   } finally {
+    preferAddedOnFirstLoad.value = false
     loading.value = false
   }
 }
@@ -311,7 +318,8 @@ onMounted(() => {
       <div>
         <h1 class="page-title">我的能力</h1>
         <p class="page-desc muted">
-          「自定义」管理已加入能力的启用状态；「我发布的」走草稿与审核。{{ JOIN_VS_INSTALL_HINT }}
+          「自定义」里的启用开关决定零号员工 / 桌面能否从 host-sync 拉到该项。
+          「我发布的」走草稿与审核。{{ JOIN_VS_INSTALL_HINT }}
         </p>
       </div>
       <button class="btn btn-primary" type="button" @click="openCreate()">发布能力</button>
@@ -357,17 +365,17 @@ onMounted(() => {
       <div v-else-if="caps.length === 0" class="empty">
         还没有能力。小白推荐路径：
         <ol style="text-align: left; display: inline-block; margin: 12px 0; padding-left: 20px">
-          <li>点「发布能力」→ 选「发安装包」或「发助手 / 发组件」</li>
-          <li>助手与组件：在线编辑（保存生成包）→ 提交审核；安装包：上传 zip → 提交审核</li>
+          <li>点「发布能力」→ 选「发助手」或「发组件」（技能 / 连接器）</li>
+          <li>在线编辑（保存生成包）→ 提交审核</li>
           <li>上架后加入，本地执行 <code>cap install …</code></li>
         </ol>
         <div>
-          <button class="btn btn-primary" type="button" @click="openCreate('install')">发安装包</button>
+          <button class="btn btn-primary" type="button" @click="openCreate('recipe')">发助手</button>
           <a href="/" style="margin-left: 12px; color: var(--primary)">去发现逛逛</a>
         </div>
       </div>
       <div v-else-if="filteredCaps.length === 0 && mainTab === 'added'" class="empty">
-        还没有加入任何能力。去发现页加入后，可在此启用/停用。
+        还没有加入任何能力。去发现页加入并启用后，零号员工会按清单安装。
         <div style="margin-top: 12px"><a href="/">去发现逛逛</a></div>
       </div>
       <div v-else-if="filteredCaps.length === 0" class="empty">没有符合筛选条件的能力</div>
