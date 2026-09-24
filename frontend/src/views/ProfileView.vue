@@ -51,6 +51,14 @@ onMounted(load)
           </table>
         </div>
 
+        <div class="panel mt-24">
+          <h2>全局共享密钥</h2>
+          <p class="muted" style="font-size: 13px; margin: 0 0 12px">
+            跨能力共享的业务凭据（如 ERP / 域账号）。单能力专用凭据请到对应能力详情页「环境变量 / 业务凭据」直接配置。
+          </p>
+          <router-link to="/my/secrets" class="btn btn-sm">管理全局密钥</router-link>
+        </div>
+
         <div v-if="stats" class="panel mt-24">
           <h2>我的统计</h2>
           <div class="grid grid-4 mt-16">

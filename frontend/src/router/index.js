@@ -60,7 +60,7 @@ const router = createRouter({
     { path: '/login', component: LoginView, meta: { title: '登录', blank: true } },
     { path: '/capabilities/:id', component: CapabilityDetailView, props: true, meta: { title: '能力详情' } },
     { path: '/my', component: MyCapabilitiesView, meta: { title: '我的能力', auth: true } },
-    { path: '/my/secrets', component: MySecretsView, meta: { title: '业务密钥', auth: true } },
+    { path: '/my/secrets', component: MySecretsView, meta: { title: '全局共享密钥', auth: true } },
     { path: '/profile', component: ProfileView, meta: { title: '个人中心', auth: true } },
     { path: '/admin', redirect: adminLanding, meta: { title: '治理后台', auth: true, admin: true } },
     {

@@ -1,11 +1,8 @@
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { api } from '../api'
 import { TYPE_LABELS, formatDate } from '../utils/format'
 import ConfirmActionModal from '../components/ConfirmActionModal.vue'
-
-const route = useRoute()
 
 const secrets = ref([])
 const caps = ref([])
@@ -21,16 +18,6 @@ const form = reactive({
   scope: '',
   label: ''
 })
-
-/** 能力级批量填写草稿 */
-const bulkDraft = ref({})
-const bulkCapId = ref('')
-const bulkSaving = ref(false)
-
-function isSecretKey(key) {
-  const k = String(key || '').toLowerCase()
-  return ['password', 'secret', 'token', 'key', 'passwd', 'credential'].some((s) => k.includes(s))
-}
 
 function requiredEnvFor(cap) {
   const schema = cap?.input_schema
@@ -141,44 +128,6 @@ async function saveOne() {
   }
 }
 
-function openBulk(cap) {
-  bulkCapId.value = cap.id
-  const draft = {}
-  for (const k of cap.requiredKeys) draft[k] = ''
-  bulkDraft.value = draft
-  form.scope = cap.id
-}
-
-function cancelBulk() {
-  bulkCapId.value = ''
-  bulkDraft.value = {}
-}
-
-async function saveBulk() {
-  if (!bulkCapId.value) return
-  const secretsMap = {}
-  for (const [k, v] of Object.entries(bulkDraft.value)) {
-    if (String(v || '').trim()) secretsMap[k] = String(v).trim()
-  }
-  if (!Object.keys(secretsMap).length) {
-    error.value = '请至少填写一项'
-    return
-  }
-  bulkSaving.value = true
-  error.value = ''
-  notice.value = ''
-  try {
-    await api.put('/my/secrets/bulk', { secrets: secretsMap, scope: bulkCapId.value })
-    notice.value = `已为「${capNameById.value[bulkCapId.value] || '能力'}」保存 ${Object.keys(secretsMap).length} 项`
-    cancelBulk()
-    await load()
-  } catch (e) {
-    error.value = e.message || '批量保存失败'
-  } finally {
-    bulkSaving.value = false
-  }
-}
-
 async function doDelete(row) {
   confirmDelete.value = null
   try {
@@ -190,35 +139,17 @@ async function doDelete(row) {
   }
 }
 
-watch(
-  () => route.query.capability_id,
-  (id) => {
-    if (!id) return
-    form.scope = String(id)
-    const cap = mcpCapsNeedingEnv.value.find((c) => c.id === id)
-    if (cap) openBulk(cap)
-  }
-)
-
-onMounted(async () => {
-  await load()
-  const id = route.query.capability_id
-  if (id) {
-    form.scope = String(id)
-    const cap = mcpCapsNeedingEnv.value.find((c) => c.id === id)
-    if (cap) openBulk(cap)
-  }
-})
+onMounted(load)
 </script>
 
 <template>
   <div class="secrets-page">
     <div class="page-head">
       <div>
-        <h1 class="page-title">业务密钥</h1>
+        <h1 class="page-title">全局共享密钥</h1>
         <p class="page-desc muted">
-          托管连接器所需的业务凭据（ERP / DB 等）。加密存库，平台轨与线上试用按当前用户自动注入；列表永不回显明文。
-          本地轨仍可把密钥写在本机 <code>mcp_servers.json</code>。
+          跨能力共享的托管凭据（如 ERP / 域账号），加密存库，平台轨与线上试用按当前用户自动注入；列表永不回显明文。
+          单能力专用凭据请在对应能力详情页「环境变量 / 业务凭据」直接配置。
         </p>
       </div>
       <router-link to="/my" class="btn">我的能力</router-link>
@@ -230,7 +161,7 @@ onMounted(async () => {
     <div v-if="pendingCaps.length" class="panel mb-16">
       <h2 class="section-title">待补齐</h2>
       <p class="muted" style="font-size: 13px; margin: 0 0 12px">
-        已加入/发布的连接器仍缺托管密钥。补齐后可直接走平台轨试用。
+        已加入/发布的连接器仍缺托管密钥。请到能力详情页「环境变量 / 业务凭据」填写，保存后平台轨自动注入。
       </p>
       <div class="pending-list">
         <div v-for="cap in pendingCaps" :key="cap.id" class="pending-row">
@@ -242,32 +173,8 @@ onMounted(async () => {
               <code v-for="k in cap.missing" :key="k" style="margin-right: 6px">{{ k }}</code>
             </div>
           </div>
-          <button class="btn btn-sm btn-primary" type="button" @click="openBulk(cap)">填写</button>
+          <router-link class="btn btn-sm btn-primary" :to="`/capabilities/${cap.id}`">去配置</router-link>
         </div>
-      </div>
-    </div>
-
-    <div v-if="bulkCapId" class="panel mb-16 bulk-panel">
-      <h2 class="section-title">
-        填写 · {{ capNameById[bulkCapId] || '能力' }}
-        <button class="btn btn-sm" type="button" style="float: right" @click="cancelBulk">取消</button>
-      </h2>
-      <div class="bulk-grid">
-        <div v-for="(val, key) in bulkDraft" :key="key" class="field">
-          <label><code>{{ key }}</code></label>
-          <input
-            v-model="bulkDraft[key]"
-            class="input"
-            :type="isSecretKey(key) ? 'password' : 'text'"
-            :placeholder="`\${${key}}`"
-            autocomplete="off"
-          />
-        </div>
-      </div>
-      <div class="flex" style="gap: 8px; margin-top: 12px">
-        <button class="btn btn-primary" type="button" :disabled="bulkSaving" @click="saveBulk">
-          {{ bulkSaving ? '保存中…' : '保存到托管' }}
-        </button>
       </div>
     </div>
 
@@ -378,12 +285,8 @@ onMounted(async () => {
   background: var(--panel-2);
   border-radius: 8px;
 }
-.bulk-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 12px;
-}
 .table-panel { padding: 0; overflow: hidden; }
+
 .table-panel .table { margin: 0; }
 .mb-16 { margin-bottom: 16px; }
 @media (max-width: 900px) {

@@ -296,33 +296,98 @@ const mcpEnvRows = computed(() => {
   }))
 })
 
-/** 业务密钥：详情只展示托管状态，填写在工作台 /my/secrets */
-const vaultStatus = ref({ required: [], filled: [], missing: [], complete: false })
+/** 业务凭据（环境变量）：详情页直接配置，按能力级加密托管，平台轨启动时注入 */
+const vaultSecrets = ref([])
+const envDraft = ref({})
+const envSaving = ref(false)
+const envClearing = ref('')
+const envNotice = ref('')
+const envError = ref('')
 
-async function loadVaultStatus() {
-  if (!authState.token || !cap.value?.id || !mcpEnvRows.value.length) {
-    vaultStatus.value = { required: [], filled: [], missing: [], complete: false }
+function isSecretKey(key) {
+  const k = String(key || '').toLowerCase()
+  return ['password', 'secret', 'token', 'key', 'passwd', 'credential'].some((s) => k.includes(s))
+}
+
+const envRowsWithState = computed(() => {
+  const capId = cap.value?.id || ''
+  const hits = {}
+  for (const s of vaultSecrets.value) {
+    if (s.scope && s.scope !== capId) continue
+    if (!hits[s.key_name]) hits[s.key_name] = {}
+    if (s.scope === capId) hits[s.key_name].cap = s
+    else hits[s.key_name].global = s
+  }
+  return mcpEnvRows.value.map((r) => ({
+    ...r,
+    secret: isSecretKey(r.key),
+    capRow: hits[r.key]?.cap || null,
+    globalRow: hits[r.key]?.global || null
+  }))
+})
+
+async function loadVaultSecrets() {
+  if (!authState.token) {
+    vaultSecrets.value = []
     return
   }
-  const keys = mcpEnvRows.value.map((r) => r.key).join(',')
   try {
-    vaultStatus.value = await api.get(
-      `/my/secrets/status?keys=${encodeURIComponent(keys)}&capability_id=${encodeURIComponent(cap.value.id)}`
-    )
+    vaultSecrets.value = (await api.get('/my/secrets')) || []
   } catch {
-    vaultStatus.value = {
-      required: mcpEnvRows.value.map((r) => r.key),
-      filled: [],
-      missing: mcpEnvRows.value.map((r) => r.key),
-      complete: false
-    }
+    vaultSecrets.value = []
+  }
+}
+
+async function refreshVault() {
+  await loadVaultSecrets()
+  envDraft.value = {}
+}
+
+async function saveCapEnv() {
+  const capId = cap.value?.id
+  if (!capId) return
+  const payload = {}
+  for (const [k, v] of Object.entries(envDraft.value)) {
+    if (String(v || '').trim()) payload[k] = String(v).trim()
+  }
+  if (!Object.keys(payload).length) {
+    envError.value = '请先填写至少一项环境变量值'
+    return
+  }
+  envSaving.value = true
+  envError.value = ''
+  envNotice.value = ''
+  try {
+    await api.put('/my/secrets/bulk', { secrets: payload, scope: capId })
+    envNotice.value = `已加密保存并启用注入（${Object.keys(payload).length} 项）`
+    await refreshVault()
+  } catch (e) {
+    envError.value = e.message || '保存失败'
+  } finally {
+    envSaving.value = false
+  }
+}
+
+async function clearCapEnv(row) {
+  if (!row?.capRow) return
+  envClearing.value = row.key
+  envError.value = ''
+  envNotice.value = ''
+  try {
+    await api.delete(`/my/secrets/${row.capRow.id}`)
+    envNotice.value = `已清除 ${row.key} 的能力级覆盖`
+    await refreshVault()
+  } catch (e) {
+    envError.value = e.message || '清除失败'
+  } finally {
+    envClearing.value = ''
   }
 }
 
 watch(
-  () => [cap.value?.id, mcpEnvRows.value.map((r) => r.key).join(','), authState.token],
+  () => [cap.value?.id, authState.token, mcpEnvRows.value.map((r) => r.key).join(',')],
   () => {
-    loadVaultStatus()
+    refreshVault()
   }
 )
 
@@ -1150,52 +1215,67 @@ onMounted(() => {
                     <td><span class="badge badge-danger">必填</span></td>
                     <td class="muted">网关服务名 {{ mcpConnection?.server || mcpSchema?.server || '—' }}</td>
                   </tr>
-                  <tr v-for="row in mcpEnvRows" :key="row.key">
+                  <tr v-for="row in envRowsWithState" :key="row.key">
                     <td><code>{{ row.key }}</code></td>
                     <td>
-                      <span v-if="row.required" class="badge badge-danger">必填</span>
+                      <span v-if="row.secret" class="badge badge-danger">凭据</span>
                       <span v-else class="muted">可选</span>
                     </td>
                     <td class="muted">
-                      自行配置，占位 <code>{{ row.hint }}</code>（详情不展示明文密钥）
+                      在下方「环境变量 / 业务凭据」填写，占位 <code>{{ row.hint }}</code>（不回显明文）
                     </td>
                   </tr>
                 </tbody>
               </table>
 
               <div v-if="mcpEnvRows.length" class="env-fill-box">
-                <h4 class="env-fill-title">业务凭据</h4>
+                <h4 class="env-fill-title">环境变量 / 业务凭据</h4>
                 <p class="muted" style="font-size: 13px; margin: 0 0 10px">
-                  平台轨密钥请在工作台「业务密钥」托管（加密存库，线上试用自动注入）。
-                  本地轨可用 <code>cap install {{ cap.name }} --type mcp</code> 或本机
-                  <code>mcp_servers.json</code>。
+                  在此填写后加密托管；平台轨（网关 / 在线试用）启动时按当前用户自动注入。
+                  本地轨请在本机 <code>mcp_servers.json</code> 配置。
                 </p>
-                <p v-if="authState.token" class="muted" style="font-size: 12px; margin: 0 0 10px">
-                  <template v-if="vaultStatus.complete">
-                    托管已齐：
-                    <code v-for="k in vaultStatus.filled" :key="'v-' + k" style="margin-right: 6px">{{ k }}</code>
-                  </template>
-                  <template v-else-if="vaultStatus.filled?.length">
-                    已填
-                    <code v-for="k in vaultStatus.filled" :key="'v-' + k" style="margin-right: 6px">{{ k }}</code>
-                    · 仍缺 {{ (vaultStatus.missing || []).join(', ') }}
-                  </template>
-                  <template v-else>
-                    尚未托管：{{ mcpEnvRows.map((r) => r.key).join(', ') }}
-                  </template>
-                </p>
-                <div class="flex" style="gap: 8px; flex-wrap: wrap">
-                  <router-link
-                    v-if="authState.token"
-                    class="btn btn-primary"
-                    :to="{ path: '/my/secrets', query: { capability_id: cap.id } }"
-                  >去工作台管理密钥</router-link>
-                  <router-link
-                    v-else
-                    class="btn btn-primary"
-                    :to="{ path: '/login', query: { redirect: `/my/secrets?capability_id=${cap.id}` } }"
-                  >登录后管理密钥</router-link>
-                </div>
+                <router-link
+                  v-if="!authState.token"
+                  class="btn btn-primary btn-sm"
+                  :to="{ path: '/login', query: { redirect: route.fullPath } }"
+                >登录后配置</router-link>
+                <template v-else>
+                  <div class="env-rows">
+                    <div v-for="row in envRowsWithState" :key="row.key" class="env-row">
+                      <div class="env-row-head">
+                        <code>{{ row.key }}</code>
+                        <span v-if="row.capRow" class="badge badge-success">能力级已配</span>
+                        <span v-else-if="row.globalRow" class="badge badge-warning">全局值生效</span>
+                        <span v-else class="badge badge-danger">未配置</span>
+                        <span class="muted" style="font-size: 12px">{{ row.secret ? '凭据' : '可选' }}</span>
+                      </div>
+                      <div class="env-row-input">
+                        <input
+                          v-model="envDraft[row.key]"
+                          class="input"
+                          :type="row.secret ? 'password' : 'text'"
+                          :placeholder="row.capRow || row.globalRow ? '留空保持不变' : row.hint"
+                          autocomplete="off"
+                        />
+                        <button
+                          v-if="row.capRow"
+                          class="btn btn-sm"
+                          type="button"
+                          :disabled="envClearing === row.key"
+                          @click="clearCapEnv(row)"
+                        >{{ envClearing === row.key ? '清除中…' : '清除覆盖' }}</button>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="flex" style="gap: 8px; margin-top: 12px; flex-wrap: wrap">
+                    <button class="btn btn-primary btn-sm" type="button" :disabled="envSaving" @click="saveCapEnv">
+                      {{ envSaving ? '保存中…' : '保存并注入' }}
+                    </button>
+                    <router-link class="btn btn-sm" to="/my/secrets">全局共享密钥</router-link>
+                  </div>
+                  <p v-if="envNotice" class="alert alert-success mt-12" style="font-size: 13px">{{ envNotice }}</p>
+                  <p v-if="envError" class="alert alert-error mt-12" style="font-size: 13px">{{ envError }}</p>
+                </template>
               </div>
             </div>
 
@@ -2086,6 +2166,11 @@ onMounted(() => {
   border: 1px solid var(--border); background: var(--panel-2, #f8fafc);
 }
 .env-fill-title { margin: 0 0 6px; font-size: 14px; }
+.env-rows { display: flex; flex-direction: column; gap: 10px; }
+.env-row { display: flex; flex-direction: column; gap: 6px; }
+.env-row-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.env-row-input { display: flex; gap: 8px; align-items: center; }
+.env-row-input .input { flex: 1; }
 .env-fill-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px;
 }
