@@ -286,6 +286,21 @@ async def create_capability(
         raise HTTPException(
             status.HTTP_409_CONFLICT, f"能力 {data.name} 已存在版本 {data.version}"
         )
+    # 名称归属：同名只能由既有作者继续发版本（参照 plugins.py 组件口径）。
+    # admin 不例外：代管走编辑既有行（publish _require_owner 已放行 admin），
+    # 而非另建同名行，避免同名跨作者行引发平台密钥等按名资源的归属歧义。
+    foreign = await db.scalar(
+        select(Capability.id)
+        .where(
+            and_(Capability.name == data.name, Capability.author_id != user.id)
+        )
+        .limit(1)
+    )
+    if foreign:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            f"能力名称 {data.name} 已被其他作者占用，请换名或联系管理员",
+        )
     cap = Capability(
         name=data.name,
         description=data.description,
@@ -343,6 +358,23 @@ async def update_capability(
         if siblings:
             raise HTTPException(
                 status.HTTP_409_CONFLICT, "该能力已有其他版本，不能改名"
+            )
+        # 名称归属：不能改成其他作者占用的名称（同作者已有版本可并入）
+        foreign = await db.scalar(
+            select(Capability.id)
+            .where(
+                and_(
+                    Capability.name == data.name,
+                    Capability.author_id != cap.author_id,
+                    Capability.id != cap.id,
+                )
+            )
+            .limit(1)
+        )
+        if foreign:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                f"能力名称 {data.name} 已被其他作者占用，不能改名",
             )
         taken = await db.scalar(
             select(Capability.id).where(

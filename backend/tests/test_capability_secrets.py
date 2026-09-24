@@ -60,6 +60,56 @@ async def _set_platform_secret(client, headers, cap_id: str, key: str, value: st
     return r.json()
 
 
+async def _create_user(client, admin_headers, username: str) -> dict:
+    r = await client.post(
+        "/api/admin/users",
+        headers=admin_headers,
+        json={
+            "username": username,
+            "email": f"{username}@example.com",
+            "password": "secret123",
+        },
+    )
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+async def _login(client, username: str) -> dict:
+    r = await client.post(
+        "/api/auth/login", json={"username": username, "password": "secret123"}
+    )
+    assert r.status_code == 200, r.text
+    return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+
+async def _publish_new_version(
+    client, publisher_headers, admin_headers, cap_id: str, name: str, new_version: str
+) -> str:
+    """基于既有行重发布一个新版本，返回新行 id。"""
+    r = await client.post(
+        f"/api/publish/capabilities/{cap_id}/versions",
+        headers=publisher_headers,
+        json={"new_version": new_version, "changelog": "patch"},
+    )
+    assert r.status_code == 201, r.text
+    v2 = r.json()["id"]
+    r = await client.post(
+        f"/api/publish/capabilities/{v2}/artifact",
+        headers=publisher_headers,
+        files={"file": ("pkg.zip", _mcp_zip(name), "application/zip")},
+    )
+    assert r.status_code == 200, r.text
+    r = await client.post(f"/api/publish/capabilities/{v2}/submit", headers=publisher_headers)
+    assert r.status_code == 200, r.text
+    r = await client.post(
+        f"/api/admin/capabilities/{v2}/review",
+        headers=admin_headers,
+        json={"action": "approve", "comment": "ok"},
+    )
+    assert r.status_code == 200, r.text
+    return v2
+
+
 # ---------- API：CRUD / 权限 / 校验 / declared_env ----------
 
 
@@ -327,3 +377,177 @@ async def test_platform_secrets_follow_name_across_versions(
     async with SessionLocal() as db:
         env = await resolve_capability_env(db, name)
     assert env == {"APP_SECRET": "cross-v"}
+
+
+# ---------- 同名归属与 canonical 行防投毒 ----------
+
+
+@pytest.mark.asyncio
+async def test_create_and_rename_same_name_other_author_forbidden(
+    client, publisher_headers, admin_headers
+):
+    """同名跨作者：创建草稿与改名均 403（防抢注同名后投毒平台密钥）。"""
+    name = "名称归属能力"
+    await _publish_capability(
+        client, publisher_headers, admin_headers, name, "mcp", _mcp_zip(name)
+    )
+    await _create_user(client, admin_headers, "name-thief")
+    thief_headers = await _login(client, "name-thief")
+
+    # 他人创建同名草稿 → 403
+    r = await client.post(
+        "/api/publish/capabilities",
+        headers=thief_headers,
+        json={"name": name, "type": "tool", "version": "9.9.9", "description": "抢注"},
+    )
+    assert r.status_code == 403, r.text
+    assert "占用" in r.json()["detail"]
+
+    # 他人把自己的草稿改名到该名称 → 403
+    r = await client.post(
+        "/api/publish/capabilities",
+        headers=thief_headers,
+        json={"name": "thief-draft", "type": "tool", "version": "1.0.0"},
+    )
+    assert r.status_code == 201, r.text
+    draft_id = r.json()["id"]
+    r = await client.put(
+        f"/api/publish/capabilities/{draft_id}",
+        headers=thief_headers,
+        json={"name": name},
+    )
+    assert r.status_code == 403, r.text
+    assert "占用" in r.json()["detail"]
+
+    # 同作者同名新版本仍允许
+    r = await client.post(
+        "/api/publish/capabilities",
+        headers=publisher_headers,
+        json={"name": name, "type": "tool", "version": "9.9.9", "description": "同作者新版本"},
+    )
+    assert r.status_code == 201, r.text
+
+
+@pytest.mark.asyncio
+async def test_platform_secrets_reject_foreign_same_name_row(
+    client, publisher_headers, admin_headers
+):
+    """直接构造他人同名行：平台密钥 GET/PUT 均 403，正主值不被投毒。"""
+    from sqlalchemy import select
+
+    from app.database import SessionLocal
+    from app.models import Capability, User
+    from app.services.capability_secrets import resolve_capability_env
+
+    name = "密钥正主能力"
+    cap_id = await _publish_capability(
+        client,
+        publisher_headers,
+        admin_headers,
+        name,
+        "mcp",
+        _mcp_zip(name, {"APP_SECRET": "${APP_SECRET}"}),
+    )
+    await _set_platform_secret(client, admin_headers, cap_id, "APP_SECRET", "victim-v")
+
+    await _create_user(client, admin_headers, "secret-thief")
+    async with SessionLocal() as db:
+        thief = await db.scalar(select(User).where(User.username == "secret-thief"))
+        forged = Capability(
+            name=name,
+            type="mcp",
+            version="9.9.9",
+            status="draft",
+            author_id=thief.id,
+            visibility="internal",
+        )
+        db.add(forged)
+        await db.commit()
+        await db.refresh(forged)
+        forged_id = forged.id
+
+    thief_headers = await _login(client, "secret-thief")
+    r = await client.get(
+        f"/api/capabilities/{forged_id}/platform-secrets", headers=thief_headers
+    )
+    assert r.status_code == 403, r.text
+    r = await client.put(
+        f"/api/capabilities/{forged_id}/platform-secrets",
+        headers=thief_headers,
+        json={"secrets": {"APP_SECRET": "poisoned"}},
+    )
+    assert r.status_code == 403, r.text
+
+    # 正主值未被投毒；canonical 作者（publisher）仍可管理
+    async with SessionLocal() as db:
+        env = await resolve_capability_env(db, name)
+    assert env == {"APP_SECRET": "victim-v"}
+    r = await client.get(
+        f"/api/capabilities/{cap_id}/platform-secrets", headers=publisher_headers
+    )
+    assert r.status_code == 200, r.text
+
+
+@pytest.mark.asyncio
+async def test_platform_secrets_canonical_author_manages_multi_version(
+    client, publisher_headers, admin_headers
+):
+    """canonical 作者对自己的多版本行均可管理（published 作者即 canonical）。"""
+    name = "多版本正主"
+    cap_id = await _publish_capability(
+        client,
+        publisher_headers,
+        admin_headers,
+        name,
+        "mcp",
+        _mcp_zip(name, {"K": "${K}"}),
+    )
+    v2 = await _publish_new_version(client, publisher_headers, admin_headers, cap_id, name, "1.0.1")
+
+    # 新行（published）可写；旧行（deprecated，同作者）也可读写
+    r = await client.put(
+        f"/api/capabilities/{v2}/platform-secrets",
+        headers=publisher_headers,
+        json={"secrets": {"K": "v2"}},
+    )
+    assert r.status_code == 200, r.text
+    r = await client.get(
+        f"/api/capabilities/{cap_id}/platform-secrets", headers=publisher_headers
+    )
+    assert r.status_code == 200, r.text
+    assert [i["key_name"] for i in r.json()["items"]] == ["K"]
+
+
+@pytest.mark.asyncio
+async def test_relay_platform_secret_decrypt_failure_returns_502(
+    client, publisher_headers, admin_headers
+):
+    """relay 中平台密钥解密失败：返回 502 JSON（不裸 500、不泄露明文）。"""
+    from sqlalchemy import select
+
+    from app.database import SessionLocal
+    from app.models import CapabilitySecret
+    from app.services.mcp_gateway import authorize_capability_gateway
+
+    name = "解密失败能力"
+    cap_id = await _publish_capability(
+        client,
+        publisher_headers,
+        admin_headers,
+        name,
+        "mcp",
+        _mcp_zip(name, {"K": "${K}"}),
+    )
+    await _set_platform_secret(client, admin_headers, cap_id, "K", "v")
+    async with SessionLocal() as db:
+        row = await db.scalar(
+            select(CapabilitySecret).where(CapabilitySecret.capability_name == name)
+        )
+        row.ciphertext = "not-a-valid-fernet-token"
+        await db.commit()
+
+    cfg, status, body = await authorize_capability_gateway(
+        _scope(admin_headers["Authorization"]), name
+    )
+    assert cfg is None and status == 502, body
+    assert "密钥" in body["detail"] or "解析" in body["detail"]

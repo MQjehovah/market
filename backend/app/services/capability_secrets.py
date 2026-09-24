@@ -13,7 +13,8 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import CapabilitySecret
+from app.models import Capability, CapabilitySecret
+from app.services.capabilities import parse_semver
 from app.services.secret_vault import decrypt_value, encrypt_value, validate_key_name
 
 logger = logging.getLogger("market.capability_secrets")
@@ -21,6 +22,24 @@ logger = logging.getLogger("market.capability_secrets")
 
 def _norm_name(name: str) -> str:
     return (name or "").strip()
+
+
+async def canonical_capability_author_id(db: AsyncSession, name: str) -> str | None:
+    """该能力名 canonical 行的作者 id（平台密钥归属判定用）。
+
+    canonical 口径：优先已发布（published）行并取其中最高版本；
+    无已发布行时退回全部行中的最高版本（草稿/审核中亦可管理）。
+    """
+    cap_name = _norm_name(name)
+    rows = list(
+        (await db.scalars(select(Capability).where(Capability.name == cap_name))).all()
+    )
+    if not rows:
+        return None
+    published = [c for c in rows if c.status == "published"]
+    pool = published or rows
+    canonical = max(pool, key=lambda c: parse_semver(c.version))
+    return canonical.author_id
 
 
 async def list_capability_secrets(db: AsyncSession, name: str) -> list[CapabilitySecret]:

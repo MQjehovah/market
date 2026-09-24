@@ -41,6 +41,7 @@ from app.schemas import (
 from app.services.access import capability_access_ok
 from app.services.act_as import resolve_act_as
 from app.services.capability_secrets import (
+    canonical_capability_author_id,
     declared_env_keys,
     delete_capability_secret,
     list_capability_secrets,
@@ -672,10 +673,23 @@ async def update_install_policy(
     return _to_out(cap)
 
 
-def _require_platform_secret_admin(cap: Capability, user: User) -> None:
-    """平台密钥管理权限：作者或 admin（与其他管理接口一致）。"""
-    if user.role != "admin" and cap.author_id != user.id:
+async def _require_platform_secret_admin(db: DbSession, cap: Capability, user: User) -> None:
+    """平台密钥管理权限：admin，或该能力名 canonical 行的作者。
+
+    canonical = 同名已发布行（取最高版本）；无已发布则退回最高版本行。
+    平台密钥按名存取，故仅传传入行作者不够：同名非 canonical 行（含直接构造的
+    草稿行）作者一律拒绝，防止抢注同名后覆盖正主凭据。
+    """
+    if user.role == "admin":
+        return
+    if cap.author_id != user.id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "只有作者或管理员可以管理平台密钥")
+    canonical_author = await canonical_capability_author_id(db, cap.name)
+    if canonical_author != user.id:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "只有该名称 canonical 版本的作者或管理员可以管理平台密钥",
+        )
 
 
 async def _platform_secrets_out(db: DbSession, cap: Capability) -> CapabilitySecretsOut:
@@ -699,7 +713,7 @@ async def get_platform_secrets(cap_id: str, db: DbSession, user: CurrentUser):
     cap = await db.get(Capability, cap_id)
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
-    _require_platform_secret_admin(cap, user)
+    await _require_platform_secret_admin(db, cap, user)
     return await _platform_secrets_out(db, cap)
 
 
@@ -711,7 +725,7 @@ async def put_platform_secrets(
     cap = await db.get(Capability, cap_id)
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
-    _require_platform_secret_admin(cap, user)
+    await _require_platform_secret_admin(db, cap, user)
     await upsert_capability_secrets_bulk(
         db, cap.name, data.secrets, updated_by=user.id
     )
@@ -728,7 +742,7 @@ async def remove_platform_secret(
     cap = await db.get(Capability, cap_id)
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
-    _require_platform_secret_admin(cap, user)
+    await _require_platform_secret_admin(db, cap, user)
     await delete_capability_secret(db, cap.name, key_name)
     await db.commit()
     return MessageOut(message=f"已删除平台密钥 {key_name}")

@@ -569,7 +569,12 @@ async def authorize_capability_gateway(
 
         # 平台轨统一注入能力级平台密钥：按能力名跨版本、全用户共用；
         # act-as 只影响可见/可调用范围，不改变注入的密钥
-        platform_env = await resolve_capability_env(db, cap.name)
+        try:
+            platform_env = await resolve_capability_env(db, cap.name)
+        except HTTPException as exc:
+            # 解密失败（SECRET_VAULT_KEY 轮换等）：不裸 500、不回显密文，按上游不可用处理
+            logger.error("平台密钥解析失败 cap=%s: %s", cap.name, exc.detail)
+            return None, 502, {"detail": "平台密钥解析失败，请联系管理员检查密钥配置"}
         config = attach_platform_env(config, platform_env)
         config["_audit"] = {
             "user_id": user.id,
