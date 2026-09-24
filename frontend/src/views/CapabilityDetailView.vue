@@ -232,15 +232,20 @@ const departmentSuggestions = computed(() => {
 const accessRestrictions = computed(() => {
   const c = cap.value
   if (!c) return []
-  const parts = []
   const policy = c.access_policy || 'open'
-  if (policy === 'admin_only') parts.push('仅管理员')
   const depts = normList(c.allowed_departments)
   const roles = normList(c.allowed_roles)
   const users = normList(c.allowed_users)
-  if (policy === 'restricted' && !(depts.length || roles.length || users.length)) {
-    parts.push('白名单为空（仅管理员/作者可用）')
+  const hasLists = depts.length || roles.length || users.length
+  if (!isOwner.value && !isAdmin.value) {
+    // 非作者/管理员只看策略结论，不暴露名单明细
+    if (policy === 'admin_only') return ['仅管理员']
+    if (policy === 'restricted' || hasLists) return ['访问受限（需授权）']
+    return []
   }
+  const parts = []
+  if (policy === 'admin_only') parts.push('仅管理员')
+  if (policy === 'restricted' && !hasLists) parts.push('白名单为空（仅管理员/作者可用）')
   if (depts.length) parts.push(`部门：${depts.join('、')}`)
   if (roles.length) parts.push(`角色：${roles.map((r) => ROLE_LABELS[r] || r).join('、')}`)
   if (users.length) parts.push(`用户：${users.join('、')}`)
@@ -262,16 +267,17 @@ const subscribeGate = computed(() => {
   if (!(depts.length || roles.length || users.length)) {
     return (c.access_policy || 'open') === 'open'
       ? { ok: true, reason: '' }
-      : { ok: false, reason: '没有该能力的访问权限' }
+      : { ok: false, reason: '访问受限（需授权）' }
   }
+  // 访客只见策略结论，不回显具体名单明细
   if (depts.length && !depts.includes(String(user.department || '').trim())) {
-    return { ok: false, reason: `该能力仅限部门：${depts.join(', ')}` }
+    return { ok: false, reason: '访问受限（需授权）' }
   }
   if (roles.length && !roles.includes(user.role)) {
-    return { ok: false, reason: `该能力仅限角色：${roles.map((r) => ROLE_LABELS[r] || r).join(', ')}` }
+    return { ok: false, reason: '访问受限（需授权）' }
   }
   if (users.length && !users.includes(user.username)) {
-    return { ok: false, reason: '该能力仅限白名单用户' }
+    return { ok: false, reason: '访问受限（需授权）' }
   }
   return { ok: true, reason: '' }
 })
@@ -797,10 +803,11 @@ async function toggleMy() {
     } catch {
       /* ignore refresh errors */
     }
-    if (r?.message) {
+    if (isRemoteOnly.value) {
+      const extra = r?.message && r.message.includes('未加入') ? `；${r.message}` : ''
+      myNotice.value = `已订阅，云端能力订阅即用${extra}`
+    } else if (r?.message) {
       myNotice.value = r.message
-    } else if (isRemoteOnly.value) {
-      myNotice.value = '已订阅，云端能力订阅即用'
     } else if (canLocalInstall.value || cap.value?.type === 'tool') {
       myNotice.value =
         '已加入并启用。打开零号员工 / 桌面工作台刷新后即可安装；复制 cap install 仅作兼容。'

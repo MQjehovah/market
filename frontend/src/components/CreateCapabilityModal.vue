@@ -194,8 +194,9 @@ async function create() {
           allowed_departments: allowedDepartments,
           allowed_roles: allowedRoles
         })
-      } catch {
-        /* 权限已可稍后在详情页配置 */
+      } catch (e) {
+        console.warn('能力已创建，但名单未保存，可到详情页补配', e)
+        error.value = '名单未保存，可到详情页补配'
       }
     }
     emit('created', cap)
