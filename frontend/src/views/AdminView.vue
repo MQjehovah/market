@@ -131,7 +131,7 @@ const gatewayTest = ref({})
 const TOKEN_SCOPE_OPTS = [
   { key: 'runtime', label: 'runtime', desc: '云端 invoke / persona / mcp call' },
   { key: 'gateway', label: 'gateway', desc: '能力级 MCP 网关 /relay/…' },
-  { key: 'sync', label: 'sync', desc: '目录同步 host-sync / capabilities/sync' },
+  { key: 'sync', label: 'sync', desc: '目录同步 capabilities/sync（含 act-as 代理 /my）' },
   { key: 'admin', label: 'admin', desc: '管理接口（慎用）' }
 ]
 const serviceTokens = ref([])

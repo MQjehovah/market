@@ -212,10 +212,9 @@ export const ORCH_LABELS = {
   }
 }
 
-/** 消费方式（控制面如何被用） */
+/** 消费方式（控制面如何被用）；安装与启用由各运行端本地各记，host-sync 仅作兼容不列 */
 export const CONSUME_WAYS = [
   { id: 'sync', label: '目录同步', api: 'GET /api/capabilities/sync', who: '引擎 / CI' },
-  { id: 'host_sync', label: '宿主同步', api: 'GET /api/my/host-sync', who: '零号员工 / 桌面（已加入且启用）' },
   { id: 'download', label: '下载制品', api: 'GET /api/capabilities/{name}/download', who: 'cap / 人工' },
   { id: 'install', label: '本地组装', api: 'cap install', who: 'CLI / 兼容路径' },
   { id: 'local', label: '本地运行', api: 'cap run --mode local', who: '零号员工（市场不执行）' },
@@ -337,7 +336,7 @@ export const RISK_DEFAULT_BADGE = {
 
 /** 加入≠安装：统一文案，避免 Browse / My / Detail 各写一套 */
 export const JOIN_VS_INSTALL_HINT =
-  '「加入」只完成授权。在「我的能力」里保持启用后，零号员工 / 桌面会按 host-sync 拉取；复制 cap install 仅作兼容。也可以直接写你要办的事。'
+  '「加入」只完成授权；安装与启用由零号员工 / 桌面各自本地记录，加入后即可在对应端安装使用（distribution=remote 的云端能力加入即用）。也可以直接写你要办的事。'
 
 /** 连接器线上试用方式：演示免密 / 平台网关 / 需自备凭证 */
 export function mcpTrialMode({ transport = 'stdio', envKeys = [] } = {}) {

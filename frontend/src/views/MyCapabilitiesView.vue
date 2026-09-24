@@ -237,22 +237,6 @@ function askRemoveFromMy(cap) {
   }
 }
 
-async function toggleEnabled(cap) {
-  if (cap.install_policy === 'required') {
-    error.value = `「${cap.name}」为必装能力，不能停用`
-    return
-  }
-  error.value = ''
-  try {
-    const next = cap.enabled === false
-    const r = await api.patch(`/my/capabilities/${cap.id}`, { enabled: next })
-    notice.value = r.message
-    await load()
-  } catch (e) {
-    error.value = e.message
-  }
-}
-
 async function copyInstall(cap) {
   const cmd = installCommandFor(cap)
   if (!cmd) return
@@ -320,7 +304,7 @@ onMounted(() => {
       <div>
         <h1 class="page-title">我的能力</h1>
         <p class="page-desc muted">
-          「自定义」里的启用开关决定零号员工 / 桌面能否从 host-sync 拉到该项。
+          「自定义」是已加入的能力；安装与启用由零号员工 / 桌面各自本地记录。
           「我发布的」走草稿与审核。{{ JOIN_VS_INSTALL_HINT }}
         </p>
       </div>
@@ -377,14 +361,13 @@ onMounted(() => {
         </div>
       </div>
       <div v-else-if="filteredCaps.length === 0 && mainTab === 'added'" class="empty">
-        还没有加入任何能力。去发现页加入并启用后，零号员工会按清单安装。
+        还没有加入任何能力。加入后可在零号员工或桌面安装使用。
         <div style="margin-top: 12px"><a href="/">去发现逛逛</a></div>
       </div>
       <div v-else-if="filteredCaps.length === 0" class="empty">没有符合筛选条件的能力</div>
       <table v-else-if="mainTab === 'added'" class="skill-table customize-table">
         <thead>
           <tr>
-            <th style="width: 72px">启用</th>
             <th>能力</th>
             <th>类型</th>
             <th>更新</th>
@@ -392,19 +375,7 @@ onMounted(() => {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="cap in pagedCaps" :key="cap.id" :class="{ dim: cap.enabled === false }">
-            <td>
-              <button
-                type="button"
-                class="toggle"
-                :class="{ on: cap.enabled !== false, locked: cap.install_policy === 'required' }"
-                :disabled="cap.install_policy === 'required'"
-                :title="cap.install_policy === 'required' ? '必装，不能停用' : (cap.enabled === false ? '点击启用' : '点击停用')"
-                @click="toggleEnabled(cap)"
-              >
-                <span class="toggle-knob" />
-              </button>
-            </td>
+          <tr v-for="cap in pagedCaps" :key="cap.id">
             <td>
               <div class="skill-cell">
                 <div class="skill-icon" :style="{ background: typeColor(cap.type) }">{{ typeInitial(cap.type) }}</div>
@@ -677,21 +648,6 @@ onMounted(() => {
 }
 .page-size { max-width: 110px; }
 
-.toggle {
-  width: 40px; height: 22px; border-radius: 999px; border: none;
-  background: #cfd6e0; position: relative; cursor: pointer; padding: 0;
-  transition: background .15s ease;
-}
-.toggle.on { background: var(--primary); }
-.toggle.locked { opacity: 0.55; cursor: not-allowed; }
-.toggle-knob {
-  position: absolute; top: 2px; left: 2px;
-  width: 18px; height: 18px; border-radius: 50%; background: #fff;
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.2);
-  transition: left .15s ease;
-}
-.toggle.on .toggle-knob { left: 20px; }
-.dim { opacity: 0.55; }
 .customize-table td { padding-top: 12px; padding-bottom: 12px; }
 
 .confirm-mask {

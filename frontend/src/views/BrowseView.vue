@@ -298,9 +298,9 @@ async function addToMy(cap) {
     } else if (r?.message) {
       notice.value = r.message
     } else if (isLocalInstallKind(cap.type)) {
-      notice.value = `已加入「${cap.name}」。下一步：打开详情，在零号员工中启用。`
+      notice.value = `已加入「${cap.name}」。可打开详情本地安装，或在零号员工 / 桌面中安装使用。`
     } else if (cap.type === 'agent' || cap.type === 'mcp') {
-      notice.value = `已加入「${cap.name}」。下一步：打开详情试用或启用到宿主。`
+      notice.value = `已加入「${cap.name}」。下一步：打开详情试用，或在零号员工 / 桌面中安装使用。`
     } else {
       notice.value = `已加入「${cap.name}」。`
     }

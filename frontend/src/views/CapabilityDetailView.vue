@@ -60,10 +60,10 @@ const versionSuggestions = ref({ current: '', major: '', minor: '', patch: '' })
 const uploading = ref(false)
 const saving = ref(false)
 const myIds = ref(new Set())
-const myEnabled = ref(new Map())
 const myNotice = ref('')
 const confirmRemove = ref(false)
-const hostBusy = ref(false)
+const subscribedNames = ref(new Set())
+const subBusy = ref(false)
 const copyNotice = ref('')
 const accessPolicy = ref('open')
 const installPolicy = ref('optional')
@@ -566,11 +566,7 @@ const mcpTrial = computed(() =>
   })
 )
 const joined = computed(() => Boolean(cap.value && myIds.value.has(cap.value.id)))
-const hostEnabled = computed(() => {
-  if (!cap.value) return false
-  const v = myEnabled.value.get(cap.value.id)
-  return v !== false
-})
+const subscribed = computed(() => Boolean(cap.value && subscribedNames.value.has(cap.value.name)))
 const canRuntime = computed(() => isOwner.value || isAdmin.value || joined.value)
 const canTrialMcp = computed(() => {
   if (!isMcp.value || !isPublished.value || !authState.token) return false
@@ -594,31 +590,17 @@ const nextStep = computed(() => {
     return { kind: 'mine', label: '去我的能力' }
   }
   if (!joined.value) {
-    if (isRemoteOnly.value) return { kind: 'join', label: '加入' }
-    if (canLocalInstall.value || cap.value.type === 'tool') {
-      return { kind: 'join', label: isPlugin.value ? '加入并启用 · 能力包' : '加入并启用到零号员工' }
-    }
     return { kind: 'join', label: isPlugin.value ? '加入 · 能力包' : '加入' }
-  }
-  if (isRemoteOnly.value) return trialLike()
-  if (canLocalInstall.value || cap.value.type === 'tool') {
-    if (!hostEnabled.value) return { kind: 'host', label: '在零号员工中启用' }
-    return { kind: 'host-done', label: '已列入零号员工清单' }
   }
   return trialLike()
 })
-const extraTrial = computed(() => {
-  if (!joined.value || !['host', 'host-done'].includes(nextStep.value?.kind)) return null
-  if (showAskTrial.value && askAgentName.value && (isAgent.value || isPlugin.value)) {
-    return { kind: 'trial', label: '或先问一句试用' }
+/** 已加入后的统一口径：安装与启用由各运行端本地各记（按 distribution 细化） */
+const joinedHint = computed(() => {
+  if (cap.value?.distribution === 'remote') return '已加入，云端能力加入即用（无需安装）。'
+  if (cap.value?.distribution === 'local') {
+    return '已加入 · 可在零号员工或桌面安装使用（本地安装）。'
   }
-  if (usedByAgents.value.length) {
-    return { kind: 'trial-agent', label: `或先问一句 · ${usedByAgents.value[0].name}` }
-  }
-  if (canTrialCurrent.value) {
-    return { kind: 'trial', label: '或先试用连接器' }
-  }
-  return null
+  return '已加入 · 可在零号员工或桌面安装使用（本地安装 / 云端托管）。'
 })
 const mcpClientConfigJson = computed(() => {
   if (!cap.value || !isMcp.value) return ''
@@ -834,29 +816,14 @@ async function loadMy() {
   try {
     const items = await api.get('/my/capabilities?scope=added')
     myIds.value = new Set(items.map((c) => c.id))
-    myEnabled.value = new Map(items.map((c) => [c.id, c.enabled !== false]))
   } catch {
     myIds.value = new Set()
-    myEnabled.value = new Map()
   }
-}
-
-async function enableForHost() {
-  myNotice.value = ''
-  hostBusy.value = true
   try {
-    if (!myIds.value.has(props.id)) {
-      await api.post('/my/capabilities', { capability_id: props.id })
-      myIds.value = new Set([...myIds.value, props.id])
-    }
-    await api.patch(`/my/capabilities/${props.id}`, { enabled: true })
-    myEnabled.value = new Map([...myEnabled.value, [props.id, true]])
-    myNotice.value =
-      '已启用并写入宿主同步清单。打开零号员工 / 桌面工作台，刷新「我的能力」后安装；停用后下次同步会忽略。'
-  } catch (e) {
-    myNotice.value = e.message
-  } finally {
-    hostBusy.value = false
+    const subs = await api.get('/my/subscriptions')
+    subscribedNames.value = new Set(subs?.names || [])
+  } catch {
+    subscribedNames.value = new Set()
   }
 }
 
@@ -877,30 +844,15 @@ async function toggleMy() {
   try {
     const r = await api.post('/my/capabilities', { capability_id: props.id })
     myIds.value = new Set([...myIds.value, props.id])
-    myEnabled.value = new Map([...myEnabled.value, [props.id, true]])
-    // 专家会随依赖一并加入；刷新「我的」id 集合
+    // 专家/能力包会随依赖一并加入；刷新「我的」id 集合
     try {
       const mine = await api.get('/my/capabilities?scope=added')
       myIds.value = new Set((mine || []).filter((c) => c.added).map((c) => c.id))
-      myEnabled.value = new Map(
-        (mine || []).filter((c) => c.added).map((c) => [c.id, c.enabled !== false])
-      )
     } catch {
       /* ignore refresh errors */
     }
-    if (isRemoteOnly.value) {
-      const extra = r?.message && r.message.includes('未加入') ? `；${r.message}` : ''
-      myNotice.value = `已加入，云端能力加入即用${extra}`
-    } else if (r?.message) {
-      myNotice.value = r.message
-    } else if (canLocalInstall.value || cap.value?.type === 'tool') {
-      myNotice.value =
-        '已加入并启用。打开零号员工 / 桌面工作台刷新后即可安装；复制 cap install 仅作兼容。'
-    } else if (usedByAgents.value.length || canTrialCurrent.value) {
-      myNotice.value = '已加入。下一步：先试用，确认可用再启用到宿主。'
-    } else {
-      myNotice.value = '已加入我的能力'
-    }
+    const extra = r?.message && r.message.includes('未加入') ? `；${r.message}` : ''
+    myNotice.value = joinedHint.value + extra
   } catch (e) {
     myNotice.value = e.message
   }
@@ -914,9 +866,6 @@ async function removeMine() {
     const next = new Set(myIds.value)
     next.delete(props.id)
     myIds.value = next
-    const nextEn = new Map(myEnabled.value)
-    nextEn.delete(props.id)
-    myEnabled.value = nextEn
     myNotice.value = r.message
   } catch (e) {
     myNotice.value = e.message
@@ -1111,13 +1060,28 @@ async function submitRating() {
   }
 }
 
-async function subscribe() {
+async function toggleSubscribe() {
+  if (!cap.value || subBusy.value) return
   error.value = ''
+  notice.value = ''
+  subBusy.value = true
+  const name = cap.value.name
   try {
-    await api.post('/subscriptions', { capability_name: cap.value.name })
-    notice.value = '订阅成功，新版本发布时将收到通知'
+    if (subscribed.value) {
+      await api.delete(`/subscriptions?capability_name=${encodeURIComponent(name)}`)
+      const next = new Set(subscribedNames.value)
+      next.delete(name)
+      subscribedNames.value = next
+      notice.value = '已取消订阅更新'
+    } else {
+      await api.post('/subscriptions', { capability_name: name })
+      subscribedNames.value = new Set([...subscribedNames.value, name])
+      notice.value = '订阅成功，新版本发布时将收到通知'
+    }
   } catch (e) {
     error.value = e.message
+  } finally {
+    subBusy.value = false
   }
 }
 
@@ -2067,17 +2031,6 @@ onMounted(() => {
                 class="btn btn-block btn-lg btn-primary"
               >{{ nextStep.label }}</router-link>
               <button
-                v-else-if="nextStep?.kind === 'host'"
-                class="btn btn-block btn-lg btn-primary"
-                type="button"
-                :disabled="hostBusy"
-                @click="enableForHost"
-              >{{ hostBusy ? '启用中…' : nextStep.label }}</button>
-              <div v-else-if="nextStep?.kind === 'host-done'" class="aside-host-done">
-                <span class="badge badge-success">{{ nextStep.label }}</span>
-                <router-link to="/my" class="aside-link">管理启用状态</router-link>
-              </div>
-              <button
                 v-else-if="nextStep?.kind === 'trial-agent'"
                 class="btn btn-block btn-lg btn-primary"
                 type="button"
@@ -2094,12 +2047,6 @@ onMounted(() => {
                 to="/my"
                 class="btn btn-block btn-lg btn-primary"
               >{{ nextStep.label }}</router-link>
-              <button
-                v-if="extraTrial"
-                class="aside-link"
-                type="button"
-                @click="extraTrial.kind === 'trial-agent' ? openTrialAgent(usedByAgents[0]) : openTrial()"
-              >{{ extraTrial.label }}</button>
               <p v-if="nextStep?.kind === 'join' && !canSubscribe" class="aside-hint aside-deny">
                 {{ subscribeBlockedReason }}
               </p>
@@ -2122,7 +2069,13 @@ onMounted(() => {
               <button v-if="!isRemoteOnly" class="aside-link" type="button" @click="downloadArtifact">
                 下载 zip{{ packageSizeLabel ? ` · ${packageSizeLabel}` : '' }}
               </button>
-              <button v-if="authState.token" class="aside-link" type="button" @click="subscribe">订阅更新</button>
+              <button
+                v-if="authState.token"
+                class="aside-link"
+                type="button"
+                :disabled="subBusy"
+                @click="toggleSubscribe"
+              >{{ subscribed ? '取消订阅更新' : '订阅更新' }}</button>
               <router-link v-if="authState.token && nextStep?.kind !== 'mine'" to="/my" class="aside-link">我的能力</router-link>
             </div>
             <p class="aside-hint muted">
@@ -2130,11 +2083,7 @@ onMounted(() => {
                 云端能力加入即用：无需安装，加入后即可在云端调用或试用。{{ isMcp ? mcpTrial.hint : '' }}
               </template>
               <template v-else-if="!joined">先加入，完成授权。{{ JOIN_VS_INSTALL_HINT }}</template>
-              <template v-else-if="['host', 'host-done'].includes(nextStep?.kind)">
-                启用后进入 <code>GET /api/my/host-sync</code>；零号员工 / 桌面按清单安装。{{ isMcp ? mcpTrial.hint : '' }}
-              </template>
-              <template v-else-if="isMcp">{{ mcpTrial.hint }}</template>
-              <template v-else>本类型不走宿主清单。加入后请用云端接口，或在能力编排中引用。</template>
+              <template v-else>{{ joinedHint }}{{ isMcp ? ` ${mcpTrial.hint}` : '' }}</template>
             </p>
           </template>
           <template v-else>
@@ -2341,9 +2290,6 @@ onMounted(() => {
   color: var(--muted); font-size: 12px; cursor: pointer; text-decoration: underline;
 }
 .aside-link:hover { color: var(--primary); }
-.aside-host-done {
-  display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
-}
 .aside-meta {
   margin: 16px 0 0; padding-top: 14px; border-top: 1px solid var(--border);
   display: grid; gap: 8px;
