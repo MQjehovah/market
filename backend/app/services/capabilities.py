@@ -274,11 +274,24 @@ async def get_visible_capabilities(
     return [cap for cap in result if is_capability_visible(cap, user)]
 
 
+def normalize_cap_name(name: str) -> str:
+    """能力名规范化：去除首尾空白，空名 422。
+
+    写入端必须统一调用：归属判定 / 平台密钥等按名资源解析都会 strip，
+    带首尾空白的名称会造成同名绕过（跨作者 shadow / 认领他人密钥命名空间）。
+    """
+    normalized = (name or "").strip()
+    if not normalized:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "能力名称不能为空")
+    return normalized
+
+
 async def ensure_name_ownership(db: AsyncSession, name: str, user: User) -> None:
     """名称归属：同名已存在且存在非本人作者的行 → 403；同作者多版本放行。
 
     admin 不豁免（代管走编辑既有行，见 publish _require_owner）。
     所有可能创建新 name 能力行的入口（市场创建、工作流、组装、plugin 组件等）都应调用。
+    调用前须已经 ``normalize_cap_name``（本函数仅兜底 strip 查询）。
     """
     cap_name = (name or "").strip()
     if not cap_name:
@@ -298,18 +311,19 @@ async def ensure_name_ownership(db: AsyncSession, name: str, user: User) -> None
 async def create_capability(
     db: AsyncSession, user: User, data: CapabilityCreate
 ) -> Capability:
+    name = normalize_cap_name(data.name)
     exists = await db.scalar(
         select(Capability.id).where(
-            and_(Capability.name == data.name, Capability.version == data.version)
+            and_(Capability.name == name, Capability.version == data.version)
         )
     )
     if exists:
         raise HTTPException(
-            status.HTTP_409_CONFLICT, f"能力 {data.name} 已存在版本 {data.version}"
+            status.HTTP_409_CONFLICT, f"能力 {name} 已存在版本 {data.version}"
         )
-    await ensure_name_ownership(db, data.name, user)
+    await ensure_name_ownership(db, name, user)
     cap = Capability(
-        name=data.name,
+        name=name,
         description=data.description,
         type=data.type,
         version=data.version,
@@ -361,7 +375,8 @@ async def update_capability(
     db: AsyncSession, cap: Capability, data: CapabilityUpdate
 ) -> Capability:
     siblings = await _sibling_count(db, cap)
-    if data.name is not None and data.name != cap.name:
+    new_name = normalize_cap_name(data.name) if data.name is not None else cap.name
+    if new_name != cap.name:
         if siblings:
             raise HTTPException(
                 status.HTTP_409_CONFLICT, "该能力已有其他版本，不能改名"
@@ -371,7 +386,7 @@ async def update_capability(
             select(Capability.id)
             .where(
                 and_(
-                    Capability.name == data.name,
+                    Capability.name == new_name,
                     Capability.author_id != cap.author_id,
                     Capability.id != cap.id,
                 )
@@ -381,12 +396,12 @@ async def update_capability(
         if foreign:
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN,
-                f"能力名称 {data.name} 已被其他作者占用，不能改名",
+                f"能力名称 {new_name} 已被其他作者占用，不能改名",
             )
         taken = await db.scalar(
             select(Capability.id).where(
                 and_(
-                    Capability.name == data.name,
+                    Capability.name == new_name,
                     Capability.version == cap.version,
                     Capability.id != cap.id,
                 )
@@ -394,10 +409,10 @@ async def update_capability(
         )
         if taken:
             raise HTTPException(
-                status.HTTP_409_CONFLICT, f"能力 {data.name} 已存在版本 {cap.version}"
+                status.HTTP_409_CONFLICT, f"能力 {new_name} 已存在版本 {cap.version}"
             )
         old_name = cap.name
-        cap.name = data.name
+        cap.name = new_name
         # 改名要求无其他版本（siblings==0）：旧名最后一行释放，清理其平台密钥
         from app.services.capability_secrets import delete_capability_secrets_by_name
 

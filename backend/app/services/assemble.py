@@ -22,7 +22,12 @@ from sqlalchemy.orm import joinedload, selectinload
 
 from app.models import Capability, CapabilityArtifact, User
 from app.schemas import AssembleDependency, AssembleRequest
-from app.services.capabilities import ensure_name_ownership, parse_semver, to_capability_out
+from app.services.capabilities import (
+    ensure_name_ownership,
+    normalize_cap_name,
+    parse_semver,
+    to_capability_out,
+)
 from app.storage import get_storage
 
 
@@ -151,6 +156,8 @@ def build_assembled_package(
 
 async def assemble_agent(db: AsyncSession, user: User, data: AssembleRequest) -> Capability:
     """组装并创建 agent 能力（draft + 能力包工件）。"""
+    # 名称规范化：落库与包内 agent.json 保持一致（防首尾空白绕过按名判定）
+    data.name = normalize_cap_name(data.name)
     persona = await _resolve_published_cap(db, user, data.persona, "agent", data.persona_version)
     dep_caps: list[tuple[Capability, AssembleDependency]] = []
     seen: set[tuple[str, str]] = set()

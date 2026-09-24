@@ -19,7 +19,7 @@ from app.schemas import (
     WorkflowExecutionOut,
     WorkflowUpdate,
 )
-from app.services.capabilities import ensure_name_ownership, to_capability_out
+from app.services.capabilities import ensure_name_ownership, normalize_cap_name, to_capability_out
 from app.services.marketplace import resolve_capability
 from app.services.workflows import execute_workflow, load_workflow_definition, validate_definition
 from app.storage import get_storage
@@ -42,10 +42,11 @@ def _workflow_zip(workflow: dict) -> bytes:
 @router.post("/workflows", response_model=CapabilityOut, status_code=status.HTTP_201_CREATED)
 async def create_workflow(data: WorkflowCreate, db: DbSession, user: CurrentUser):
     """从 workflow.json 直接创建 workflow 能力（draft + 能力包）。"""
+    name = normalize_cap_name(data.name)
     exists = await db.scalar(
         select(Capability.id).where(
             and_(
-                Capability.name == data.name,
+                Capability.name == name,
                 Capability.version == data.version,
                 Capability.type == "workflow",
             )
@@ -53,15 +54,15 @@ async def create_workflow(data: WorkflowCreate, db: DbSession, user: CurrentUser
     )
     if exists:
         raise HTTPException(
-            status.HTTP_409_CONFLICT, f"工作流 {data.name} 已存在版本 {data.version}"
+            status.HTTP_409_CONFLICT, f"工作流 {name} 已存在版本 {data.version}"
         )
     # 名称归属：同名只能由既有作者继续发版本（防抢注同名后污染按名资源）
-    await ensure_name_ownership(db, data.name, user)
+    await ensure_name_ownership(db, name, user)
     pkg = _workflow_zip(data.workflow)
     from app.services.packages import extract_readme_text
 
     cap = Capability(
-        name=data.name,
+        name=name,
         description=data.description,
         type="workflow",
         version=data.version,

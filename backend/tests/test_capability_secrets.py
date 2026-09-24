@@ -829,3 +829,53 @@ async def test_rename_last_row_clears_old_name_secrets(client, publisher_headers
     assert r.status_code == 200, r.text
     async with SessionLocal() as db:
         assert await list_capability_secrets(db, old_name) == []
+
+
+@pytest.mark.asyncio
+async def test_whitespace_name_normalized_and_no_ownership_bypass(
+    client, publisher_headers, admin_headers
+):
+    """写入端统一 strip：带空白名落库为 strip 后名称，且无法绕过归属判定。"""
+    from sqlalchemy import select
+
+    from app.database import SessionLocal
+    from app.models import Capability
+
+    name = "空格归属能力"
+    r = await client.post(
+        "/api/publish/capabilities",
+        headers=publisher_headers,
+        json={"name": f"{name} ", "type": "tool", "version": "1.0.0"},
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["name"] == name  # 带尾空格建名 → 落库为 strip 后名称
+    cap_id = r.json()["id"]
+    async with SessionLocal() as db:
+        row = await db.scalar(select(Capability).where(Capability.id == cap_id))
+        assert row.name == name
+
+    await _create_user(client, admin_headers, "space-thief")
+    thief_headers = await _login(client, "space-thief")
+    # 精确同名（换版本避开 409）→ 403 归属拦截
+    r = await client.post(
+        "/api/publish/capabilities",
+        headers=thief_headers,
+        json={"name": name, "type": "tool", "version": "1.0.1"},
+    )
+    assert r.status_code == 403, r.text
+    # 空白变体（strip 后同名）同样 403：规范化后归属判定命中
+    r = await client.post(
+        "/api/publish/capabilities",
+        headers=thief_headers,
+        json={"name": f" {name} ", "type": "tool", "version": "1.0.2"},
+    )
+    assert r.status_code == 403, r.text
+    assert "占用" in r.json()["detail"]
+
+    # 纯空白名 → 422（normalize 拒绝空名）
+    r = await client.post(
+        "/api/publish/capabilities",
+        headers=publisher_headers,
+        json={"name": "   ", "type": "tool", "version": "9.9.9"},
+    )
+    assert r.status_code == 422, r.text
