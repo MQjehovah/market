@@ -1226,29 +1226,6 @@ onMounted(() => {
               <div class="guide-body prose">{{ cap.changelog }}</div>
             </div>
 
-            <div v-if="isMcp" class="guide-block">
-              <h3 class="guide-title">核心能力 · 工具</h3>
-              <div v-if="mcpMetaLoading" class="muted" style="font-size: 13px">加载 tools.json…</div>
-              <div v-else-if="!mcpToolRows.length" class="muted" style="font-size: 13px">
-                暂无工具清单。可在能力包 <code>tools.json</code> 声明，或连接后由服务端发现。
-              </div>
-              <table v-else class="table">
-                <thead><tr><th>工具名称</th><th>描述</th></tr></thead>
-                <tbody>
-                  <tr v-for="t in mcpToolRows" :key="t.name">
-                    <td><code>{{ t.name }}</code></td>
-                    <td class="muted">{{ t.description || '—' }}</td>
-                  </tr>
-                </tbody>
-              </table>
-              <button
-                v-if="mcpToolRows.length"
-                class="btn btn-sm mt-12"
-                type="button"
-                @click="contentTab = 'tools'"
-              >查看全部工具</button>
-            </div>
-
             <div v-if="isMcp && dashboardConsume" class="guide-block">
               <h3 class="guide-title">桌面工作台</h3>
               <p class="muted" style="font-size: 13px">
