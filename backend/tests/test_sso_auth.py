@@ -186,12 +186,14 @@ async def db(tmp_path):
         await engine.dispose()
 
 
-def _sso_employee_token(key, emp_no=SSO_EMP_NO, name=None, email=None):
+def _sso_employee_token(key, emp_no=SSO_EMP_NO, name=None, email=None, dept=None):
     claims = {"sub": emp_no}
     if name is not None:
         claims["name"] = name
     if email is not None:
         claims["email"] = email
+    if dept is not None:
+        claims["dept"] = dept
     return sign_token(valid_claims(**claims), key)
 
 
@@ -260,6 +262,60 @@ async def test_get_current_user_sso_without_email_uses_derived_fallback(sso_env,
     assert user.username == "20001"
     assert user.email == "20001@sso.local"
     assert user.display_name == "无名氏"
+
+
+async def test_get_current_user_sso_provisions_department(sso_env, db):
+    """带 dept claim 首登建号：department 取 SSO 值。"""
+    key, _ = sso_env
+    token = _sso_employee_token(key, emp_no="40001", name="部门员工", dept="智能装备部")
+
+    user = await get_current_user(token, db)
+
+    assert user.department == "智能装备部"
+
+
+async def test_get_current_user_sso_updates_department_on_change(sso_env, db):
+    """已有用户再次登录 dept 变更：以 SSO 为权威源回写。"""
+    key, _ = sso_env
+    first = await get_current_user(_sso_employee_token(key, emp_no="40002", dept="旧部门"), db)
+    assert first.department == "旧部门"
+
+    second = await get_current_user(_sso_employee_token(key, emp_no="40002", dept="新部门"), db)
+
+    assert second.id == first.id
+    assert second.department == "新部门"
+
+
+async def test_get_current_user_sso_keeps_manual_department_when_claim_empty(sso_env, db):
+    """claim 缺 dept / 空串 / 纯空白时不覆盖管理员手工填写的部门。"""
+    key, _ = sso_env
+    manual = User(
+        id="u-manual-dept",
+        username="202202100024",
+        email="manual-dept@xzrobot.com",
+        password_hash=hash_password("unused"),
+        display_name="手工部门",
+        role="user",
+        department="手工填写部门",
+        is_active=True,
+    )
+    db.add(manual)
+    await db.commit()
+
+    got = await get_current_user(
+        _sso_employee_token(key, emp_no="202202100024", email="manual-dept@xzrobot.com"), db
+    )
+    assert got.department == "手工填写部门"
+
+    got = await get_current_user(
+        _sso_employee_token(key, emp_no="202202100024", email="manual-dept@xzrobot.com", dept=""), db
+    )
+    assert got.department == "手工填写部门"
+
+    got = await get_current_user(
+        _sso_employee_token(key, emp_no="202202100024", email="manual-dept@xzrobot.com", dept="   "), db
+    )
+    assert got.department == "手工填写部门"
 
 
 async def test_get_current_user_sso_rejects_invalid_token(sso_env, db):

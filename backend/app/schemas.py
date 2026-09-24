@@ -39,6 +39,7 @@ class UserOut(BaseModel):
     role: str
     organization: str
     team: str
+    department: str = ""
     is_active: bool = True
     created_at: datetime
 
@@ -50,6 +51,7 @@ class UserAdminCreate(BaseModel):
     display_name: str = Field(default="", max_length=64)
     organization: str = Field(default="", max_length=100)
     team: str = Field(default="", max_length=100)
+    department: str = Field(default="", max_length=100)
     role: Literal["admin", "publisher", "user"] = "user"
 
 
@@ -60,6 +62,7 @@ class UserAdminUpdate(BaseModel):
     display_name: str | None = Field(default=None, max_length=64)
     organization: str | None = Field(default=None, max_length=100)
     team: str | None = Field(default=None, max_length=100)
+    department: str | None = Field(default=None, max_length=100)
     role: Literal["admin", "publisher", "user"] | None = None
     is_active: bool | None = None
 

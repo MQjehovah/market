@@ -167,6 +167,8 @@ async def update_user(user_id: str, data: UserAdminUpdate, db: DbSession, user: 
         target.organization = data.organization
     if data.team is not None:
         target.team = data.team
+    if data.department is not None:
+        target.department = data.department
     if data.password:
         target.password_hash = hash_password(data.password)
     await db.commit()
@@ -222,6 +224,7 @@ async def create_user(data: UserAdminCreate, db: DbSession, user: CurrentUser):
         display_name=data.display_name or data.username,
         organization=data.organization,
         team=data.team,
+        department=data.department,
         role=data.role,
     )
     db.add(new_user)

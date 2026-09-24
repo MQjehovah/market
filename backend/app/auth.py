@@ -178,6 +178,11 @@ async def _resolve_sso_user(
     if claim_name and user.display_name != claim_name:
         user.display_name = claim_name
         changed = True
+    # 部门以 SSO 为权威源；claim 为空时保留管理员手工填写的值
+    claim_dept = (claims.get("dept") or "").strip()
+    if claim_dept and (user.department or "") != claim_dept:
+        user.department = claim_dept
+        changed = True
     if changed:
         await db.commit()
     if not user.is_active:
@@ -200,6 +205,7 @@ def _new_sso_user(username: str, claims: dict) -> User:
         password_hash=hash_password(secrets.token_urlsafe(32)),
         display_name=claims.get("name") or claims.get("display_name") or username,
         role="user",
+        department=(claims.get("dept") or "").strip(),
         is_active=True,
     )
 

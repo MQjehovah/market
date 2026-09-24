@@ -94,6 +94,7 @@ const userForm = ref({
   password: '',
   display_name: '',
   organization: '',
+  department: '',
   role: 'user'
 })
 const editForm = ref({
@@ -101,6 +102,7 @@ const editForm = ref({
   display_name: '',
   email: '',
   organization: '',
+  department: '',
   password: ''
 })
 const debugType = ref('tool')
@@ -254,6 +256,10 @@ const filteredUsers = computed(() => {
   )
 })
 
+const departmentOptions = computed(() => [
+  ...new Set(users.value.map((u) => (u.department || '').trim()).filter(Boolean))
+])
+
 async function load() {
   error.value = ''
   try {
@@ -366,11 +372,12 @@ async function createUser() {
       password: f.password,
       display_name: f.display_name,
       organization: f.organization,
+      department: f.department,
       role: f.role
     })
     userNotice.value = `已创建用户 ${u.username}（${roleDefs.find((r) => r.key === u.role)?.label}）`
     showCreateUser.value = false
-    userForm.value = { username: '', email: '', password: '', display_name: '', organization: '', role: 'user' }
+    userForm.value = { username: '', email: '', password: '', display_name: '', organization: '', department: '', role: 'user' }
     await load()
   } catch (e) {
     error.value = e.message
@@ -388,6 +395,7 @@ function openEditUser(u) {
     display_name: u.display_name || '',
     email: u.email || '',
     organization: u.organization || '',
+    department: u.department || '',
     password: ''
   }
   showEditUser.value = true
@@ -402,6 +410,7 @@ async function saveEditUser() {
   if (f.display_name !== (editUser.value.display_name || '')) patch.display_name = f.display_name
   if (f.email !== (editUser.value.email || '')) patch.email = f.email
   if (f.organization !== (editUser.value.organization || '')) patch.organization = f.organization
+  if (f.department !== (editUser.value.department || '')) patch.department = f.department
   if (f.password) patch.password = f.password
   if (Object.keys(patch).length === 0) {
     showEditUser.value = false
@@ -1013,15 +1022,16 @@ watch(
         <div v-if="userNotice" class="alert alert-success">{{ userNotice }}</div>
         <table class="table mt-16">
           <thead>
-            <tr><th>用户</th><th>邮箱</th><th>组织</th><th>角色</th><th>状态</th><th>操作</th></tr>
+            <tr><th>用户</th><th>邮箱</th><th>部门</th><th>组织</th><th>角色</th><th>状态</th><th>操作</th></tr>
           </thead>
           <tbody>
             <tr v-if="filteredUsers.length === 0">
-              <td colspan="6" class="muted">{{ userQuery ? '无匹配用户' : '暂无用户' }}</td>
+              <td colspan="7" class="muted">{{ userQuery ? '无匹配用户' : '暂无用户' }}</td>
             </tr>
             <tr v-for="u in filteredUsers" :key="u.id">
               <td>{{ u.display_name || u.username }} <span class="muted">@{{ u.username }}</span></td>
               <td>{{ u.email }}</td>
+              <td>{{ u.department || '-' }}</td>
               <td>{{ u.organization || u.team || '-' }}</td>
               <td>
                 <select :value="u.role" class="select" style="width: auto; padding: 4px 8px" :disabled="isSelf(u)" @change="updateUser(u, { role: $event.target.value })">
@@ -1044,6 +1054,9 @@ watch(
             </tr>
           </tbody>
         </table>
+        <datalist id="dept-suggest">
+          <option v-for="d in departmentOptions" :key="d" :value="d"></option>
+        </datalist>
       </section>
 
       <section v-else-if="section === 'gateway'">
@@ -1223,6 +1236,7 @@ watch(
           <div class="field"><label>初始密码 *</label><input v-model="userForm.password" type="password" class="input" placeholder="至少 6 位" /></div>
           <div class="field"><label>显示名</label><input v-model="userForm.display_name" class="input" /></div>
           <div class="field"><label>组织</label><input v-model="userForm.organization" class="input" /></div>
+          <div class="field"><label>部门</label><input v-model="userForm.department" class="input" list="dept-suggest" placeholder="如：研发部" /></div>
         </div>
         <div class="field mt-12">
           <label>角色</label>
@@ -1252,6 +1266,7 @@ watch(
           <div class="field"><label>邮箱</label><input v-model="editForm.email" class="input" /></div>
           <div class="field"><label>显示名</label><input v-model="editForm.display_name" class="input" /></div>
           <div class="field"><label>组织</label><input v-model="editForm.organization" class="input" /></div>
+          <div class="field"><label>部门</label><input v-model="editForm.department" class="input" list="dept-suggest" placeholder="如：研发部" /></div>
           <div class="field"><label>重置密码（留空不改）</label><input v-model="editForm.password" type="password" class="input" placeholder="至少 6 位" /></div>
         </div>
         <div v-if="error" class="alert alert-error mt-12">{{ error }}</div>

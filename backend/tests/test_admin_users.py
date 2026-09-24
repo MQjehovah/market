@@ -234,3 +234,60 @@ async def test_cannot_disable_or_demote_self(client, admin_headers):
     # 管理员账号仍可用
     r = await client.post("/api/auth/login", json={"username": "admin", "password": "test-seed-admin-password-32-bytes!!"})
     assert r.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_admin_create_and_update_user_department(client, admin_headers):
+    """创建/列表/更新用户部门；更新允许清空为 ""，未传则保持不变。"""
+    r = await client.post(
+        "/api/admin/users",
+        headers=admin_headers,
+        json={
+            "username": "deptuser",
+            "email": "deptuser@example.com",
+            "password": "secret123",
+            "department": "研发部",
+        },
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["department"] == "研发部"
+    uid = body["id"]
+
+    # 列表接口同样输出 department
+    r = await client.get("/api/admin/users", headers=admin_headers)
+    row = next(u for u in r.json() if u["id"] == uid)
+    assert row["department"] == "研发部"
+
+    # 更新部门
+    r = await client.patch(
+        f"/api/admin/users/{uid}", headers=admin_headers, json={"department": "市场部"}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["department"] == "市场部"
+
+    # 允许清空为 ""
+    r = await client.patch(
+        f"/api/admin/users/{uid}", headers=admin_headers, json={"department": ""}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["department"] == ""
+
+    # 未传 department 的更新不影响现值
+    r = await client.patch(
+        f"/api/admin/users/{uid}", headers=admin_headers, json={"department": "财务部"}
+    )
+    assert r.json()["department"] == "财务部"
+    r = await client.patch(
+        f"/api/admin/users/{uid}", headers=admin_headers, json={"display_name": "改名"}
+    )
+    assert r.json()["department"] == "财务部"
+
+    # 不传 department 创建默认空串
+    r = await client.post(
+        "/api/admin/users",
+        headers=admin_headers,
+        json={"username": "nodept", "email": "nodept@example.com", "password": "secret123"},
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["department"] == ""

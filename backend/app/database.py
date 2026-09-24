@@ -125,5 +125,11 @@ async def _auto_migrate(conn) -> None:
                 sync_conn.exec_driver_sql(
                     "ALTER TABLE mcp_gateway_servers ADD COLUMN capability_id VARCHAR(36) DEFAULT ''"
                 )
+        if "users" in tables:
+            user_cols = {c["name"] for c in inspector.get_columns("users")}
+            if "department" not in user_cols:
+                sync_conn.exec_driver_sql(
+                    "ALTER TABLE users ADD COLUMN department VARCHAR(100) DEFAULT ''"
+                )
 
     await conn.run_sync(_do)

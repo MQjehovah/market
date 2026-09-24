@@ -37,6 +37,7 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(16), default="user")  # admin | publisher | user
     organization: Mapped[str] = mapped_column(String(100), default="")
     team: Mapped[str] = mapped_column(String(100), default="")
+    department: Mapped[str] = mapped_column(String(100), default="")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
