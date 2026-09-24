@@ -455,10 +455,7 @@ watch(
       <div class="hero-stats">
         <div v-if="showDiscovery" class="hero-stat"><strong>{{ hotCaps.length || '—' }}</strong><span>近期热门</span></div>
         <div v-if="showDiscovery" class="hero-stat"><strong>{{ ratedCaps.length || '—' }}</strong><span>高分精选</span></div>
-        <div v-if="showDiscovery" class="hero-stat hero-stat-link" role="button" tabindex="0" @click="selectBrowseTab('agent')" @keyup.enter="selectBrowseTab('agent')">
-          <strong>助手</strong><span>去目录浏览 →</span>
-        </div>
-        <div v-else class="hero-stat"><strong>{{ total }}</strong><span>{{ showTaskSearch ? '匹配能力' : '当前结果' }}</span></div>
+        <div v-if="!showDiscovery" class="hero-stat"><strong>{{ total }}</strong><span>{{ showTaskSearch ? '匹配能力' : '当前结果' }}</span></div>
       </div>
     </section>
     <div v-if="notice" class="alert alert-success mb-16">
