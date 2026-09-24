@@ -52,6 +52,12 @@ def _with_query(target: str, **params: str) -> str:
     return target + sep + urllib.parse.urlencode(extra)
 
 
+@router.get("/sso/config")
+async def sso_config():
+    """前端登录页判断是否默认走企业统一登录(SSO)。"""
+    return {"enabled": sso_auth.is_login_configured()}
+
+
 @router.get("/sso/start")
 async def sso_start(next: str = ""):
     """生成一次性 state 并 302 跳转到 SSO authorize 页。next 只接受站内路径。"""

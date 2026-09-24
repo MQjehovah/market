@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
 import { clearAuth, setAuth } from '../stores/auth'
@@ -11,6 +11,8 @@ const form = ref({ username: '', password: '' })
 const error = ref('')
 const loading = ref(false)
 const ssoLoading = ref(false)
+const ssoEnabled = ref(false)
+const useLocal = computed(() => route.query.local === '1')
 
 function safeRedirect(raw) {
   if (typeof raw !== 'string') return '/'
@@ -67,7 +69,18 @@ async function handleSsoCallback() {
   }
 }
 
-onMounted(handleSsoCallback)
+onMounted(async () => {
+  await handleSsoCallback()
+  if (error.value || useLocal.value) return
+  try {
+    const cfg = await api.get('/auth/sso/config')
+    ssoEnabled.value = Boolean(cfg?.enabled)
+  } catch {
+    ssoEnabled.value = false
+  }
+  // 企业统一登录可用时默认跳转:SSO 会话仍在则一键确认,无需再输密码
+  if (ssoEnabled.value) loginWithSso()
+})
 </script>
 
 <template>
@@ -114,7 +127,14 @@ onMounted(handleSsoCallback)
       <button class="btn btn-block" type="button" :disabled="ssoLoading" @click="loginWithSso">
         {{ ssoLoading ? '正在跳转…' : '企业 SSO 登录' }}
       </button>
-      <p class="sso-hint">将打开公司统一登录页，可用钉钉扫码或工号密码。</p>
+      <p class="sso-hint">
+        <template v-if="ssoEnabled">正在跳转企业统一登录…已登录过将直接一键确认；</template>
+        <template v-else>将打开公司统一登录页，可用钉钉扫码或工号密码。</template>
+        <router-link
+          v-if="ssoEnabled"
+          :to="{ path: '/login', query: { local: '1', redirect: route.query.redirect } }"
+        >使用账号密码登录</router-link>
+      </p>
 
     </div>
   </div>
