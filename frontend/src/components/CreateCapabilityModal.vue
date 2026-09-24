@@ -15,6 +15,7 @@ import {
   HIDDEN_BROWSE_KINDS,
   DISTRIBUTION_LABELS,
   RISK_DEFAULT_LABELS,
+  ROLE_LABELS,
   canOnlineEdit,
   needsZipUpload,
   nextRouteAfterCreate
@@ -39,11 +40,14 @@ const form = reactive({
   visibility: 'internal',
   access_policy: 'open',
   allowedUsers: '',
+  allowedDepartments: '',
+  allowedRoles: [],
   distribution: 'both',
   risk_default: 'read',
   data_domain: '',
   workflowJson: '{\n  "nodes": [],\n  "edges": []\n}'
 })
+const ACCESS_ROLE_KEYS = ['admin', 'publisher', 'user']
 const error = ref('')
 const busy = ref(false)
 
@@ -145,6 +149,11 @@ async function create() {
     .split(/[,，]/)
     .map((s) => s.trim())
     .filter(Boolean)
+  const allowedDepartments = form.allowedDepartments
+    .split(/[,，]/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+  const allowedRoles = [...form.allowedRoles]
   busy.value = true
   try {
     let cap
@@ -157,6 +166,8 @@ async function create() {
       visibility: form.visibility,
       access_policy: form.access_policy,
       allowed_users: allowedUsers,
+      allowed_departments: allowedDepartments,
+      allowed_roles: allowedRoles,
       distribution: form.distribution,
       risk_default: form.risk_default,
       data_domain: form.data_domain.trim()
@@ -172,6 +183,19 @@ async function create() {
       cap = await api.post('/workflows', { ...common, workflow })
     } else {
       cap = await api.post('/publish/capabilities', { ...common, type: form.type })
+    }
+    // 创建接口暂不收部门/角色白名单，随权限接口补写（失败不阻断，可在详情页补配）
+    if (form.access_policy === 'restricted' && (allowedDepartments.length || allowedRoles.length)) {
+      try {
+        await api.post(`/capabilities/${cap.id}/access`, {
+          access_policy: 'restricted',
+          allowed_users: allowedUsers,
+          allowed_departments: allowedDepartments,
+          allowed_roles: allowedRoles
+        })
+      } catch {
+        /* 权限已可稍后在详情页配置 */
+      }
     }
     emit('created', cap)
     emit('close')
@@ -322,6 +346,22 @@ async function create() {
           </div>
         </div>
 
+        <div v-if="form.access_policy === 'restricted'" class="grid mt-12" style="grid-template-columns: 1fr 1fr">
+          <div class="field">
+            <label>部门白名单（逗号分隔，留空不限）</label>
+            <input v-model="form.allowedDepartments" class="input" placeholder="软件部, 信息部（留空不限）" />
+          </div>
+          <div class="field">
+            <label>角色白名单（勾选，留空不限）</label>
+            <div class="role-options">
+              <label v-for="key in ACCESS_ROLE_KEYS" :key="key" class="role-option">
+                <input v-model="form.allowedRoles" type="checkbox" :value="key" />
+                <span>{{ ROLE_LABELS[key] }}</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
         <div class="grid mt-12" style="grid-template-columns: 1fr 1fr">
           <div class="field">
             <label>分发方式</label>
@@ -432,6 +472,11 @@ async function create() {
 .modal-close:hover { color: var(--text); }
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field label { font-size: 13px; color: var(--muted); }
+.role-options { display: flex; flex-wrap: wrap; gap: 14px; padding-top: 4px; }
+.role-option {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 13px; cursor: pointer;
+}
 .mt-8 { margin-top: 8px; }
 .mt-12 { margin-top: 12px; }
 .mb-12 { margin-bottom: 12px; }

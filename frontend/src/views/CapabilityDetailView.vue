@@ -21,6 +21,7 @@ import {
   RISK_DEFAULT_LABELS,
   DISTRIBUTION_BADGE,
   RISK_DEFAULT_BADGE,
+  ROLE_LABELS,
   shelfLabel,
   formatDate,
   stars,
@@ -29,7 +30,7 @@ import {
   SCENARIO_HINTS,
   EXAMPLE_PROMPTS,
   installCommandFor,
-  isLocalInstallKind,
+  canLocalInstallCapability,
   ownerProgressIndex,
   editRouteFor,
   canOnlineEdit,
@@ -68,7 +69,22 @@ const copyNotice = ref('')
 const accessPolicy = ref('open')
 const installPolicy = ref('optional')
 const allowedUsers = ref('')
+const allowedDepartments = ref('')
+const allowedRoles = ref([])
 const accessSaved = ref('')
+const ACCESS_ROLE_KEYS = ['admin', 'publisher', 'user']
+
+function normList(values) {
+  if (!Array.isArray(values)) return []
+  return values.map((v) => String(v ?? '').trim()).filter(Boolean)
+}
+
+function splitList(text) {
+  return String(text || '')
+    .split(/[,，]/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
 
 const openSection = ref({ overview: true, usage: true, developer: false, governance: false })
 const reviewChecks = ref([])
@@ -203,7 +219,66 @@ const packageSizeLabel = computed(() =>
 )
 
 const installCommand = computed(() => (cap.value ? installCommandFor(cap.value) : ''))
-const canLocalInstall = computed(() => (cap.value ? isLocalInstallKind(cap.value.type) : false))
+const canLocalInstall = computed(() => (cap.value ? canLocalInstallCapability(cap.value) : false))
+const isRemoteOnly = computed(() => cap.value?.distribution === 'remote')
+const showAccessLists = computed(
+  () =>
+    accessPolicy.value === 'restricted' ||
+    normList(cap.value?.allowed_departments).length > 0 ||
+    normList(cap.value?.allowed_roles).length > 0 ||
+    normList(cap.value?.allowed_users).length > 0
+)
+const departmentSuggestions = computed(() => {
+  const set = new Set()
+  const own = String(authState.user?.department || '').trim()
+  if (own) set.add(own)
+  for (const d of normList(cap.value?.allowed_departments)) set.add(d)
+  return [...set]
+})
+const accessRestrictions = computed(() => {
+  const c = cap.value
+  if (!c) return []
+  const parts = []
+  if ((c.access_policy || 'open') === 'admin_only') parts.push('仅管理员')
+  const depts = normList(c.allowed_departments)
+  if (depts.length) parts.push(`部门：${depts.join('、')}`)
+  const roles = normList(c.allowed_roles)
+  if (roles.length) parts.push(`角色：${roles.map((r) => ROLE_LABELS[r] || r).join('、')}`)
+  const users = normList(c.allowed_users)
+  if (users.length) parts.push(`用户：${users.join('、')}`)
+  return parts
+})
+/** 订阅资格：与后端 services/access.py 的 AND 语义保持一致（admin/作者恒过） */
+const subscribeGate = computed(() => {
+  const c = cap.value
+  if (!c) return { ok: true, reason: '' }
+  if (!authState.token) return { ok: false, reason: '请先登录' }
+  const user = authState.user || {}
+  if (user.role === 'admin' || c.author_id === user.id) return { ok: true, reason: '' }
+  if ((c.access_policy || 'open') === 'admin_only') {
+    return { ok: false, reason: '该能力仅限管理员' }
+  }
+  const depts = normList(c.allowed_departments)
+  const roles = normList(c.allowed_roles)
+  const users = normList(c.allowed_users)
+  if (!(depts.length || roles.length || users.length)) {
+    return (c.access_policy || 'open') === 'open'
+      ? { ok: true, reason: '' }
+      : { ok: false, reason: '没有该能力的访问权限' }
+  }
+  if (depts.length && !depts.includes(String(user.department || '').trim())) {
+    return { ok: false, reason: `该能力仅限部门：${depts.join(', ')}` }
+  }
+  if (roles.length && !roles.includes(user.role)) {
+    return { ok: false, reason: `该能力仅限角色：${roles.map((r) => ROLE_LABELS[r] || r).join(', ')}` }
+  }
+  if (users.length && !users.includes(user.username)) {
+    return { ok: false, reason: '该能力仅限白名单用户' }
+  }
+  return { ok: true, reason: '' }
+})
+const canSubscribe = computed(() => subscribeGate.value.ok)
+const subscribeBlockedReason = computed(() => subscribeGate.value.reason)
 const scenarioList = computed(() => {
   if (!cap.value) return []
   const schema = cap.value.input_schema || {}
@@ -418,21 +493,26 @@ const canTrialCurrent = computed(() => {
 const nextStep = computed(() => {
   if (!cap.value || !isPublished.value) return null
   if (!authState.token) return { kind: 'login', label: '登录后加入' }
+  const trialLike = () => {
+    if (usedByAgents.value.length) {
+      return { kind: 'trial-agent', label: `试用助手 · ${usedByAgents.value[0].name}` }
+    }
+    if (canTrialCurrent.value) return { kind: 'trial', label: isAgent.value ? '问一句试用' : '试用连接器' }
+    return { kind: 'mine', label: '去我的能力' }
+  }
   if (!joined.value) {
+    if (isRemoteOnly.value) return { kind: 'join', label: '加入 / 订阅' }
     if (canLocalInstall.value || cap.value.type === 'tool') {
       return { kind: 'join', label: isPlugin.value ? '加入并启用 · 安装包' : '加入并启用到零号员工' }
     }
     return { kind: 'join', label: isPlugin.value ? '加入 · 安装包' : '加入' }
   }
+  if (isRemoteOnly.value) return trialLike()
   if (canLocalInstall.value || cap.value.type === 'tool') {
     if (!hostEnabled.value) return { kind: 'host', label: '在零号员工中启用' }
     return { kind: 'host-done', label: '已列入零号员工清单' }
   }
-  if (usedByAgents.value.length) {
-    return { kind: 'trial-agent', label: `试用助手 · ${usedByAgents.value[0].name}` }
-  }
-  if (canTrialCurrent.value) return { kind: 'trial', label: isAgent.value ? '问一句试用' : '试用连接器' }
-  return { kind: 'mine', label: '去我的能力' }
+  return trialLike()
 })
 const extraTrial = computed(() => {
   if (!joined.value || !['host', 'host-done'].includes(nextStep.value?.kind)) return null
@@ -645,6 +725,8 @@ async function load() {
     accessPolicy.value = cap.value.access_policy || 'open'
     installPolicy.value = cap.value.install_policy || 'optional'
     allowedUsers.value = (cap.value.allowed_users || []).join(', ')
+    allowedDepartments.value = normList(cap.value.allowed_departments).join(', ')
+    allowedRoles.value = normList(cap.value.allowed_roles)
     versions.value = await api.get(`/capabilities/${props.id}/versions`)
     ratings.value = await api.get(`/capabilities/${props.id}/ratings`)
     await loadMcpPackageMeta()
@@ -694,6 +776,10 @@ async function toggleMy() {
     confirmRemove.value = true
     return
   }
+  if (!subscribeGate.value.ok) {
+    myNotice.value = subscribeGate.value.reason
+    return
+  }
   try {
     const r = await api.post('/my/capabilities', { capability_id: props.id })
     myIds.value = new Set([...myIds.value, props.id])
@@ -710,6 +796,8 @@ async function toggleMy() {
     }
     if (r?.message) {
       myNotice.value = r.message
+    } else if (isRemoteOnly.value) {
+      myNotice.value = '已订阅，云端能力订阅即用'
     } else if (canLocalInstall.value || cap.value?.type === 'tool') {
       myNotice.value =
         '已加入并启用。打开零号员工 / 桌面工作台刷新后即可安装；复制 cap install 仅作兼容。'
@@ -759,7 +847,10 @@ async function saveAccess() {
   try {
     await api.post(`/capabilities/${props.id}/access`, {
       access_policy: accessPolicy.value,
-      allowed_users: allowedUsers.value.split(/[,，]/).map((s) => s.trim()).filter(Boolean)
+      allowed_users: splitList(allowedUsers.value),
+      // 未传=保持、传空数组=清空；本页始终显式提交两个名单
+      allowed_departments: splitList(allowedDepartments.value),
+      allowed_roles: [...allowedRoles.value]
     })
     await api.post(`/capabilities/${props.id}/install-policy`, {
       install_policy: installPolicy.value
@@ -1765,6 +1856,32 @@ onMounted(() => {
               </select>
               <button class="btn btn-primary" type="button" @click="saveAccess">保存</button>
             </div>
+            <div v-if="showAccessLists" class="access-lists mt-12">
+              <div class="field">
+                <label>部门白名单（逗号分隔，留空不限）</label>
+                <input
+                  v-model="allowedDepartments"
+                  class="input"
+                  list="access-dept-options"
+                  placeholder="软件部, 信息部（留空不限）"
+                />
+                <datalist id="access-dept-options">
+                  <option v-for="d in departmentSuggestions" :key="d" :value="d" />
+                </datalist>
+              </div>
+              <div class="field">
+                <label>角色白名单（勾选，留空不限）</label>
+                <div class="role-options">
+                  <label v-for="key in ACCESS_ROLE_KEYS" :key="key" class="role-option">
+                    <input v-model="allowedRoles" type="checkbox" :value="key" />
+                    <span>{{ ROLE_LABELS[key] }}</span>
+                  </label>
+                </div>
+              </div>
+              <p class="muted" style="font-size: 12px; margin: 0">
+                多门同时配置时需全部命中（AND）；留空的门不限制。非空名单在「开放」策略下同样生效。
+              </p>
+            </div>
           </div>
 
           <div id="package-panel" class="panel">
@@ -1820,6 +1937,8 @@ onMounted(() => {
                 v-if="nextStep?.kind === 'join'"
                 class="btn btn-block btn-lg btn-primary"
                 type="button"
+                :disabled="!canSubscribe"
+                :title="canSubscribe ? '' : subscribeBlockedReason"
                 @click="toggleMy"
               >{{ nextStep.label }}</button>
               <router-link
@@ -1861,6 +1980,9 @@ onMounted(() => {
                 type="button"
                 @click="extraTrial.kind === 'trial-agent' ? openTrialAgent(usedByAgents[0]) : openTrial()"
               >{{ extraTrial.label }}</button>
+              <p v-if="nextStep?.kind === 'join' && !canSubscribe" class="aside-hint aside-deny">
+                {{ subscribeBlockedReason }}
+              </p>
               <p v-if="copyNotice" class="muted" style="font-size: 12px; margin: 0">{{ copyNotice }}</p>
               <span v-if="myNotice" class="muted" style="font-size: 12px">{{ myNotice }}</span>
             </div>
@@ -1876,7 +1998,7 @@ onMounted(() => {
                 class="aside-link"
                 type="button"
                 @click="copyInstallCommand"
-              >高级 · 复制 cap install</button>
+              >高级 · 复制 cap install（本机运行）</button>
               <button class="aside-link" type="button" @click="downloadArtifact">
                 下载 zip{{ packageSizeLabel ? ` · ${packageSizeLabel}` : '' }}
               </button>
@@ -1884,7 +2006,10 @@ onMounted(() => {
               <router-link v-if="authState.token && nextStep?.kind !== 'mine'" to="/my" class="aside-link">我的能力</router-link>
             </div>
             <p class="aside-hint muted">
-              <template v-if="!joined">先加入，完成授权。{{ JOIN_VS_INSTALL_HINT }}</template>
+              <template v-if="isRemoteOnly">
+                云端能力订阅即用：无需安装，订阅后即可在云端调用或试用。{{ isMcp ? mcpTrial.hint : '' }}
+              </template>
+              <template v-else-if="!joined">先加入，完成授权。{{ JOIN_VS_INSTALL_HINT }}</template>
               <template v-else-if="['host', 'host-done'].includes(nextStep?.kind)">
                 启用后进入 <code>GET /api/my/host-sync</code>；零号员工 / 桌面按清单安装。{{ isMcp ? mcpTrial.hint : '' }}
               </template>
@@ -1928,6 +2053,7 @@ onMounted(() => {
             <div><dt>版本</dt><dd>v{{ cap.version }}</dd></div>
             <div><dt>可见性</dt><dd>{{ VISIBILITY_LABELS[cap.visibility] }}</dd></div>
             <div><dt>分发方式</dt><dd>{{ DISTRIBUTION_LABELS[cap.distribution] || cap.distribution || '—' }}</dd></div>
+            <div v-if="accessRestrictions.length"><dt>访问限制</dt><dd>{{ accessRestrictions.join('；') }}</dd></div>
             <div><dt>默认风险</dt><dd>{{ RISK_DEFAULT_LABELS[cap.risk_default] || cap.risk_default || '—' }}</dd></div>
             <div><dt>数据域</dt><dd>{{ cap.data_domain || '—' }}</dd></div>
             <div v-if="cap.category"><dt>分类</dt><dd>{{ cap.category }}</dd></div>
@@ -2079,6 +2205,13 @@ onMounted(() => {
   background: transparent; border: none; word-break: break-all;
 }
 .aside-hint { margin: 12px 0 0; font-size: 12px; line-height: 1.55; }
+.aside-deny { color: var(--danger); }
+.access-lists { display: grid; gap: 12px; max-width: 640px; }
+.role-options { display: flex; flex-wrap: wrap; gap: 14px; }
+.role-option {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 13px; cursor: pointer;
+}
 .aside-more {
   display: flex; flex-wrap: wrap; gap: 8px 14px;
   margin-top: 12px;

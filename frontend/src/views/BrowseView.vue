@@ -294,6 +294,8 @@ async function addToMy(cap) {
     noticeHref.value = `/capabilities/${cap.id}`
     if (r?.message) {
       notice.value = r.message
+    } else if (cap.distribution === 'remote') {
+      notice.value = `已订阅「${cap.name}」。云端能力订阅即用，无需安装。`
     } else if (isLocalInstallKind(cap.type)) {
       notice.value = `已加入「${cap.name}」。下一步：打开详情，在零号员工中启用。`
     } else if (cap.type === 'agent' || cap.type === 'mcp') {

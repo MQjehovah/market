@@ -106,9 +106,10 @@ export const KIND_HINTS = {
 /** 可本地 cap install 的 kind（与 taxonomy.local_install_kinds 对齐） */
 export const LOCAL_INSTALL_KINDS = ['agent', 'skill', 'mcp', 'plugin', 'rule', 'command', 'hook']
 
-/** 按 kind 生成真实消费命令；workflow/tool 不假装 cap install */
+/** 按 kind 生成真实消费命令；workflow/tool 不假装 cap install；remote 云端能力订阅即用，无安装命令 */
 export function installCommandFor(cap) {
   if (!cap?.name) return ''
+  if (cap.distribution === 'remote') return ''
   const ver = cap.version ? `@${cap.version}` : ''
   const name = `${cap.name}${ver}`
   switch (cap.type) {
@@ -137,6 +138,13 @@ export function installCommandFor(cap) {
 
 export function isLocalInstallKind(kind) {
   return LOCAL_INSTALL_KINDS.includes(kind)
+}
+
+/** 该能力当前是否提供本地安装：kind 支持本地安装，且分发方式不是 remote（云端订阅即用） */
+export function canLocalInstallCapability(cap) {
+  if (!cap) return false
+  if (cap.distribution === 'remote') return false
+  return isLocalInstallKind(cap.type)
 }
 
 /** 双编排用词：避免都叫「工作流」 */

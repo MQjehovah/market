@@ -13,7 +13,7 @@ import {
   ownedTodoBucket,
   editRouteFor,
   canOnlineEdit,
-  isLocalInstallKind,
+  canLocalInstallCapability,
   installCommandFor
 } from '../utils/format'
 import StatusBadge from '../components/StatusBadge.vue'
@@ -420,7 +420,7 @@ onMounted(() => {
             <td>
               <div class="ops">
                 <button
-                  v-if="isLocalInstallKind(cap.type)"
+                  v-if="canLocalInstallCapability(cap)"
                   class="op-link"
                   type="button"
                   @click="copyInstall(cap)"
