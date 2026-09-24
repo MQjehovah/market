@@ -116,6 +116,16 @@ function typeInitial(type) {
   return (TYPE_LABELS[type] || type || '?').slice(0, 1)
 }
 
+const iconErrors = ref(new Set())
+function markIconError(id) {
+  iconErrors.value = new Set([...iconErrors.value, id])
+}
+
+/** 统一标签展示：过滤 plugin-component（与卡片口径一致） */
+function displayTags(cap) {
+  return (cap.tags || []).filter((t) => t && t !== 'plugin-component').slice(0, 4)
+}
+
 function sourceLabel(cap) {
   if (cap.owned) return '我创建的'
   if (cap.added) return '从目录加入'
@@ -378,13 +388,23 @@ onMounted(() => {
           <tr v-for="cap in pagedCaps" :key="cap.id">
             <td>
               <div class="skill-cell">
-                <div class="skill-icon" :style="{ background: typeColor(cap.type) }">{{ typeInitial(cap.type) }}</div>
+                <img
+                  v-if="cap.icon_url && !iconErrors.has(cap.id)"
+                  class="skill-icon icon-img"
+                  :src="cap.icon_url"
+                  :alt="cap.name"
+                  @error="markIconError(cap.id)"
+                />
+                <div v-else class="skill-icon" :style="{ background: typeColor(cap.type) }">{{ typeInitial(cap.type) }}</div>
                 <div class="skill-meta">
                   <div class="skill-name-row">
                     <router-link class="skill-name" :to="`/capabilities/${cap.id}`">{{ cap.name }}</router-link>
                     <span class="ver-tag">v{{ cap.version }}</span>
                   </div>
                   <div class="skill-desc muted">{{ cap.description || TYPE_LABELS[cap.type] }}</div>
+                  <div v-if="displayTags(cap).length" class="tag-chips">
+                    <span v-for="t in displayTags(cap)" :key="t" class="badge">{{ t }}</span>
+                  </div>
                 </div>
               </div>
             </td>
@@ -426,7 +446,14 @@ onMounted(() => {
           <tr v-for="cap in pagedCaps" :key="cap.id">
             <td>
               <div class="skill-cell">
-                <div class="skill-icon" :style="{ background: typeColor(cap.type) }">{{ typeInitial(cap.type) }}</div>
+                <img
+                  v-if="cap.icon_url && !iconErrors.has(cap.id)"
+                  class="skill-icon icon-img"
+                  :src="cap.icon_url"
+                  :alt="cap.name"
+                  @error="markIconError(cap.id)"
+                />
+                <div v-else class="skill-icon" :style="{ background: typeColor(cap.type) }">{{ typeInitial(cap.type) }}</div>
                 <div class="skill-meta">
                   <div class="skill-name-row">
                     <router-link class="skill-name" :to="`/capabilities/${cap.id}`">{{ cap.name }}</router-link>
@@ -436,6 +463,9 @@ onMounted(() => {
                   <div class="skill-desc muted">
                     {{ cap.description || TYPE_LABELS[cap.type] }}
                     <span v-if="shelfLabel(cap.type)"> · {{ shelfLabel(cap.type) }}</span>
+                  </div>
+                  <div v-if="displayTags(cap).length" class="tag-chips">
+                    <span v-for="t in displayTags(cap)" :key="t" class="badge">{{ t }}</span>
                   </div>
                 </div>
               </div>
@@ -609,6 +639,8 @@ onMounted(() => {
   color: #fff; font-weight: 700; font-size: 16px;
   display: flex; align-items: center; justify-content: center;
 }
+.icon-img { object-fit: cover; background: var(--panel-2); }
+.tag-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .skill-meta { min-width: 0; }
 .skill-name-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .skill-name { color: var(--text); font-weight: 650; font-size: 14px; }

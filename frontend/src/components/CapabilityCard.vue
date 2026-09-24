@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import {
   INSTALL_POLICY_LABELS,
   TYPE_COLORS,
@@ -46,13 +46,28 @@ const displayTags = computed(() =>
 )
 
 const fromPlugin = computed(() => (props.cap.tags || []).includes('plugin-component'))
+
+const iconFailed = ref(false)
+watch(
+  () => props.cap.icon_url,
+  () => {
+    iconFailed.value = false
+  }
+)
 </script>
 
 <template>
   <div class="cap-card">
     <router-link :to="`/capabilities/${cap.id}`" class="cap-body">
       <div class="card-top">
-        <span class="type-icon" :style="{ color, borderColor: color + '55', background: color + '14' }">{{ letter }}</span>
+        <img
+          v-if="cap.icon_url && !iconFailed"
+          class="type-icon icon-img"
+          :src="cap.icon_url"
+          :alt="cap.name"
+          @error="iconFailed = true"
+        />
+        <span v-else class="type-icon" :style="{ color, borderColor: color + '55', background: color + '14' }">{{ letter }}</span>
         <StatusBadge :status="cap.status" />
       </div>
       <h3 class="cap-name">{{ cap.name }}</h3>
@@ -120,6 +135,7 @@ const fromPlugin = computed(() => (props.cap.tags || []).includes('plugin-compon
   display: inline-flex; align-items: center; justify-content: center;
   font-size: 14px; font-weight: 700;
 }
+.icon-img { object-fit: cover; background: var(--panel-2); }
 .cap-name { margin: 12px 0 6px; font-size: 16px; font-weight: 650; letter-spacing: -0.01em; }
 .cap-desc {
   color: var(--muted); font-size: 13px; margin: 0 0 12px;

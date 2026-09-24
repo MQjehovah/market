@@ -67,16 +67,19 @@ async function request(path, options = {}) {
   return body
 }
 
+function uploadRequest(method, path, file, extra = {}) {
+  const form = new FormData()
+  form.append('file', file)
+  Object.entries(extra).forEach(([k, v]) => form.append(k, v))
+  return request(path, { method, headers: {}, body: form })
+}
+
 export const api = {
   get: (path) => request(path),
   post: (path, data) => request(path, { method: 'POST', body: JSON.stringify(data) }),
   put: (path, data) => request(path, { method: 'PUT', body: JSON.stringify(data) }),
   patch: (path, data) => request(path, { method: 'PATCH', body: JSON.stringify(data) }),
   delete: (path) => request(path, { method: 'DELETE' }),
-  upload: (path, file, extra = {}) => {
-    const form = new FormData()
-    form.append('file', file)
-    Object.entries(extra).forEach(([k, v]) => form.append(k, v))
-    return request(path, { method: 'POST', headers: {}, body: form })
-  }
+  upload: (path, file, extra = {}) => uploadRequest('POST', path, file, extra),
+  putUpload: (path, file, extra = {}) => uploadRequest('PUT', path, file, extra)
 }

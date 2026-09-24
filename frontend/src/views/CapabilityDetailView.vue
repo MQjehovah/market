@@ -65,6 +65,11 @@ const confirmRemove = ref(false)
 const subscribedNames = ref(new Set())
 const subBusy = ref(false)
 const copyNotice = ref('')
+const iconInput = ref(null)
+const iconBusy = ref(false)
+const iconNotice = ref('')
+const iconError = ref('')
+const iconFailed = ref(false)
 const accessPolicy = ref('open')
 const installPolicy = ref('optional')
 const allowedUsers = ref('')
@@ -878,6 +883,88 @@ function downloadTemplate() {
   window.open(`${__API_BASE__}/meta/package-templates/${cap.value.type}?name=${name}`, '_blank')
 }
 
+/** 头像：canvas 居中裁剪为 1:1（512×512，JPEG 白底）后上传 */
+function cropIconToSquare(file, size = 512) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file)
+    const img = new Image()
+    img.onload = () => {
+      try {
+        const side = Math.min(img.width, img.height)
+        const sx = (img.width - side) / 2
+        const sy = (img.height - side) / 2
+        const canvas = document.createElement('canvas')
+        canvas.width = size
+        canvas.height = size
+        const ctx = canvas.getContext('2d')
+        ctx.fillStyle = '#fff'
+        ctx.fillRect(0, 0, size, size)
+        ctx.drawImage(img, sx, sy, side, side, 0, 0, size, size)
+        canvas.toBlob(
+          (blob) => {
+            URL.revokeObjectURL(url)
+            if (blob) resolve(blob)
+            else reject(new Error('图片处理失败'))
+          },
+          'image/jpeg',
+          0.9
+        )
+      } catch (e) {
+        URL.revokeObjectURL(url)
+        reject(e)
+      }
+    }
+    img.onerror = () => {
+      URL.revokeObjectURL(url)
+      reject(new Error('图片读取失败'))
+    }
+    img.src = url
+  })
+}
+
+async function onIconPick(event) {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  if (!file) return
+  iconNotice.value = ''
+  iconError.value = ''
+  if (!String(file.type).startsWith('image/')) {
+    iconError.value = '请选择 PNG/JPG/WebP 图片'
+    return
+  }
+  iconBusy.value = true
+  try {
+    const blob = await cropIconToSquare(file, 512)
+    const upload = new File([blob], 'icon.jpg', { type: 'image/jpeg' })
+    await api.putUpload(`/capabilities/${props.id}/icon`, upload)
+    iconFailed.value = false
+    await load()
+    iconNotice.value = '能力头像已更新'
+  } catch (e) {
+    iconError.value = e.message || '头像上传失败'
+  } finally {
+    iconBusy.value = false
+  }
+}
+
+async function removeIcon() {
+  if (!cap.value?.icon_url) return
+  if (!confirm('确认删除能力头像？删除后回退为类型默认图标。')) return
+  iconBusy.value = true
+  iconNotice.value = ''
+  iconError.value = ''
+  try {
+    await api.delete(`/capabilities/${props.id}/icon`)
+    iconFailed.value = false
+    await load()
+    iconNotice.value = '能力头像已删除'
+  } catch (e) {
+    iconError.value = e.message
+  } finally {
+    iconBusy.value = false
+  }
+}
+
 function focusPackage() {
   contentTab.value = 'manage'
   router.replace({ query: { ...route.query, focus: 'package' } })
@@ -1209,7 +1296,14 @@ onMounted(() => {
     </div>
 
     <section class="detail-hero panel">
-      <div class="detail-hero-icon" aria-hidden="true">{{ typeInitial }}</div>
+      <img
+        v-if="cap.icon_url && !iconFailed"
+        class="detail-hero-icon icon-img"
+        :src="cap.icon_url"
+        :alt="cap.name"
+        @error="iconFailed = true"
+      />
+      <div v-else class="detail-hero-icon" aria-hidden="true">{{ typeInitial }}</div>
       <div class="detail-hero-main">
         <div class="detail-hero-badges">
           <StatusBadge :status="cap.status" />
@@ -1247,7 +1341,11 @@ onMounted(() => {
         </div>
         <div v-if="!canEdit" class="detail-tags">
           <span v-if="cap.category" class="badge">{{ cap.category }}</span>
-          <span v-for="t in (cap.tags || [])" :key="t" class="badge">{{ t }}</span>
+          <span
+            v-for="t in (cap.tags || []).filter((x) => x && x !== 'plugin-component')"
+            :key="t"
+            class="badge"
+          >{{ t }}</span>
         </div>
       </div>
     </section>
@@ -1810,6 +1908,41 @@ onMounted(() => {
         </div>
 
         <div v-show="contentTab === 'manage'">
+          <div v-if="isOwner || isAdmin" class="panel">
+            <h3>能力头像</h3>
+            <p class="muted" style="font-size: 13px; margin: 6px 0 0">
+              建议使用 1:1 图片；选择后自动居中裁剪为 512×512 上传（PNG/JPG/WebP，≤256KB）。无头像时展示类型默认图标。
+            </p>
+            <div class="flex mt-16" style="align-items: center; gap: 16px; flex-wrap: wrap">
+              <img
+                v-if="cap.icon_url && !iconFailed"
+                class="icon-preview icon-img"
+                :src="cap.icon_url"
+                :alt="cap.name"
+                @error="iconFailed = true"
+              />
+              <div v-else class="icon-preview icon-preview-fallback">{{ typeInitial }}</div>
+              <div class="flex" style="gap: 8px; flex-wrap: wrap">
+                <label class="btn btn-sm" :class="{ disabled: iconBusy }" style="cursor: pointer">
+                  {{ iconBusy ? '处理中…' : (cap.icon_url ? '更换头像' : '选择图片') }}
+                  <input
+                    ref="iconInput"
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/*"
+                    style="display: none"
+                    :disabled="iconBusy"
+                    @change="onIconPick"
+                  />
+                </label>
+                <button v-if="cap.icon_url" class="btn btn-sm" type="button" :disabled="iconBusy" @click="removeIcon">
+                  删除头像
+                </button>
+              </div>
+            </div>
+            <p v-if="iconNotice" class="alert alert-success mt-12" style="font-size: 13px">{{ iconNotice }}</p>
+            <p v-if="iconError" class="alert alert-error mt-12" style="font-size: 13px">{{ iconError }}</p>
+          </div>
+
           <div v-if="canEdit" class="panel">
             <h3>编辑草稿</h3>
             <div class="muted" style="font-size: 13px">选错类型或名称时可直接改。已有其他版本时类型/名称锁定。</div>
@@ -2194,6 +2327,17 @@ onMounted(() => {
   color: #fff; font-size: 28px; font-weight: 700;
   display: flex; align-items: center; justify-content: center;
   box-shadow: 0 8px 20px rgba(47, 107, 255, 0.25);
+}
+.icon-img { object-fit: cover; }
+.detail-hero-icon.icon-img { background: var(--panel-2); }
+.icon-preview {
+  width: 72px; height: 72px; border-radius: 14px;
+  display: flex; align-items: center; justify-content: center;
+  object-fit: cover; background: var(--panel-2);
+}
+.icon-preview-fallback {
+  background: linear-gradient(145deg, #2f6bff, #1f56e0);
+  color: #fff; font-size: 26px; font-weight: 700;
 }
 .detail-hero-main { min-width: 0; }
 .detail-hero-badges { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }

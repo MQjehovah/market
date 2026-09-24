@@ -208,6 +208,11 @@ function typeInitial(type) {
   return (TYPE_LABELS[type] || type || '?').slice(0, 1)
 }
 
+const iconErrors = ref(new Set())
+function markIconError(id) {
+  iconErrors.value = new Set([...iconErrors.value, id])
+}
+
 function riskOf(cap) {
   const vr = cap?.validation_report || (cap?.input_schema || {})._validation_report || {}
   const errors = vr.errors || []
@@ -829,7 +834,14 @@ watch(
                 @click="selectCap(cap)"
               >
                 <div class="skill-cell">
-                  <div class="skill-icon" :style="{ background: typeColor(cap.type) }">{{ typeInitial(cap.type) }}</div>
+                  <img
+                    v-if="cap.icon_url && !iconErrors.has(cap.id)"
+                    class="skill-icon icon-img"
+                    :src="cap.icon_url"
+                    :alt="cap.name"
+                    @error="markIconError(cap.id)"
+                  />
+                  <div v-else class="skill-icon" :style="{ background: typeColor(cap.type) }">{{ typeInitial(cap.type) }}</div>
                   <div class="skill-meta">
                     <div class="skill-name-row">
                       <span class="skill-name">{{ cap.name }}</span>
@@ -847,7 +859,14 @@ watch(
               <template v-else>
                 <div class="detail-top">
                   <div class="detail-identity">
-                    <div class="skill-icon lg" :style="{ background: typeColor(selectedCap.type) }">{{ typeInitial(selectedCap.type) }}</div>
+                    <img
+                      v-if="selectedCap.icon_url && !iconErrors.has(selectedCap.id)"
+                      class="skill-icon lg icon-img"
+                      :src="selectedCap.icon_url"
+                      :alt="selectedCap.name"
+                      @error="markIconError(selectedCap.id)"
+                    />
+                    <div v-else class="skill-icon lg" :style="{ background: typeColor(selectedCap.type) }">{{ typeInitial(selectedCap.type) }}</div>
                     <div>
                       <div class="detail-name-row">
                         <h3 class="detail-name">{{ selectedCap.name }}</h3>
@@ -971,7 +990,14 @@ watch(
               <tr v-for="cap in listedCaps" :key="cap.id">
                 <td>
                   <div class="skill-cell">
-                    <div class="skill-icon" :style="{ background: typeColor(cap.type) }">{{ typeInitial(cap.type) }}</div>
+                    <img
+                      v-if="cap.icon_url && !iconErrors.has(cap.id)"
+                      class="skill-icon icon-img"
+                      :src="cap.icon_url"
+                      :alt="cap.name"
+                      @error="markIconError(cap.id)"
+                    />
+                    <div v-else class="skill-icon" :style="{ background: typeColor(cap.type) }">{{ typeInitial(cap.type) }}</div>
                     <div class="skill-meta">
                       <div class="skill-name-row">
                         <router-link class="skill-name link" :to="`/capabilities/${cap.id}`">{{ cap.name }}</router-link>
@@ -1565,6 +1591,7 @@ watch(
   display: flex; align-items: center; justify-content: center;
 }
 .skill-icon.lg { width: 48px; height: 48px; border-radius: 12px; font-size: 18px; }
+.icon-img { object-fit: cover; background: var(--panel-2); }
 .skill-meta { min-width: 0; }
 .skill-name-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .skill-name { color: var(--text); font-weight: 650; font-size: 13px; }

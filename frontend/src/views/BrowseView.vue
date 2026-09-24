@@ -43,12 +43,14 @@ const filters = reactive({
   shelf: '',
   type: '',
   category: '',
+  tag: '',
   skill: '',
   mcp: '',
   sort: 'latest',
   tab: '' // '', agent, skill, mcp, more
 })
 const myIds = ref(new Set())
+const tagOptions = ref([])
 const notice = ref('')
 const noticeHref = ref('')
 
@@ -68,6 +70,7 @@ const showDiscovery = computed(
     !filters.type &&
     !filters.tab &&
     !filters.category &&
+    !filters.tag &&
     !filters.skill &&
     !filters.mcp &&
     filters.sort === 'latest' &&
@@ -137,6 +140,7 @@ const pageContext = computed(() => {
 
 const catalogTitle = computed(() => {
   if (filters.q) return '搜索结果'
+  if (filters.tag) return `标签：${filters.tag}`
   if (filters.sort === 'usage' && !filters.type && !(filters.shelf && SHELVES[filters.shelf])) return '近期热门'
   if (filters.sort === 'rating' && !filters.type && !(filters.shelf && SHELVES[filters.shelf])) return '高分能力'
   if (filters.type && TYPE_LABELS[filters.type]) return TYPE_LABELS[filters.type]
@@ -177,12 +181,13 @@ async function fetchList(extra = {}) {
   if (filters.q) params.set('q', filters.q)
   if (filters.type) {
     params.set('type', filters.type)
-  } else if (filters.shelf === 'all') {
+  } else if (filters.shelf === 'all' || filters.tag) {
     params.set('include_bricks', 'true')
   } else if (filters.shelf) {
     params.set('shelf', filters.shelf)
   }
   if (filters.category) params.set('category', filters.category)
+  if (filters.tag) params.set('tag', filters.tag)
   if (filters.skill) params.set('skill', filters.skill)
   if (filters.mcp) params.set('mcp', filters.mcp)
   params.set('sort', extra.sort || filters.sort)
@@ -285,6 +290,15 @@ async function loadMy() {
   }
 }
 
+async function loadTagOptions() {
+  try {
+    const body = await api.get('/meta/tags')
+    tagOptions.value = body?.tags || []
+  } catch {
+    tagOptions.value = []
+  }
+}
+
 async function addToMy(cap) {
   notice.value = ''
   noticeHref.value = ''
@@ -351,6 +365,7 @@ function catalogQuery({ page: p = page.value, sort = filters.sort } = {}) {
   else if (filters.shelf && filters.shelf !== 'all') query.shelf = filters.shelf
   else if (filters.q) query.shelf = 'all'
   if (filters.category) query.category = filters.category
+  if (filters.tag) query.tag = filters.tag
   if (filters.skill) query.skill = filters.skill
   if (filters.mcp) query.mcp = filters.mcp
   if (sort && sort !== 'latest') query.sort = sort
@@ -379,6 +394,7 @@ onMounted(() => {
   syncFromRoute()
   load()
   loadMy()
+  loadTagOptions()
 })
 
 function syncFromRoute() {
@@ -388,6 +404,7 @@ function syncFromRoute() {
   filters.shelf = route.query.shelf ? String(route.query.shelf) : ''
   filters.q = route.query.q ? String(route.query.q) : ''
   filters.category = route.query.category ? String(route.query.category) : ''
+  filters.tag = route.query.tag ? String(route.query.tag) : ''
   filters.sort = route.query.sort ? String(route.query.sort) : 'latest'
   const rawPage = Number(route.query.page)
   page.value = Number.isFinite(rawPage) && rawPage > 0 ? Math.floor(rawPage) : 1
@@ -599,6 +616,10 @@ watch(
         <select v-model="filters.category" class="select" style="max-width: 150px" @change="applyFilter()">
           <option value="">业务领域</option>
           <option v-for="c in categoryOptions" :key="c" :value="c">{{ c }}</option>
+        </select>
+        <select v-model="filters.tag" class="select" style="max-width: 150px" @change="applyFilter()">
+          <option value="">标签</option>
+          <option v-for="t in tagOptions" :key="t" :value="t">{{ t }}</option>
         </select>
         <select v-model="filters.sort" class="select" style="max-width: 130px" @change="applyFilter()">
           <option value="latest">最新发布</option>
