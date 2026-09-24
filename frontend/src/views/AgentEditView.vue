@@ -33,7 +33,7 @@ function markClean() {
 
 bindUnsavedGuard(() => baseline.value !== null && formSnap() !== baseline.value)
 
-const TYPE_LABELS = { tool: '工具', skill: '技能', mcp: 'MCP' }
+const TYPE_LABELS = { tool: '工具', skill: '技能', mcp: '连接器' }
 
 const form = reactive({
   prompt: '',
@@ -155,7 +155,7 @@ onMounted(() => {
       <div class="flex-between flex-wrap">
         <div>
           <div class="flex" style="gap: 10px">
-            <h2>编辑助手：{{ agentName }}</h2>
+            <h2>编辑专家：{{ agentName }}</h2>
             <StatusBadge :status="saved?.status" />
           </div>
           <div class="muted" style="font-size: 13px">
@@ -176,17 +176,17 @@ onMounted(() => {
       </div>
 
       <div class="panel mt-16">
-        <h3>绑定能力（工具 / 技能 / MCP）</h3>
+        <h3>绑定能力（工具 / 技能 / 连接器）</h3>
         <div v-for="(dep, i) in form.deps" :key="i" class="dep-row flex">
           <select v-model="dep.type" class="select" style="max-width: 110px">
             <option value="tool">工具</option>
             <option value="skill">技能</option>
-            <option value="mcp">MCP</option>
+            <option value="mcp">连接器</option>
           </select>
           <select v-model="dep.name" class="select" style="flex: 1">
             <option value="">选择能力…</option>
             <option v-for="c in depCaps(dep.type)" :key="c.id" :value="c.name">
-              {{ c.name }} v{{ c.version }}{{ (c.tags || []).includes('plugin-component') ? ' · 来自插件' : '' }}
+              {{ c.name }} v{{ c.version }}{{ (c.tags || []).includes('plugin-component') ? ' · 来自能力包' : '' }}
             </option>
           </select>
           <input v-model="dep.version" class="input" style="max-width: 130px" placeholder="版本(留空=最新)" />

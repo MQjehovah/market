@@ -487,7 +487,7 @@ class RuntimeTaskOut(BaseModel):
     output: str
     tool_calls: int = 0
     runtime: dict[str, Any] = Field(default_factory=dict)
-    steps: list[dict[str, Any]] = Field(default_factory=list, description="执行步骤轨迹（LLM/工具/技能/MCP 调用）")
+    steps: list[dict[str, Any]] = Field(default_factory=list, description="执行步骤轨迹（LLM/工具/技能/连接器调用）")
 
 
 class AgentEditOut(BaseModel):

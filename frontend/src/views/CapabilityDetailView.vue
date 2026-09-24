@@ -198,7 +198,7 @@ const askCanRun = computed(() => {
   if (!authState.token) return false
   if (isOwner.value || isAdmin.value) return true
   if (isAgent.value || isPlugin.value) return canRuntime.value
-  // 技能经助手试用：助手也需可访问，或已加入该技能/助手
+  // 技能经专家试用：专家也需可访问，或已加入该技能/专家
   return joined.value || Boolean(usedByAgents.value[0]?.capability_id)
 })
 const askBlockedHint = computed(() => {
@@ -588,17 +588,17 @@ const nextStep = computed(() => {
   if (!authState.token) return { kind: 'login', label: '登录后加入' }
   const trialLike = () => {
     if (usedByAgents.value.length) {
-      return { kind: 'trial-agent', label: `试用助手 · ${usedByAgents.value[0].name}` }
+      return { kind: 'trial-agent', label: `试用专家 · ${usedByAgents.value[0].name}` }
     }
     if (canTrialCurrent.value) return { kind: 'trial', label: isAgent.value ? '问一句试用' : '试用连接器' }
     return { kind: 'mine', label: '去我的能力' }
   }
   if (!joined.value) {
-    if (isRemoteOnly.value) return { kind: 'join', label: '加入 / 订阅' }
+    if (isRemoteOnly.value) return { kind: 'join', label: '加入' }
     if (canLocalInstall.value || cap.value.type === 'tool') {
-      return { kind: 'join', label: isPlugin.value ? '加入并启用 · 安装包' : '加入并启用到零号员工' }
+      return { kind: 'join', label: isPlugin.value ? '加入并启用 · 能力包' : '加入并启用到零号员工' }
     }
-    return { kind: 'join', label: isPlugin.value ? '加入 · 安装包' : '加入' }
+    return { kind: 'join', label: isPlugin.value ? '加入 · 能力包' : '加入' }
   }
   if (isRemoteOnly.value) return trialLike()
   if (canLocalInstall.value || cap.value.type === 'tool') {
@@ -878,7 +878,7 @@ async function toggleMy() {
     const r = await api.post('/my/capabilities', { capability_id: props.id })
     myIds.value = new Set([...myIds.value, props.id])
     myEnabled.value = new Map([...myEnabled.value, [props.id, true]])
-    // 助手会随依赖一并加入；刷新「我的」id 集合
+    // 专家会随依赖一并加入；刷新「我的」id 集合
     try {
       const mine = await api.get('/my/capabilities?scope=added')
       myIds.value = new Set((mine || []).filter((c) => c.added).map((c) => c.id))
@@ -890,7 +890,7 @@ async function toggleMy() {
     }
     if (isRemoteOnly.value) {
       const extra = r?.message && r.message.includes('未加入') ? `；${r.message}` : ''
-      myNotice.value = `已订阅，云端能力订阅即用${extra}`
+      myNotice.value = `已加入，云端能力加入即用${extra}`
     } else if (r?.message) {
       myNotice.value = r.message
     } else if (canLocalInstall.value || cap.value?.type === 'tool') {
@@ -1225,8 +1225,8 @@ onMounted(() => {
       <router-link to="/">发现</router-link>
       <span>/</span>
       <router-link v-if="cap.type === 'skill'" :to="{ path: '/', query: { type: 'skill' } }">技能</router-link>
-      <router-link v-else-if="cap.type === 'agent'" :to="{ path: '/', query: { type: 'agent' } }">助手</router-link>
-      <router-link v-else-if="cap.type === 'plugin'" :to="{ path: '/', query: { shelf: 'install' } }">安装包</router-link>
+      <router-link v-else-if="cap.type === 'agent'" :to="{ path: '/', query: { type: 'agent' } }">专家</router-link>
+      <router-link v-else-if="cap.type === 'plugin'" :to="{ path: '/', query: { shelf: 'install' } }">能力包</router-link>
       <router-link v-else-if="shelfName" :to="{ path: '/', query: { type: cap.type } }">{{ TYPE_LABELS[cap.type] || shelfName }}</router-link>
       <span v-if="cap.type || shelfName">/</span>
       <span>{{ cap.name }}</span>
@@ -1523,7 +1523,7 @@ onMounted(() => {
             <details v-if="isMcp && mcpClientConfigJson" class="guide-block mcp-advanced">
               <summary class="mcp-advanced-summary">高级 · MCP 客户端 JSON</summary>
               <p class="muted" style="font-size: 12px; margin: 8px 0 10px">
-                给调试或兼容客户端粘贴 <code>mcpServers</code>。员工日常请加入后随助手安装，不要把这段当主路径。
+                给调试或兼容客户端粘贴 <code>mcpServers</code>。员工日常请加入后随专家安装，不要把这段当主路径。
               </p>
               <div class="flex" style="gap: 8px; margin-bottom: 8px">
                 <button class="btn btn-sm" type="button" @click="copyMcpClientConfig">复制 JSON</button>
@@ -1601,22 +1601,22 @@ onMounted(() => {
                   </tbody>
                 </table>
                 <p v-if="isRemoteOnly" class="guide-lead muted" style="margin: 10px 0 0">
-                  云端能力订阅即用：加入后通过云端接口 / 平台轨调用或试用，无需本地安装。
+                  云端能力加入即用：通过云端接口 / 平台轨调用或试用，无需本地安装。
                 </p>
               </div>
             </div>
           </section>
 
           <div v-if="parentPluginId" class="panel">
-            <h3>来自插件</h3>
-            <div class="muted" style="font-size: 13px">本能力由插件拆包生成。</div>
-            <div class="mt-16"><router-link :to="`/capabilities/${parentPluginId}`">查看父插件</router-link></div>
+            <h3>来自能力包</h3>
+            <div class="muted" style="font-size: 13px">本能力由能力包拆分生成。</div>
+            <div class="mt-16"><router-link :to="`/capabilities/${parentPluginId}`">查看父能力包</router-link></div>
           </div>
 
           <div v-if="usedBy.length" class="panel">
-            <h3>{{ usedByAgents.length && usedByAgents.length === usedBy.length ? '被以下助手使用' : '被以下能力使用' }}</h3>
+            <h3>{{ usedByAgents.length && usedByAgents.length === usedBy.length ? '被以下专家使用' : '被以下能力使用' }}</h3>
             <div class="muted" style="font-size: 13px">
-              {{ isMcp ? '挂到这些助手后，对话里才会动手。' : '来自助手内嵌声明或安装包组件引用。' }}
+              {{ isMcp ? '挂到这些专家后，对话里才会动手。' : '来自专家内嵌声明或能力包组件引用。' }}
               <router-link :to="`/?${cap.type}=${encodeURIComponent(cap.name)}&shelf=all`">在目录中筛选</router-link>
             </div>
             <table class="table mt-16">
@@ -1633,7 +1633,7 @@ onMounted(() => {
                       class="btn btn-sm"
                       type="button"
                       @click="openTrialAgent(u)"
-                    >试用助手</button>
+                    >试用专家</button>
                   </td>
                 </tr>
               </tbody>
@@ -1707,9 +1707,9 @@ onMounted(() => {
 
         <div v-show="contentTab === 'components'">
           <div v-if="isPlugin" class="panel">
-            <h3>插件组件</h3>
-            <div class="muted" style="font-size: 13px">上传 plugin zip 后自动拆出；一键加入会同时加入下列组件。</div>
-            <div v-if="pluginComponents.length === 0" class="muted mt-12">尚未上传插件包，或包内无组件</div>
+            <h3>能力包组件</h3>
+            <div class="muted" style="font-size: 13px">上传能力包 zip 后自动拆出；一键加入会同时加入下列组件。</div>
+            <div v-if="pluginComponents.length === 0" class="muted mt-12">尚未上传能力包，或包内无组件</div>
             <table v-else class="table mt-12">
               <thead><tr><th>角色</th><th>类型</th><th>名称</th><th>版本</th><th></th></tr></thead>
               <tbody>
@@ -1727,9 +1727,9 @@ onMounted(() => {
 
         <div v-show="contentTab === 'bundle'">
           <div v-if="isAgent && (embeddedSkills.length || embeddedMcp.length)" class="panel">
-            <h3>包含的 Skills / MCP</h3>
+            <h3>包含的 Skills / 连接器</h3>
             <div class="muted" style="font-size: 13px">
-              从包内提取；若市场已收录可跳转。加入本助手时，已上架的依赖会一并加入「我的能力」。
+              从包内提取；若市场已收录可跳转。加入本专家时，已上架的依赖会一并加入「我的能力」。
             </div>
             <div v-if="embeddedSkills.length" class="mt-16">
               <h4 style="margin: 0 0 8px">Skills（{{ embeddedSkills.length }}）</h4>
@@ -1752,7 +1752,7 @@ onMounted(() => {
               </table>
             </div>
             <div v-if="embeddedMcp.length" class="mt-16">
-              <h4 style="margin: 0 0 8px">MCP（{{ embeddedMcp.length }}）</h4>
+              <h4 style="margin: 0 0 8px">连接器（{{ embeddedMcp.length }}）</h4>
               <table class="table">
                 <thead><tr><th>名称</th><th>描述</th><th>命令 / 包</th><th></th></tr></thead>
                 <tbody>
@@ -2040,7 +2040,7 @@ onMounted(() => {
                 包内需包含 {{ TYPE_LABELS[cap.type] || cap.type }} 规范文件（{{ PACKAGE_HINTS[cap.type] }}）
               </div>
               <div v-if="cap.type === 'mcp'" class="alert mt-8" style="font-size: 12px">
-                市场 MCP 需 <code>mcp.json</code>、<code>connection.json</code>、<code>tools.json</code>、<code>security.json</code>。
+                市场连接器需 <code>mcp.json</code>、<code>connection.json</code>、<code>tools.json</code>、<code>security.json</code>。
                 不能直接上传 agent 仓的 <code>mcp-server.json</code>。
               </div>
             </div>
@@ -2127,7 +2127,7 @@ onMounted(() => {
             </div>
             <p class="aside-hint muted">
               <template v-if="isRemoteOnly">
-                云端能力订阅即用：无需安装，订阅后即可在云端调用或试用。{{ isMcp ? mcpTrial.hint : '' }}
+                云端能力加入即用：无需安装，加入后即可在云端调用或试用。{{ isMcp ? mcpTrial.hint : '' }}
               </template>
               <template v-else-if="!joined">先加入，完成授权。{{ JOIN_VS_INSTALL_HINT }}</template>
               <template v-else-if="['host', 'host-done'].includes(nextStep?.kind)">
@@ -2217,7 +2217,7 @@ onMounted(() => {
     <DebugCapabilityModal
       :show="!!debugCap"
       :cap="debugCap"
-      :title="debugCap?.type === 'agent' ? '试用助手' : (debugCap?.type === 'mcp' ? '试用连接器' : '云端试用')"
+      :title="debugCap?.type === 'agent' ? '试用专家' : (debugCap?.type === 'mcp' ? '试用连接器' : '云端试用')"
       @close="debugCap = null"
     />
   </div>

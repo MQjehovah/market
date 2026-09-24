@@ -263,18 +263,18 @@ async def test_team_visibility_resolvable_by_teammate(client):
         db.add(teammate)
         await db.commit()
         await db.refresh(teammate)
-        cap = await resolve_capability(db, teammate, "代码审查助手")
-        assert cap.name == "代码审查助手"
+        cap = await resolve_capability(db, teammate, "代码审查专家")
+        assert cap.name == "代码审查专家"
 
     async with SessionLocal() as db:
         outsider = await db.scalar(select(User).where(User.username == "user"))
         with pytest.raises(HTTPException) as exc:
-            await resolve_capability(db, outsider, "代码审查助手")
+            await resolve_capability(db, outsider, "代码审查专家")
         assert exc.value.status_code == 404
 
     async with SessionLocal() as db:
         with pytest.raises(HTTPException) as exc:
-            await resolve_capability(db, None, "代码审查助手")
+            await resolve_capability(db, None, "代码审查专家")
         assert exc.value.status_code == 404
 
 
@@ -385,7 +385,7 @@ async def test_subscription_denied_without_department(client, publisher_headers,
         "/api/my/capabilities", headers=user_headers, json={"capability_id": cap_id}
     )
     assert r.status_code == 403, r.text
-    assert "订阅" in r.json()["detail"]
+    assert "加入" in r.json()["detail"]
     assert "研发部" in r.json()["detail"]
 
     await _set_user_department("user", "研发部")

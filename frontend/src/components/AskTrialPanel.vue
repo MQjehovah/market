@@ -1,6 +1,6 @@
 <script setup>
 /**
- * 员工侧「一句问话」试用：对助手发自然语言任务，展示回答与调用了哪些工具。
+ * 员工侧「一句问话」试用：对专家发自然语言任务，展示回答与调用了哪些工具。
  * 连接器仍走 DebugCapabilityModal（选手动调工具）。
  */
 import { computed, nextTick, ref, watch } from 'vue'
@@ -8,7 +8,7 @@ import { api } from '../api'
 import { authState } from '../stores/auth'
 
 const props = defineProps({
-  /** 实际调用的助手名（skill 试用时应传 usedBy 助手名） */
+  /** 实际调用的专家名（skill 试用时应传 usedBy 专家名） */
   agentName: { type: String, required: true },
   agentVersion: { type: String, default: '' },
   /** 展示用：技能试用时写技能名 */
@@ -93,7 +93,7 @@ async function ask() {
   <div class="ask-trial guide-block">
     <h3 class="guide-title">试用 · 问一句</h3>
     <p class="guide-lead muted">
-      <template v-if="subjectLabel">通过助手「{{ agentName }}」验证「{{ subjectLabel }}」。</template>
+      <template v-if="subjectLabel">通过专家「{{ agentName }}」验证「{{ subjectLabel }}」。</template>
       <template v-else>向「{{ agentName }}」发一句自然语言，看它怎么答{{ agentVersion ? `（v${agentVersion}）` : '' }}。</template>
       未配置 LLM 时为模拟回答。
     </p>

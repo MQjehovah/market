@@ -19,11 +19,11 @@
 | **组件** | 组件 | `rule` | 持久指导（RULE.mdc） | `config/rules/<name>/` |
 | **组件** | 组件 | `command` | `/` 斜杠命令（COMMAND.md） | `config/commands/<name>/` |
 | **组件** | 组件 | `hook` | 生命周期脚本（hooks.json） | `config/hooks/<name>/` |
-| **助手** `recipe` | 助手 | `agent` | 人设 + 依赖；可选 **TEAM.md 团队流水线** | `cap install` → `config/agents/<name>/` |
-| **助手** | 助手 | `workflow` | **能力编排**（已上架能力的静态 DAG） | 只云端执行，**不进** Agent 目录 |
-| **安装包** `install` | 安装包 | `plugin` | 一键分发 skill/mcp/rule/command/hook（可选助手） | 拆子能力；兼容 Cursor Plugin |
+| **专家** `recipe` | 专家 | `agent` | 人设 + 依赖；可选 **TEAM.md 团队流水线** | `cap install` → `config/agents/<name>/` |
+| **专家** | 专家 | `workflow` | **能力编排**（已上架能力的静态 DAG） | 只云端执行，**不进** Agent 目录 |
+| **能力包** `install` | 能力包 | `plugin` | 一键分发 skill/mcp/rule/command/hook（可选专家） | 拆子能力；兼容 Cursor Plugin |
 
-逛店顶栏：**推荐 | 技能 | 安装包 | 助手 | 更多**。  
+逛店顶栏：**推荐 | 技能 | 能力包 | 专家 | 更多**。  
 推荐默认浏览：`skill + plugin + agent`。连接器 / 规则 / 命令 / Hooks / 能力编排 / 编排函数进「更多」。`plugin-component` 默认隐藏。
 
 元数据：`GET /api/meta/taxonomy`。空模板：`GET /api/meta/package-templates/{kind}`。
@@ -86,16 +86,16 @@ cd frontend && npm install && npm run dev
 
 或 `start-dev.bat` / `start-dev.ps1`。开发态未配置 `SEED_ADMIN_PASSWORD` / `SEED_PUBLISHER_PASSWORD` / `SEED_USER_PASSWORD` 时，启动日志会为 `admin` / `publisher` / `user` 各打印一次随机初始口令；生产环境必须先经环境变量配置强口令，否则拒绝启动。
 
-## 小白发布可安装场景（推荐：安装包）
+## 小白发布可安装场景（推荐：能力包）
 
 1. 登录 → 侧栏「发布能力」或首页「发布能力」  
-2. 选 **发安装包** → 填名称/版本 → 创建草稿  
+2. 选 **发能力包** → 填名称/版本 → 创建草稿  
 3. 详情「管理」→ **下载空模板 zip** → 按需改内容 → 上传 zip  
 4. **提交审核**（无包时按钮为「去上传能力包」，不会空提交）  
 5. 管理员在治理后台通过  
 6. 发现页 **加入**（仅授权；加入≠安装）→ 复制 `cap install name@version --type plugin` 装到零号员工  
 
-进阶：技能 / 连接器 / 编排函数 / 助手创建后会进入**在线编辑**（保存即生成能力包），再提交审核；也可先上架组件再发助手并在依赖里引用（依赖须已上架）。安装包仍以上传 zip 为主。
+进阶：技能 / 连接器 / 编排函数 / 专家创建后会进入**在线编辑**（保存即生成能力包），再提交审核；也可先上架组件再发专家并在依赖里引用（依赖须已上架）。能力包仍以上传 zip 为主。
 
 MCP 注意：市场包必须是 `mcp.json` + `connection.json` + `tools.json` + `security.json`；不能直接上传 agent 仓里的 `mcp-server.json`。  
 连接器若声明 `env`（如 `ERP_*` / `DB_*`），请在工作台 **业务密钥**（`/my/secrets`）托管；能力详情只显示是否已齐。本地轨仍可用 `cap install … --type mcp` 或本机 `mcp_servers.json`。
@@ -143,26 +143,26 @@ MCP 注意：市场包必须是 `mcp.json` + `connection.json` + `tools.json` + 
 
 新表 `mcp_gateway_calls` 与 `mcp_gateway_servers.capability_id` 由 `create_all` / `init_db` 轻量迁移自动处理，存量库无需手工 ALTER。
 
-## 部门 / 角色权限与订阅门禁
+## 部门 / 角色权限与加入门禁
 
 - **用户部门**：`users.department` 由 SSO 登录按 `dept` claim 回写（非空才覆盖），管理员也可在「用户管理」编辑；权限按「部门 + 角色」两维管理，另有用户白名单。
 - **能力权限**：`allowed_departments` / `allowed_roles` / `allowed_users` 三门，**每个非空维度必须全部命中（AND）**；`open` 全空放行、`restricted` 全空仅管理员/作者。作者或管理员在能力详情页「调用权限」配置（`POST /api/capabilities/{id}/access`，字段三态：未传=保持、`[]`=清空）。
-- **订阅门禁**：`POST /api/my/capabilities` 需「可见 + 权限谓词通过」，否则 403（文案含原因）；`default_on` 自动加入同样尊重权限；连带组件（plugin 组件 / agent 依赖）逐条过滤。
-- **运行时门禁**：`require_runtime_access` 对已订阅调用方应用同一谓词（调岗即时生效），网关 `/relay` 同样。
-- **代表用户（act-as）**：服务令牌（`sync`/`gateway` scope）可带 `X-Act-As-Sub: <工号>` 以目标用户身份取能力清单/调用网关；sync 返回该用户「已订阅 ∩ 可见 ∩ 可访问 ∩ 非 local」（admin 不依赖订阅）；网关按目标用户门禁/限流，并对服务令牌自身加限流键。
-- **分发语义**：`distribution=remote` 云端订阅即用（不提供本地安装）；`local/both` 才提供安装。
+- **加入门禁**：`POST /api/my/capabilities` 需「可见 + 权限谓词通过」，否则 403（文案含原因）；`default_on` 自动加入同样尊重权限；连带组件（plugin 组件 / agent 依赖）逐条过滤。
+- **运行时门禁**：`require_runtime_access` 对已加入调用方应用同一谓词（调岗即时生效），网关 `/relay` 同样。
+- **代表用户（act-as）**：服务令牌（`sync`/`gateway` scope）可带 `X-Act-As-Sub: <工号>` 以目标用户身份取能力清单/调用网关；sync 返回该用户「已加入 ∩ 可见 ∩ 可访问 ∩ 非 local」（admin 不依赖加入）；网关按目标用户门禁/限流，并对服务令牌自身加限流键。
+- **分发语义**：`distribution=remote` 云端加入即用（不提供本地安装）；`local/both` 才提供安装。
 
 ## 生命周期与审核
 
 `draft → reviewing → published → deprecated → archived`（另有 rejected / returned）。
 
-审核关注：包结构、`${VAR}` 密钥占位、MCP 地址、Tool AST 审计、依赖可解析、Plugin 组件命名、可见性。
+审核关注：包结构、`${VAR}` 密钥占位、MCP 地址、Tool AST 审计、依赖可解析、能力包组件命名、可见性。
 
 ## 与零号员工边界
 
 - 市场：Asset 记录、zip、审核、网关、试用 API  
 - 零号员工：`PROMPT` / `TEAM` / `skills` / `mcp_servers.json` + 宿主 `src/tools` + 通道 `src/plugins`  
-- IDE / 客户端：装 Plugin（含 rules / commands / hooks）或连市场 MCP；rule / command / hook 也可单独上架  
+- IDE / 客户端：装能力包（含 rules / commands / hooks）或连市场 MCP；rule / command / hook 也可单独上架  
 - **不要**把宿主 BuiltinTool、钉钉/飞书通道插件登记成市场商品  
 
 「我的能力」分两栏：**自定义**（已加入，可启用/停用）与 **我发布的**（草稿/审核）。

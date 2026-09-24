@@ -619,7 +619,7 @@ def build_package_template(kind: str, *, name: str = "example") -> bytes:
             indent=2,
         )
         files["README.md"] = (
-            "# MCP 市场包规范\n\n"
+            "# 连接器市场包规范\n\n"
             "必需：`mcp.json`、`connection.json`、`tools.json`、`security.json`。\n\n"
             "不能直接上传 agent 仓里的 `mcp-server.json` / `mcp-config.json`，"
             "请按本模板改写。\n"
@@ -650,13 +650,13 @@ def build_package_template(kind: str, *, name: str = "example") -> bytes:
             ensure_ascii=False,
             indent=2,
         )
-        files["PROMPT.md"] = f"# {safe}\n\n你是一个示例助手。\n"
+        files["PROMPT.md"] = f"# {safe}\n\n你是一个示例专家。\n"
         files["dependencies.json"] = "[]\n"
     elif kind == "plugin":
         files["plugin.json"] = json.dumps(
             {
                 "name": safe,
-                "description": "示例安装包：含 skill + mcp + rule/command/hook",
+                "description": "示例能力包：含 skill + mcp + rule/command/hook",
                 "version": "0.1.0",
             },
             ensure_ascii=False,
@@ -673,7 +673,7 @@ def build_package_template(kind: str, *, name: str = "example") -> bytes:
         )
         files["skills/demo-skill/SKILL.md"] = "# demo-skill\n\n示例技能步骤。\n"
         files["skills/demo-skill/skill.json"] = json.dumps(
-            {"name": "demo-skill", "description": "插件内嵌技能", "version": "0.1.0"},
+            {"name": "demo-skill", "description": "能力包内嵌技能", "version": "0.1.0"},
             ensure_ascii=False,
             indent=2,
         )

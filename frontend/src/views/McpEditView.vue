@@ -232,7 +232,7 @@ onMounted(load)
   <div v-else-if="data" class="editor">
     <div class="flex-between mb-16">
       <div>
-        <h2 style="margin: 0">编辑 MCP：{{ data.capability.name }}</h2>
+        <h2 style="margin: 0">编辑连接器：{{ data.capability.name }}</h2>
         <div class="muted" style="font-size: 13px">
           <StatusBadge :status="data.capability.status" />
           当前编辑版本 v{{ data.capability.version }}
@@ -358,7 +358,7 @@ onMounted(load)
 
         <div class="panel mt-16">
           <h3>标签（逗号分隔）</h3>
-          <input v-model="tags" class="input" placeholder="如：文件系统, MCP" />
+          <input v-model="tags" class="input" placeholder="如：文件系统, 连接器" />
         </div>
 
         <div class="panel mt-16 flex-between">

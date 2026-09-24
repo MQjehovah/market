@@ -6,7 +6,7 @@
     marketplace_call_mcp       调用商品 MCP 暴露的 tool
     marketplace_run_agent      云端 Agent 任务
     marketplace_activate_skill 返回 SKILL.md 正文（注入上下文，非远程执行）
-    marketplace_fetch_agent_persona 返回助手 PROMPT.md（人设，不跑任务）
+    marketplace_fetch_agent_persona 返回专家 PROMPT.md（人设，不跑任务）
     marketplace_discover_mcp   发现 MCP 能力
     marketplace_run_workflow   云端工作流
 
@@ -87,7 +87,7 @@ TOOLS = [
     {
         "name": "marketplace_search",
         "annotations": {"readOnlyHint": True, "destructiveHint": False},
-        "description": "搜索 AI 能力公共市场中的能力（Agent/工具/技能/MCP），返回名称、类型、版本、状态、描述。",
+        "description": "搜索 AI 能力公共市场中的能力（Agent/工具/技能/连接器），返回名称、类型、版本、状态、描述。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -129,14 +129,14 @@ TOOLS = [
         "name": "marketplace_call_mcp",
         "annotations": {"readOnlyHint": False, "destructiveHint": False},
         "description": (
-            "线上调用市场上架的 MCP 能力所暴露的某个 tool（市场侧连接/代理，无需本机装包）。"
+            "线上调用市场上架的连接器能力所暴露的某个 tool（市场侧连接/代理，无需本机装包）。"
             "可先 marketplace_discover_mcp 或 runtime connect 了解可用工具名。"
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "MCP 能力名称"},
-                "tool": {"type": "string", "description": "MCP 暴露的工具名"},
+                "name": {"type": "string", "description": "连接器能力名称"},
+                "tool": {"type": "string", "description": "连接器暴露的工具名"},
                 "params": {"type": "object", "description": "工具参数", "default": {}},
             },
             "required": ["name", "tool"],
@@ -175,13 +175,13 @@ TOOLS = [
         "name": "marketplace_fetch_agent_persona",
         "annotations": {"readOnlyHint": True, "destructiveHint": False},
         "description": (
-            "按需获取市场助手的 PROMPT.md 人设正文（不下载 zip、不跑任务）。"
+            "按需获取市场专家的 PROMPT.md 人设正文（不下载 zip、不跑任务）。"
             "桌面/宿主用人设落盘时用此接口，勿走编辑 API。"
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "助手名称"},
+                "name": {"type": "string", "description": "专家名称"},
             },
             "required": ["name"],
         },
@@ -189,13 +189,13 @@ TOOLS = [
     {
         "name": "marketplace_discover_mcp",
         "annotations": {"readOnlyHint": True, "destructiveHint": False},
-        "description": "动态发现市场上已发布的 MCP 能力（数据库连接、DevOps 工具等）。",
+        "description": "动态发现市场上已发布的连接器能力（数据库连接、DevOps 工具等）。",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
         "name": "marketplace_run_workflow",
         "annotations": {"readOnlyHint": False, "destructiveHint": False},
-        "description": "执行市场上已发布的工作流（多步编排：工具/Agent/MCP/技能），输入参数按工作流定义。",
+        "description": "执行市场上已发布的工作流（多步编排：工具/Agent/连接器/技能），输入参数按工作流定义。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -300,17 +300,17 @@ def _handle_tool(name: str, arguments: dict) -> dict:
         prompt = body.get("prompt") or ""
         cap_name = (result.get("capability") or {}).get("name") or body.get("agent") or agent_name
         deps = body.get("dependencies") or []
-        header = f"助手「{cap_name}」PROMPT.md（人设；依赖 {len(deps)} 项）\n\n"
+        header = f"专家「{cap_name}」PROMPT.md（人设；依赖 {len(deps)} 项）\n\n"
         if not prompt:
-            return _text(header + (body.get("note") or "助手包缺少 PROMPT.md。"))
+            return _text(header + (body.get("note") or "专家包缺少 PROMPT.md。"))
         return _text(header + prompt)
 
     if name == "marketplace_discover_mcp":
         result = _api("GET", "/api/runtime/mcp/discover")
         tools = result.get("discovered") or []
         if not tools:
-            return _text("市场上暂无可发现的 MCP 能力。")
-        lines = ["可用的 MCP 能力："]
+            return _text("市场上暂无可发现的连接器能力。")
+        lines = ["可用的连接器能力："]
         for t in tools:
             lines.append(
                 f"- {t['name']} v{t['version']}（{t.get('category')}）"

@@ -112,7 +112,7 @@ async def agent_persona(name: str, db: DbSession, user: CurrentUser):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     await db.commit()
     await db.refresh(cap)
-    return _result(cap, "persona", f"助手「{cap.name}」人设已返回", result)
+    return _result(cap, "persona", f"专家「{cap.name}」人设已返回", result)
 
 
 @router.post("/mcp/{name}/install", response_model=RuntimeResult)
@@ -122,7 +122,7 @@ async def install(name: str, data: RuntimeInstallRequest, db: DbSession, user: C
     result = await install_mcp(db, user, cap, data.config)
     await db.commit()
     await db.refresh(cap)
-    return _result(cap, "install", f"MCP「{cap.name}」安装成功", result)
+    return _result(cap, "install", f"连接器「{cap.name}」安装成功", result)
 
 
 @router.post("/mcp/{name}/connect")
@@ -141,7 +141,7 @@ async def mcp_connect(name: str, db: DbSession, user: CurrentUser):
     cap = await resolve_capability(db, user, name)
     await require_runtime_access(user, cap, db)
     if cap.type != "mcp":
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{name} 不是 MCP 能力")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{name} 不是连接器能力")
     # 平台轨统一注入平台密钥（按能力名，与调用者身份无关）
     platform_env = await resolve_capability_env(db, cap.name)
     bridge = MCPBridge(gateway_loader=_gateway_loader, env=platform_env)
@@ -191,7 +191,7 @@ async def mcp_call(
     cap = await resolve_capability(db, user, name)
     await require_runtime_access(user, cap, db)
     if cap.type != "mcp":
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{name} 不是 MCP 能力")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{name} 不是连接器能力")
     # 平台轨统一注入平台密钥（按能力名，与调用者身份无关）
     platform_env = await resolve_capability_env(db, cap.name)
     bridge = MCPBridge(gateway_loader=_gateway_loader, env=platform_env)
@@ -202,7 +202,7 @@ async def mcp_call(
         if not bridge.has_tool(data.tool):
             raise HTTPException(
                 status.HTTP_404_NOT_FOUND,
-                f"MCP「{name}」不存在工具 {data.tool}；可用工具：{', '.join(bridge.tool_names)}",
+                f"连接器「{name}」不存在工具 {data.tool}；可用工具：{', '.join(bridge.tool_names)}",
             )
         result = await bridge.call(data.tool, data.params)
         duration_ms = int((time.monotonic() - t0) * 1000)
@@ -271,7 +271,7 @@ async def run_agent_task(name: str, data: RuntimeTaskRequest, db: DbSession, use
         if primary is None:
             primary = next((c for c in comps if c.get("type") == "agent"), None)
         if primary is None:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"插件 {name} 没有可运行的 Agent")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"能力包 {name} 没有可运行的 Agent")
         cap = await resolve_capability(db, user, primary["name"], primary.get("version"))
         await require_runtime_access(user, cap, db)
     if cap.type != "agent":

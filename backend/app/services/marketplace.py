@@ -356,7 +356,7 @@ async def fetch_agent_persona(db: AsyncSession, user: User, cap: Capability) -> 
     note = (
         "请将 PROMPT.md 用作本地人设；依赖 skill/mcp/tool 需另装或走线上网关。"
         if prompt
-        else "助手包缺少 PROMPT.md，无法提供人设。"
+        else "专家包缺少 PROMPT.md，无法提供人设。"
     )
     return {
         "agent": cap.name,

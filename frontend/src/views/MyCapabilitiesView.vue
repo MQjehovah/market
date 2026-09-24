@@ -367,12 +367,12 @@ onMounted(() => {
       <div v-else-if="caps.length === 0" class="empty">
         还没有能力。小白推荐路径：
         <ol style="text-align: left; display: inline-block; margin: 12px 0; padding-left: 20px">
-          <li>点「发布能力」→ 选「发助手」或「发组件」（技能 / 连接器）</li>
+          <li>点「发布能力」→ 选「发专家」或「发组件」（技能 / 连接器）</li>
           <li>在线编辑（保存生成包）→ 提交审核</li>
           <li>上架后加入，本地执行 <code>cap install …</code></li>
         </ol>
         <div>
-          <button class="btn btn-primary" type="button" @click="openCreate('recipe')">发助手</button>
+          <button class="btn btn-primary" type="button" @click="openCreate('recipe')">发专家</button>
           <a href="/" style="margin-left: 12px; color: var(--primary)">去发现逛逛</a>
         </div>
       </div>
@@ -485,7 +485,7 @@ onMounted(() => {
                   class="op-link"
                   type="button"
                   @click="debugCap = cap"
-                >{{ cap.type === 'mcp' ? '试用连接器' : cap.type === 'agent' ? '试用助手' : '试用' }}</button>
+                >{{ cap.type === 'mcp' ? '试用连接器' : cap.type === 'agent' ? '试用专家' : '试用' }}</button>
                 <template v-if="cap.has_draft">
                   <router-link v-if="editPath(cap)" :to="editPath(cap)" class="op-link">在线编辑</router-link>
                   <button
@@ -573,7 +573,7 @@ onMounted(() => {
     <DebugCapabilityModal
       :show="!!debugCap"
       :cap="debugCap"
-      :title="debugCap?.type === 'agent' ? '试用助手' : (debugCap?.type === 'mcp' ? '试用连接器' : '云端试用')"
+      :title="debugCap?.type === 'agent' ? '试用专家' : (debugCap?.type === 'mcp' ? '试用连接器' : '云端试用')"
       @close="debugCap = null"
     />
   </div>

@@ -208,7 +208,7 @@ async def get_editable(
 ]:
     versions = await _mcp_versions(db, name)
     if not versions:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"MCP {name} 不存在")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"连接器 {name} 不存在")
     draft = next(
         (
             c
@@ -303,7 +303,7 @@ async def save_version(
 ) -> tuple[Capability, dict[str, Any], Any, list[McpImplementationFile], list[dict[str, Any]]]:
     versions = await _mcp_versions(db, name)
     if not versions:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"MCP {name} 不存在")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"连接器 {name} 不存在")
     draft = next((c for c in versions if c.status in ("draft", "returned", "rejected")), None)
     published = [c for c in versions if c.status in ("published", "deprecated")]
     base = max(published, key=lambda c: parse_semver(c.version)) if published else None
@@ -345,10 +345,10 @@ async def save_version(
         if base is None:
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
-                "该 MCP 没有已发布版本，无法创建新版本",
+                "该连接器没有已发布版本，无法创建新版本",
             )
         if user.role != "admin" and base.author_id != user.id:
-            raise HTTPException(status.HTTP_403_FORBIDDEN, "只能编辑自己发布的 MCP")
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "只能编辑自己发布的连接器")
         new_version = data.new_version or next_version(base.version, "patch")
         exists = await db.scalar(
             select(Capability.id).where(
@@ -360,7 +360,7 @@ async def save_version(
             )
         )
         if exists:
-            raise HTTPException(status.HTTP_409_CONFLICT, f"MCP {name} 已存在版本 {new_version}")
+            raise HTTPException(status.HTTP_409_CONFLICT, f"连接器 {name} 已存在版本 {new_version}")
         cap = Capability(
             name=name,
             description=data.description or base.description,

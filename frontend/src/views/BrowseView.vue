@@ -33,9 +33,9 @@ const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize))
 const emptyTaskGroups = () => ({ agents: [], skills: [], mcps: [], plugins: [], others: [] })
 
 const taskSections = [
-  { key: 'agents', title: '推荐助手', hint: '场景级问答；依赖技能/连接器会一并带出' },
-  { key: 'skills', title: '相关技能', hint: '问答 SOP，装进助手后提问即可按流程回答' },
-  { key: 'mcps', title: '相关连接器', hint: '给助手接外部系统' }
+  { key: 'agents', title: '推荐专家', hint: '场景级问答；依赖技能/连接器会一并带出' },
+  { key: 'skills', title: '相关技能', hint: '问答 SOP，装进专家后提问即可按流程回答' },
+  { key: 'mcps', title: '相关连接器', hint: '给专家接外部系统' }
 ]
 
 const filters = reactive({
@@ -53,10 +53,10 @@ const notice = ref('')
 const noticeHref = ref('')
 
 const browseTabs = [
-  { key: '', label: '推荐', hint: '助手与依赖（技能 / 连接器）的精选与热门' },
-  { key: 'agent', label: '助手', hint: '场景级问答助手；依赖随助手生效' },
-  { key: 'skill', label: '技能', hint: '问答 SOP；装进助手后提问即可按该流程回答' },
-  { key: 'mcp', label: '连接器', hint: '给助手接外部系统' },
+  { key: '', label: '推荐', hint: '专家与依赖（技能 / 连接器）的精选与热门' },
+  { key: 'agent', label: '专家', hint: '场景级问答专家；依赖随专家生效' },
+  { key: 'skill', label: '技能', hint: '问答 SOP；装进专家后提问即可按该流程回答' },
+  { key: 'mcp', label: '连接器', hint: '给专家接外部系统' },
   { key: 'more', label: '更多', hint: '能力编排与编排函数' }
 ]
 
@@ -96,17 +96,17 @@ const pageContext = computed(() => {
     return {
       eyebrow: '任务匹配',
       title: '为你找到这些能力',
-      desc: '按你要办的事匹配，并顺着依赖带出配套助手、技能与连接器。'
+      desc: '按你要办的事匹配，并顺着依赖带出配套专家、技能与连接器。'
     }
   }
   if (filters.tab === 'skill' || filters.type === 'skill') {
-    return { eyebrow: '目录', title: '技能', desc: '问答 SOP；加入后装进助手，在对话里提问即可按该流程回答。' }
+    return { eyebrow: '目录', title: '技能', desc: '问答 SOP；加入后装进专家，在对话里提问即可按该流程回答。' }
   }
   if (filters.tab === 'mcp' || filters.type === 'mcp') {
-    return { eyebrow: '目录', title: '连接器', desc: '给助手接外部系统；连上后发现的工具才可调。' }
+    return { eyebrow: '目录', title: '连接器', desc: '给专家接外部系统；连上后发现的工具才可调。' }
   }
   if (filters.tab === 'agent' || filters.type === 'agent') {
-    return { eyebrow: '目录', title: '助手', desc: '场景级问答助手；依赖的技能/连接器会随助手一起生效。' }
+    return { eyebrow: '目录', title: '专家', desc: '场景级问答专家；依赖的技能/连接器会随专家一起生效。' }
   }
   if (filters.tab === 'more' || MORE_BROWSE_KINDS.includes(filters.type)) {
     return {
@@ -120,7 +120,7 @@ const pageContext = computed(() => {
     return { eyebrow: '分类', title: s.label, desc: s.description }
   }
   if (filters.shelf === 'all') {
-    return { eyebrow: '能力总览', title: '搜索结果', desc: '含助手、技能、连接器与更多类型。' }
+    return { eyebrow: '能力总览', title: '搜索结果', desc: '含专家、技能、连接器与更多类型。' }
   }
   if (filters.sort === 'usage') {
     return { eyebrow: '目录', title: '近期热门', desc: '按使用次数排列。范围仍是当前目录。' }
@@ -294,7 +294,7 @@ async function addToMy(cap) {
     noticeHref.value = `/capabilities/${cap.id}`
     if (cap.distribution === 'remote') {
       const extra = r?.message && r.message.includes('未加入') ? `；${r.message}` : ''
-      notice.value = `已订阅「${cap.name}」。云端能力订阅即用，无需安装${extra}`
+      notice.value = `已加入「${cap.name}」。云端能力加入即用，无需安装${extra}`
     } else if (r?.message) {
       notice.value = r.message
     } else if (isLocalInstallKind(cap.type)) {
@@ -322,7 +322,7 @@ function selectBrowseTab(key) {
 }
 
 function selectShelf(key) {
-  // 兼容旧入口：积木→技能，配方→助手，安装包→助手（主叙事）
+  // 兼容旧入口：积木→技能，配方→专家，安装包→专家（主叙事）
   if (key === 'brick') {
     selectBrowseTab('skill')
     return
@@ -396,7 +396,7 @@ function syncFromRoute() {
   else if (filters.type === 'agent') filters.tab = 'agent'
   else if (filters.type === 'mcp') filters.tab = 'mcp'
   else if (MORE_BROWSE_KINDS.includes(filters.type)) filters.tab = 'more'
-  else if (filters.shelf === 'install') filters.tab = 'agent' // 旧链接落到助手
+  else if (filters.shelf === 'install') filters.tab = 'agent' // 旧链接落到专家
   else filters.tab = ''
   if ((filters.skill || filters.mcp) && !filters.shelf && !filters.type) {
     filters.shelf = 'all'
@@ -515,7 +515,7 @@ watch(
     </div>
 
     <div v-if="showDiscovery" class="discover-footer mb-16">
-      <button class="btn" type="button" @click="selectBrowseTab('agent')">助手</button>
+      <button class="btn" type="button" @click="selectBrowseTab('agent')">专家</button>
       <button class="btn" type="button" @click="selectBrowseTab('skill')">技能</button>
       <button class="btn" type="button" @click="selectBrowseTab('mcp')">连接器</button>
       <button class="btn" type="button" @click="selectBrowseTab('more')">更多</button>
@@ -526,10 +526,10 @@ watch(
       <template v-else-if="taskEmpty">
         <div class="panel" style="padding: 28px 24px; text-align: center">
           <p style="margin: 0 0 8px; font-size: 15px">没找到相关能力</p>
-          <p class="muted" style="margin: 0 0 16px; font-size: 13px">换个说法试试，或直接去逛技能 / 助手目录。</p>
+          <p class="muted" style="margin: 0 0 16px; font-size: 13px">换个说法试试，或直接去逛技能 / 专家目录。</p>
           <div style="display: flex; gap: 8px; justify-content: center; flex-wrap: wrap">
             <button class="btn btn-primary" type="button" @click="selectBrowseTab('skill')">去逛技能</button>
-            <button class="btn" type="button" @click="selectBrowseTab('agent')">去逛助手</button>
+            <button class="btn" type="button" @click="selectBrowseTab('agent')">去逛专家</button>
             <button class="btn" type="button" @click="router.push({ path: '/', query: { type: 'mcp' } })">去逛连接器</button>
           </div>
         </div>
@@ -624,7 +624,7 @@ watch(
           v-model="filters.mcp"
           class="input"
           style="max-width: 180px"
-          placeholder="按 MCP 名"
+          placeholder="按连接器名"
           @keyup.enter="applyFilter"
         />
         <button class="btn btn-sm btn-primary" type="button" @click="applyFilter">应用</button>

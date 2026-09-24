@@ -135,11 +135,11 @@ class MCPBridge:
     async def call(self, name: str, args: dict[str, Any]) -> str:
         entry = self._tool_map.get(name)
         if entry is None:
-            return json.dumps({"ok": False, "error": f"未知 MCP 工具 {name}"}, ensure_ascii=False)
+            return json.dumps({"ok": False, "error": f"未知连接器工具 {name}"}, ensure_ascii=False)
         prefix, real_name = entry
         server = self._servers.get(prefix)
         if server is None:
-            return json.dumps({"ok": False, "error": "MCP 连接不可用"}, ensure_ascii=False)
+            return json.dumps({"ok": False, "error": "连接器不可用"}, ensure_ascii=False)
         try:
             result = await asyncio.wait_for(
                 server["session"].call_tool(real_name, args), timeout=CALL_TIMEOUT

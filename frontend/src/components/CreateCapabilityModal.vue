@@ -63,7 +63,7 @@ const kindHint = computed(() => kindHintFor({ type: form.type, distribution: for
 const footHint = computed(() => {
   if (form.type === 'workflow') return '创建后进入编排画布；无需上传 zip'
   if (canOnlineEdit(form.type)) return '创建后进入在线编辑；保存会生成能力包，也可稍后手动上传 zip'
-  if (form.type === 'plugin') return '创建后请在详情页上传 plugin zip；审核通过后可一键加入'
+  if (form.type === 'plugin') return '创建后请在详情页上传能力包 zip；审核通过后可一键加入'
   if (needsZipUpload(form.type)) return '创建后为草稿，详情页上传能力包并提交审核'
   return '创建后为草稿，完善内容后提交审核'
 })
@@ -84,7 +84,7 @@ watch(
     step.value = 'intent'
     if (props.initialShelf && SHELVES[props.initialShelf]) {
       if (props.initialShelf === 'install') {
-        // 安装包入口保留但不作为默认意图：落到助手
+        // 安装包入口保留但不作为默认意图：落到专家
         selectIntent('recipe')
       } else {
         selectIntent(props.initialShelf)
@@ -225,7 +225,7 @@ async function create() {
 
       <template v-if="step === 'intent'">
         <div class="muted" style="font-size: 13px; line-height: 1.5; margin-bottom: 12px">
-          主叙事：助手 + 依赖。技能是说明书，连接器是手；先发助手，再按需发可复用的技能 / 连接器。
+          主叙事：专家 + 依赖。技能是说明书，连接器是手；先发专家，再按需发可复用的技能 / 连接器。
         </div>
         <div class="intent-grid">
           <button
@@ -291,7 +291,7 @@ async function create() {
         <div v-if="form.type === 'agent'" class="alert mt-12" style="font-size: 13px">
           有 <code>TEAM.md</code> 时为<strong>{{ ORCH_LABELS.team.name }}</strong>（角色协作，在零号员工执行）。
           不要用能力编排 Workflow 去替代 TEAM.md。
-          依赖的 skill / mcp 可先上架再引用，或直接内嵌在助手包内。
+          依赖的 skill / mcp 可先上架再引用，或直接内嵌在专家包内。
         </div>
         <div v-if="form.type === 'workflow'" class="alert mt-12" style="font-size: 13px">
           <strong>{{ ORCH_LABELS.capability.name }}</strong>：节点是已上架能力，只在云端执行，不进 Agent 目录。

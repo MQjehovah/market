@@ -242,7 +242,7 @@ watch(auditList, (list) => {
 const roleDefs = [
   { key: 'admin', label: '管理员', desc: '审核上架、下架归档、用户管理、试用全部资产、MCP 网关、服务令牌' },
   { key: 'publisher', label: '发布者', desc: '发布与在线编辑；提交审核；试用自己创建或已加入的资产' },
-  { key: 'user', label: '普通用户', desc: '登录可发布草稿并在线编辑技能/助手等；可试用自己创建或已加入的资产；生产消费走 cap install / MCP' }
+  { key: 'user', label: '普通用户', desc: '登录可发布草稿并在线编辑技能/专家等；可试用自己创建或已加入的资产；生产消费走 cap install / MCP' }
 ]
 
 const filteredUsers = computed(() => {
@@ -1063,7 +1063,7 @@ watch(
         <div class="flex-between mb-16" style="align-items: flex-end">
           <p class="muted" style="font-size: 13px; max-width: 720px; margin: 0">
             外部 MCP 客户端（Dify、Claude Desktop、其他 Agent）用令牌接入；
-            市场 MCP 能力包也可以用 transport=gateway 引用这里的服务。
+            市场连接器能力包也可以用 transport=gateway 引用这里的服务。
           </p>
           <button class="btn btn-primary" @click="openGatewayCreate">+ 注册 MCP 服务</button>
         </div>

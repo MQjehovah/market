@@ -1,6 +1,6 @@
 """能力市场货架与 kind 语义（控制面目录，不是六个并列商店）。
 
-type 字段 = kind；门户按 shelf（组件 / 助手 / 安装包）组织。
+type 字段 = kind；门户按 shelf（组件 / 专家 / 能力包）组织。
 """
 
 from __future__ import annotations
@@ -16,14 +16,14 @@ SHELVES: dict[str, dict[str, Any]] = {
     },
     "recipe": {
         "key": "recipe",
-        "label": "助手",
-        "description": "助手（Agent，可含 TEAM.md）与能力编排平行。",
+        "label": "专家",
+        "description": "专家（Agent，可含 TEAM.md）与能力编排平行。",
         "kinds": ["agent", "workflow"],
     },
     "install": {
         "key": "install",
-        "label": "安装包",
-        "description": "一次分发技能 + 连接器（可选助手）。能力保留，逛店默认不展示。",
+        "label": "能力包",
+        "description": "一次分发技能 + 连接器（可选专家）。能力保留，逛店默认不展示。",
         "kinds": ["plugin"],
     },
 }
@@ -34,7 +34,7 @@ KIND_SHELF: dict[str, str] = {
     for kind in shelf["kinds"]
 }
 
-# 浏览默认：助手 + 依赖（技能 / 连接器）；安装包与 rule/command/hook 保留能力但不逛店展示
+# 浏览默认：专家 + 依赖（技能 / 连接器）；能力包与 rule/command/hook 保留能力但不逛店展示
 DEFAULT_BROWSE_KINDS = ("agent", "skill", "mcp")
 MORE_BROWSE_KINDS = ("workflow", "tool")
 HIDDEN_BROWSE_KINDS = ("plugin", "rule", "command", "hook")
@@ -83,7 +83,7 @@ KIND_META: dict[str, dict[str, str]] = {
     },
     "agent": {
         "shelf": "recipe",
-        "what": "人设+依赖容器；日常靠 skill 说明书 + MCP tools",
+        "what": "人设+依赖容器；日常靠 skill 说明书 + 连接器工具",
         "install": "config/agents/<name>/（cap install）",
         "runs_in": "零号员工 / A2A；试用 runtime",
         "local_install": "yes",
@@ -170,7 +170,7 @@ REVIEW_CHECKLIST = [
     "MCP command/url 可接受或已由管理员确认",
     "Tool 包通过 AST 安全审计",
     "依赖的积木存在且版本可解析",
-    "Plugin 子组件命名不冲突；component 默认不单独上架浏览",
+    "能力包子组件命名不冲突；component 默认不单独上架浏览",
     "可见性符合组织策略（private/team/internal/public）",
 ]
 
@@ -210,7 +210,7 @@ def taxonomy_payload() -> dict[str, Any]:
             "owner": "author_id + organization",
             "note": (
                 "type 字段即 kind；不必先拆表。"
-                "主叙事：助手 + 依赖；逛店默认 agent+skill+mcp；"
+                "主叙事：专家 + 依赖；逛店默认 agent+skill+mcp；"
                 "plugin/rule/command/hook 保留能力、默认不逛店展示；"
                 "更多仅 workflow/tool；"
                 "市场 tool ≠ MCP tools ≠ 宿主 src/tools；"

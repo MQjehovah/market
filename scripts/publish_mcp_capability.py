@@ -200,7 +200,7 @@ def main() -> int:
                                    "clientInfo": {"name": "publish-verify", "version": "1"}}})
         print(f"  /relay/{args.name} initialize -> {st} {text[:110]}")
         if st != 200:
-            print("  （平台桥接未通：若见 mcp 版本/依赖类错误，先升级市场 mcp 或补依赖）")
+            print("  （云端托管未通：若见 mcp 版本/依赖类错误，先升级市场 mcp 或补依赖）")
             return 0
         rpc({"jsonrpc": "2.0", "method": "notifications/initialized"})
         st, text = rpc({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})

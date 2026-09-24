@@ -319,13 +319,13 @@ const resultState = computed(() => {
     }
   }
   if (isSkill.value) return { ok: !!r.activated, label: r.activated ? '已激活' : '激活失败', extra: '' }
-  if (isMcp.value && r.tool) return { ok: true, label: `MCP 工具：${r.tool}`, extra: '' }
+  if (isMcp.value && r.tool) return { ok: true, label: `连接器工具：${r.tool}`, extra: '' }
   return { ok: !!r.installed, label: r.installed ? '已安装' : '安装失败', extra: '' }
 })
 
 function stepBadge(name) {
   if (name === 'skill') return { label: '技能', cls: 'badge-primary' }
-  if (String(name).startsWith('mcp_')) return { label: 'MCP', cls: 'badge-warning' }
+  if (String(name).startsWith('mcp_')) return { label: '连接器', cls: 'badge-warning' }
   return { label: '工具', cls: 'badge' }
 }
 </script>
@@ -393,7 +393,7 @@ function stepBadge(name) {
       <!-- Agent / 项目 / 技能 -->
       <template v-else-if="isAgentLike || isSkill">
         <div v-if="isPlugin" class="muted" style="font-size: 13px; margin-bottom: 8px">
-          将委派给插件内主 Agent 执行；也可打开组件详情分别调试。
+          将委派给能力包内主 Agent 执行；也可打开组件详情分别调试。
         </div>
         <div v-if="isPlugin && pluginComponents.length" class="plugin-comps" style="margin-bottom: 12px">
           <div

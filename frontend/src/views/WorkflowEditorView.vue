@@ -23,7 +23,7 @@ const PALETTE = [
   { type: 'tool', label: '工具', desc: '调用市场工具', color: '#4f8cff', icon: '🔧' },
   { type: 'agent', label: 'Agent', desc: '委派 A2A Agent', color: '#9d6bff', icon: '🤖' },
   { type: 'skill', label: '技能', desc: '激活执行技能', color: '#2fbf71', icon: '📘' },
-  { type: 'mcp', label: 'MCP', desc: '安装 MCP 连接', color: '#e2a93b', icon: '🔌' }
+  { type: 'mcp', label: '连接器', desc: '接入连接器', color: '#e2a93b', icon: '🔌' }
 ]
 
 const meta = reactive({
@@ -548,7 +548,7 @@ function stateLabel(state) {
               </div>
               <div v-else-if="filteredCaps.length === 0" class="muted cap-empty">
                 暂无已发布的 {{ TYPE_LABELS[selectedNode.type] }}。
-                请先在「我的能力」发布对应组件/助手并审核通过，或到
+                请先在「我的能力」发布对应组件/专家并审核通过，或到
                 <router-link to="/">能力平台</router-link>
                 确认是否有 {{ TYPE_LABELS[selectedNode.type] }} 已上架。
               </div>

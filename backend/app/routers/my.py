@@ -249,7 +249,7 @@ async def add_capability(data: MyCapabilityAdd, db: DbSession, user: CurrentUser
         )
     if not capability_access_ok(cap, user):
         raise HTTPException(
-            status.HTTP_403_FORBIDDEN, f"没有订阅权限（{access_deny_reason(cap, user)}）"
+            status.HTTP_403_FORBIDDEN, f"没有加入权限（{access_deny_reason(cap, user)}）"
         )
 
     # 连带能力（plugin 组件 / agent 依赖）逐个过滤：不可见或无访问权限则跳过
@@ -276,9 +276,9 @@ async def add_capability(data: MyCapabilityAdd, db: DbSession, user: CurrentUser
         return MessageOut(message=f"已在你的能力中{skipped_note}")
     dep_count = len(ids) - 1
     if cap.type == "plugin" and dep_count > 0:
-        return MessageOut(message=f"已加入插件及其 {dep_count} 个组件{skipped_note}")
+        return MessageOut(message=f"已加入能力包及其 {dep_count} 个组件{skipped_note}")
     if cap.type == "agent" and dep_count > 0:
-        return MessageOut(message=f"已加入助手及其 {dep_count} 个依赖{skipped_note}")
+        return MessageOut(message=f"已加入专家及其 {dep_count} 个依赖{skipped_note}")
     return MessageOut(message=f"已加入我的能力{skipped_note}")
 
 
@@ -370,7 +370,7 @@ async def remove_capability(capability_id: str, db: DbSession, user: CurrentUser
         removed += 1
     await db.commit()
     if cap is not None and cap.type == "plugin" and removed > 1:
-        return MessageOut(message=f"已从我的能力移除插件及其 {removed - 1} 个组件")
+        return MessageOut(message=f"已从我的能力移除能力包及其 {removed - 1} 个组件")
     return MessageOut(message="已从我的能力移除")
 
 

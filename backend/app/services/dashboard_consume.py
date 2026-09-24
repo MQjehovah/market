@@ -198,7 +198,7 @@ def dashboard_projection(cap) -> dict[str, Any]:
                 for c in comps
                 if isinstance(c, dict) and c.get("name") and c.get("type")
             ],
-            "note": "安装包：拆已发布子能力；桌面尚未识别 plugin kind 时请按 components 分别安装。",
+            "note": "能力包：拆已发布子能力；桌面尚未识别 plugin kind 时请按 components 分别安装。",
         }
 
     if cap_type == "skill":
@@ -216,7 +216,7 @@ def dashboard_projection(cap) -> dict[str, Any]:
             "online": f"/api/runtime/agents/{quote(name, safe='')}/persona",
             "note": (
                 "员工装机可走 path 或 online 拉 PROMPT.md（勿用 /api/agents/.../edit）；"
-                "依赖 skill/mcp 需另装或走安装包/线上网关。"
+                "依赖 skill/mcp 需另装或走能力包/线上网关。"
             ),
         }
 

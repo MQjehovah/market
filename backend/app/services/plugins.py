@@ -70,7 +70,7 @@ def resolve_plugin_meta(files: dict[str, bytes]) -> tuple[str, dict[str, Any]]:
             return path, meta
     raise HTTPException(
         status.HTTP_422_UNPROCESSABLE_ENTITY,
-        "plugin 包根目录需含 plugin.json 或兼容插件清单",
+        "能力包根目录需含 plugin.json 或兼容能力包清单",
     )
 
 
@@ -425,7 +425,7 @@ def extract_plugin_components(files: dict[str, bytes], plugin: dict[str, Any]) -
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
                 f"skills/{skill_name}/ 缺少 SKILL.md",
             )
-        meta = {"name": skill_name, "description": f"来自插件 {plugin.get('name')}", "version": version}
+        meta = {"name": skill_name, "description": f"来自能力包 {plugin.get('name')}", "version": version}
         if "skill.json" in pkg_files:
             try:
                 loaded = json.loads(pkg_files["skill.json"].decode("utf-8-sig"))
@@ -541,7 +541,7 @@ def extract_plugin_components(files: dict[str, bytes], plugin: dict[str, Any]) -
         for srv_name, cfg in servers.items():
             if not isinstance(cfg, dict):
                 raise HTTPException(
-                    status.HTTP_422_UNPROCESSABLE_ENTITY, f"MCP {srv_name} 配置必须是对象"
+                    status.HTTP_422_UNPROCESSABLE_ENTITY, f"连接器 {srv_name} 配置必须是对象"
                 )
             connection = _rewrite_plugin_root_paths(dict(cfg))
             if "transport" not in connection:
@@ -571,7 +571,7 @@ def extract_plugin_components(files: dict[str, bytes], plugin: dict[str, Any]) -
                     {
                         "name": srv_name,
                         "description": connection.get("description")
-                        or f"来自 {plugin.get('name')} 的 MCP",
+                        or f"来自 {plugin.get('name')} 的连接器",
                         "version": version,
                     }
                 ),
@@ -587,7 +587,7 @@ def extract_plugin_components(files: dict[str, bytes], plugin: dict[str, Any]) -
                     "name": srv_name,
                     "version": version,
                     "description": str(
-                        connection.get("description") or f"插件 MCP：{srv_name}"
+                        connection.get("description") or f"能力包连接器：{srv_name}"
                     ),
                     "role": "mcp",
                     "package": _zip_bytes(pkg),
@@ -732,7 +732,7 @@ def extract_plugin_components(files: dict[str, bytes], plugin: dict[str, Any]) -
     if hooks_cfg is not None:
         hook_name = _safe_comp_name(str(plugin.get("name") or "plugin") + "-hooks")
         events = hooks_cfg.get("hooks") if isinstance(hooks_cfg.get("hooks"), dict) else {}
-        desc = f"来自插件 {plugin.get('name')} 的 Hooks"
+        desc = f"来自能力包 {plugin.get('name')} 的 Hooks"
         if isinstance(events, dict) and events:
             desc = f"{desc}（{', '.join(list(events.keys())[:6])}）"
         meta = {"name": hook_name, "description": desc, "version": version}
@@ -903,8 +903,8 @@ async def _cleanup_orphan_components(
             db.add(
                 Notification(
                     user_id=row.author_id,
-                    title=f"插件组件 {row.name} v{row.version} 已从插件断开并弃用",
-                    body=f"父插件 {plugin_cap.name} 重新上传后不再包含该组件。",
+                    title=f"能力包组件 {row.name} v{row.version} 已从能力包断开并弃用",
+                    body=f"父能力包 {plugin_cap.name} 重新上传后不再包含该组件。",
                     link=f"/capabilities/{row.id}",
                 )
             )

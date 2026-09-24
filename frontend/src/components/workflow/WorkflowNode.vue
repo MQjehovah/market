@@ -12,7 +12,7 @@ const TYPE_META = {
   tool: { label: '工具', color: '#4f8cff' },
   agent: { label: 'Agent', color: '#9d6bff' },
   skill: { label: '技能', color: '#2fbf71' },
-  mcp: { label: 'MCP', color: '#e2a93b' }
+  mcp: { label: '连接器', color: '#e2a93b' }
 }
 
 const node = computed(() => props.data?.node || {})

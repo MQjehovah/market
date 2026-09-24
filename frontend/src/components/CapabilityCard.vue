@@ -71,7 +71,7 @@ const fromPlugin = computed(() => (props.cap.tags || []).includes('plugin-compon
           :title="`默认风险：${RISK_DEFAULT_LABELS[cap.risk_default] || cap.risk_default}`"
         >{{ RISK_DEFAULT_LABELS[cap.risk_default] || cap.risk_default }}</span>
         <span v-if="displayCategory" class="badge">{{ displayCategory }}</span>
-        <span v-if="fromPlugin" class="badge badge-primary">来自插件</span>
+        <span v-if="fromPlugin" class="badge badge-primary">来自能力包</span>
         <span v-if="policy !== 'optional'" class="badge badge-warning">{{ INSTALL_POLICY_LABELS[policy] || policy }}</span>
         <span v-for="t in displayTags" :key="t" class="badge">{{ t }}</span>
       </div>

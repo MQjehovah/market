@@ -48,7 +48,7 @@ const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     { path: '/', component: BrowseView, meta: { title: '能力平台' } },
-    { path: '/agents/:name/edit', component: AgentEditView, meta: { title: '编辑助手', auth: true } },
+    { path: '/agents/:name/edit', component: AgentEditView, meta: { title: '编辑专家', auth: true } },
     { path: '/skills/:name/edit', component: SkillEditView, meta: { title: '编辑技能', auth: true } },
     { path: '/rules/:name/edit', component: MarkdownKindEditView, meta: { title: '编辑规则', auth: true, kind: 'rule' } },
     { path: '/commands/:name/edit', component: MarkdownKindEditView, meta: { title: '编辑命令', auth: true, kind: 'command' } },

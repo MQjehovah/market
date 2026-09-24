@@ -98,7 +98,7 @@ def main() -> int:
     sk = activate_skill("TDD 开发工作流", "写测试")
     print("  activated=", sk.get("activated"), "skill_md_chars=", len(sk.get("skill_md") or ""))
 
-    print("\n== 5. 拉取助手人设（PROMPT.md）==")
+    print("\n== 5. 拉取专家人设（PROMPT.md）==")
     persona = fetch_agent_persona("数字中台分析师")
     print("  prompt_chars=", len(persona.get("prompt") or ""), "deps=", len(persona.get("dependencies") or []))
     return 0

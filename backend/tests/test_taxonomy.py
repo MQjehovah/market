@@ -34,8 +34,8 @@ async def test_taxonomy_endpoint(client):
     assert body["kinds"]["tool"]["local_install"] == "no"
     assert body["kinds"]["workflow"]["local_install"] == "no"
     assert body["shelves"]["brick"]["label"] == "组件"
-    assert body["shelves"]["recipe"]["label"] == "助手"
-    assert body["shelves"]["install"]["label"] == "安装包"
+    assert body["shelves"]["recipe"]["label"] == "专家"
+    assert body["shelves"]["install"]["label"] == "能力包"
 
 
 @pytest.mark.asyncio
