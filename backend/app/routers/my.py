@@ -2,7 +2,7 @@
 
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Response, status
 from sqlalchemy import and_, select
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -17,6 +17,7 @@ from app.schemas import (
     UserSecretOut,
     UserSecretStatusOut,
     UserSecretUpsert,
+    UserSecretValuesOut,
 )
 from app.services.access import access_deny_reason, accessible_connected_ids, capability_access_ok
 from app.services.capabilities import parse_semver, to_capability_out
@@ -25,6 +26,7 @@ from app.services.install_policy import ensure_default_on_joins, is_required_pol
 from app.services.secret_vault import (
     delete_secret,
     list_secrets,
+    resolve_user_env,
     secret_status,
     to_secret_out,
     upsert_secret,
@@ -425,6 +427,32 @@ async def secrets_status(
         db, user.id, required_keys=required, capability_id=capability_id or None
     )
     return UserSecretStatusOut(**status)
+
+
+@router.get("/secrets/values", response_model=UserSecretValuesOut)
+async def secrets_values(
+    response: Response,
+    db: DbSession,
+    user: CurrentUser,
+    scope: str = "",
+    keys: str = "",
+):
+    """本人密钥明文：仅供 dashboard 本地安装写入本地 mcp.json 取用。
+
+    scope 非空时合并「全局 + 该能力级覆盖（capability_id=scope）」，能力级优先；
+    keys 为逗号分隔白名单，提供时 missing 返回其中未配置的键。
+    仅查当前用户（user_id 过滤），不落日志，响应不缓存。
+    """
+    wanted = [k.strip() for k in keys.split(",") if k.strip()]
+    values = await resolve_user_env(
+        db,
+        user.id,
+        capability_id=scope or None,
+        keys=wanted or None,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    missing = [k for k in wanted if k not in values] if wanted else []
+    return UserSecretValuesOut(values=values, missing=missing)
 
 
 @router.delete("/secrets/{secret_id}", response_model=MessageOut)

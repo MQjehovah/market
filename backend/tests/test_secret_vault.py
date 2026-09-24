@@ -124,3 +124,66 @@ async def test_resolve_user_env_capability_overrides_global(client, user_headers
         assert env_g["TOKEN"] == "global-v"
         env_c = await resolve_user_env(db, user.id, capability_id="cap-1")
         assert env_c["TOKEN"] == "cap-v"
+
+
+@pytest.mark.asyncio
+async def test_my_secret_values_endpoint(client, user_headers, admin_headers):
+    """本人密钥明文（本地安装取用）：能力级覆盖、keys/missing、仅本人、不缓存、未登录 401。"""
+    r = await client.get("/api/my/secrets/values")
+    assert r.status_code == 401
+
+    await client.put(
+        "/api/my/secrets",
+        headers=user_headers,
+        json={"key_name": "TOKEN", "value": "global-v", "scope": ""},
+    )
+    await client.put(
+        "/api/my/secrets",
+        headers=user_headers,
+        json={"key_name": "TOKEN", "value": "cap-v", "scope": "cap-1"},
+    )
+    await client.put(
+        "/api/my/secrets",
+        headers=user_headers,
+        json={"key_name": "ONLY_GLOBAL", "value": "g1", "scope": ""},
+    )
+
+    # 默认只合并全局；响应不缓存
+    r = await client.get("/api/my/secrets/values", headers=user_headers)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["values"] == {"TOKEN": "global-v", "ONLY_GLOBAL": "g1"}
+    assert body["missing"] == []
+    assert r.headers.get("cache-control") == "no-store"
+
+    # scope：能力级覆盖全局，全局项兜底保留
+    r = await client.get(
+        "/api/my/secrets/values", headers=user_headers, params={"scope": "cap-1"}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["values"] == {"TOKEN": "cap-v", "ONLY_GLOBAL": "g1"}
+
+    # keys 白名单 + missing
+    r = await client.get(
+        "/api/my/secrets/values",
+        headers=user_headers,
+        params={"keys": "TOKEN,DB_PASSWORD"},
+    )
+    body = r.json()
+    assert body["values"] == {"TOKEN": "global-v"}
+    assert body["missing"] == ["DB_PASSWORD"]
+
+    # 仅查本人：admin 无密钥；即便带他人作用域名也读不到数据
+    r = await client.get("/api/my/secrets/values", headers=admin_headers)
+    assert r.status_code == 200
+    assert r.json()["values"] == {}
+    r = await client.get(
+        "/api/my/secrets/values", headers=admin_headers, params={"scope": "cap-1"}
+    )
+    assert r.status_code == 200
+    assert r.json()["values"] == {}
+
+    # 既有元数据接口不回归：不回显明文
+    r = await client.get("/api/my/secrets", headers=user_headers)
+    assert r.status_code == 200
+    assert all("value" not in i and "ciphertext" not in i for i in r.json())
