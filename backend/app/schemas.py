@@ -321,13 +321,6 @@ class UserSecretStatusOut(BaseModel):
     complete: bool = False
 
 
-class UserSecretValuesOut(BaseModel):
-    """本人密钥明文取值（仅供本地安装取用；不落日志、响应不缓存）。"""
-
-    values: dict[str, str] = Field(default_factory=dict)
-    missing: list[str] = Field(default_factory=list)
-
-
 class CapabilitySecretUpsert(BaseModel):
     secrets: dict[str, str] = Field(default_factory=dict, description="key_name → 明文值，空值跳过")
 
