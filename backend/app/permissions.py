@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import CurrentUser
 from app.config import get_settings
 from app.models import Capability, User, UserCapability
+from app.services.access import access_deny_reason, capability_access_ok
 from app.services.visibility import is_capability_visible
 
 
@@ -68,7 +69,7 @@ async def require_runtime_access(user: User, cap: Capability, db: AsyncSession) 
     满足任一条件即可调用：
     1. 角色在 runtime_access_roles 配置中（默认 admin）；
     2. 能力作者本人（自己创建的能力）；
-    3. 已把该能力加入「我的能力」的调用方。
+    3. 已把该能力加入「我的能力」且通过统一访问谓词（部门/角色/用户白名单）。
     """
     roles = {
         r.strip()
@@ -92,13 +93,11 @@ async def require_runtime_access(user: User, cap: Capability, db: AsyncSession) 
         )
     )
     if joined is not None:
-        if policy == "restricted":
-            allowed = [u.strip() for u in (cap.allowed_users or []) if u.strip()]
-            if user.username not in allowed:
-                raise HTTPException(
-                    status.HTTP_403_FORBIDDEN,
-                    f"该能力仅限白名单用户调用：{', '.join(allowed) or '（未配置）'}",
-                )
+        if not capability_access_ok(cap, user, joined=True):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                f"没有调用该能力的权限：{access_deny_reason(cap, user)}",
+            )
         return
     raise HTTPException(
         status.HTTP_403_FORBIDDEN,

@@ -1,9 +1,14 @@
 """安装策略：optional / default_on / required 在「我的能力」中的生效逻辑。"""
 
+import logging
+
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Capability, User, UserCapability
+from app.services.access import capability_access_ok
+
+logger = logging.getLogger("market.install_policy")
 
 
 async def ensure_default_on_joins(db: AsyncSession, user: User) -> int:
@@ -29,6 +34,11 @@ async def ensure_default_on_joins(db: AsyncSession, user: User) -> int:
     added = 0
     for cap in caps:
         if cap.id in existing:
+            continue
+        if not capability_access_ok(cap, user):
+            logger.info(
+                "default_on 跳过能力「%s」：用户 %s 无访问权限", cap.name, user.username
+            )
             continue
         # plugin：一并加入组件
         ids = [cap.id]
