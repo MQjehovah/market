@@ -327,19 +327,23 @@ async def sync_capabilities(
 
     visible = await get_visible_capabilities(db, act_user or user)
     if act_user is not None:
-        subscribed = set(
-            (
-                await db.scalars(
-                    select(UserCapability.capability_id).where(
-                        UserCapability.user_id == act_user.id
+        # admin 不依赖订阅（与 access.py 的 admin 早退一致）：返回其可见 ∩ 可访问 ∩ 非 local；
+        # 普通用户则仅返回已订阅能力
+        subscribed: set[str] = set()
+        if act_user.role != "admin":
+            subscribed = set(
+                (
+                    await db.scalars(
+                        select(UserCapability.capability_id).where(
+                            UserCapability.user_id == act_user.id
+                        )
                     )
-                )
-            ).all()
-        )
+                ).all()
+            )
         visible = [
             c
             for c in visible
-            if c.id in subscribed
+            if (act_user.role == "admin" or c.id in subscribed)
             and capability_access_ok(c, act_user)
             and (getattr(c, "distribution", None) or "both") != "local"
         ]

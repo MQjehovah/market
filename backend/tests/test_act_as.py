@@ -6,9 +6,10 @@ import uuid
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import select
 
 from app.database import SessionLocal
-from app.models import ServiceToken
+from app.models import ServiceToken, UserCapability
 from app.services.mcp_gateway import authorize_capability_gateway
 from app.services.service_tokens import is_service_token, require_service_scope
 from test_mcp_debug import _mcp_zip
@@ -251,6 +252,26 @@ async def test_sync_act_as_filters_subscribed_visible(client, publisher_headers,
     assert "act-out" not in names
     assert "act-denied" not in names
     assert "act-local" not in names
+
+
+@pytest.mark.asyncio
+async def test_sync_act_as_admin_skips_subscription(client, publisher_headers, admin_headers):
+    """admin 目标用户不依赖订阅（与 access.py 早退一致），等同全量可访问集；local 仍排除。"""
+    await _publish(client, publisher_headers, admin_headers, "act-admin-remote")
+    await _publish(
+        client, publisher_headers, admin_headers, "act-admin-local", distribution="local"
+    )
+    me = (await client.get("/api/auth/me", headers=admin_headers)).json()
+    async with SessionLocal() as db:
+        joined = (
+            await db.scalars(select(UserCapability).where(UserCapability.user_id == me["id"]))
+        ).all()
+    assert not joined, "admin 不应依赖订阅"
+
+    _, token = await _make_token(client, admin_headers, ["gateway", "sync"])
+    names = {i["name"] for i in await _sync(client, token, act_as="admin")}
+    assert "act-admin-remote" in names  # 未订阅也能拿到
+    assert "act-admin-local" not in names  # distribution=local 仍排除
 
 
 @pytest.mark.asyncio
