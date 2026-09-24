@@ -136,12 +136,21 @@ MCP 注意：市场包必须是 `mcp.json` + `connection.json` + `tools.json` + 
 
 ## MCP 网关治理（鉴权 / 审计 / 限流熔断 / 超时）
 
-- **鉴权**：能力级 `/api/mcp-gateway/relay/{name}/{sse|messages|stream}`（`/cap/{name}/…` 为过渡别名）必须 Bearer（市场 JWT / SSO / 服务令牌，`name` 支持 `name@version`），再走运行时准入与 `distribution=local` 拦截；服务级 `/api/mcp-gateway/{name}/…` 用 `X-Gateway-Token`/Bearer 精确匹配登记令牌，未配置令牌时按 `MCP_GATEWAY_REQUIRE_TOKEN` 决定是否放行（匿名仅出现在此轨）。
+- **鉴权**：能力级 `/api/mcp-gateway/relay/{name}/{sse|messages|stream}` 必须 Bearer（市场 JWT / SSO / 服务令牌，`name` 支持 `name@version`），再走运行时准入与 `distribution=local` 拦截；**服务令牌须带对应 scope（relay=`gateway`、sync=`sync`，存量无 scope 令牌放行并告警）且支持 `X-Act-As-Sub: <工号>` 代表用户**（仅服务令牌生效）；服务级 `/api/mcp-gateway/{name}/…` 用 `X-Gateway-Token`/Bearer 精确匹配登记令牌，未配置令牌时按 `MCP_GATEWAY_REQUIRE_TOKEN` 决定是否放行（匿名仅出现在此轨）。
 - **审计**：`persist_gateway_usage` 写 `UsageEvent`（mcp_connect / gateway_call，含 capability_version/耗时/conversation_id/source=platform）并累计 `usage_count`；另按每条入站 JSON-RPC 消息写 `mcp_gateway_calls` 一行（服务名、绑定能力与版本、用户/来源 `jwt|sso|service_token|server_token|anonymous`、`initialize|tools_list|tools_call|other`、工具名、`X-Conversation-Id`（截断 64）、耗时、成功/错误（截断 300）），匿名与未绑定能力也记录；审计写失败只告警，不影响调用。
 - **限流 / 熔断**：`gateway_governance` 以 `user:{id}` 限流（`MCP_GATEWAY_RATE_LIMIT_PER_MINUTE`，默认 120，超限 429）、以 `mcp:{name}` 熔断（连续失败阈值 / 冷却秒 `MCP_GATEWAY_CIRCUIT_*`，熔断 503）。
 - **超时**：`/stream` 的单条 JSON-RPC 转发受 `MCP_GATEWAY_REQUEST_TIMEOUT`（默认 60s，≤0 关闭）约束，超时返回 JSON-RPC error(-32001) 并审计 ok=False；`/sse` 长连接不设总超时。
 
 新表 `mcp_gateway_calls` 与 `mcp_gateway_servers.capability_id` 由 `create_all` / `init_db` 轻量迁移自动处理，存量库无需手工 ALTER。
+
+## 部门 / 角色权限与订阅门禁
+
+- **用户部门**：`users.department` 由 SSO 登录按 `dept` claim 回写（非空才覆盖），管理员也可在「用户管理」编辑；权限按「部门 + 角色」两维管理，另有用户白名单。
+- **能力权限**：`allowed_departments` / `allowed_roles` / `allowed_users` 三门，**每个非空维度必须全部命中（AND）**；`open` 全空放行、`restricted` 全空仅管理员/作者。作者或管理员在能力详情页「调用权限」配置（`POST /api/capabilities/{id}/access`，字段三态：未传=保持、`[]`=清空）。
+- **订阅门禁**：`POST /api/my/capabilities` 需「可见 + 权限谓词通过」，否则 403（文案含原因）；`default_on` 自动加入同样尊重权限；连带组件（plugin 组件 / agent 依赖）逐条过滤。
+- **运行时门禁**：`require_runtime_access` 对已订阅调用方应用同一谓词（调岗即时生效），网关 `/relay` 同样。
+- **代表用户（act-as）**：服务令牌（`sync`/`gateway` scope）可带 `X-Act-As-Sub: <工号>` 以目标用户身份取能力清单/调用网关；sync 返回该用户「已订阅 ∩ 可见 ∩ 可访问 ∩ 非 local」（admin 不依赖订阅）；网关按目标用户门禁/限流，并对服务令牌自身加限流键。
+- **分发语义**：`distribution=remote` 云端订阅即用（不提供本地安装）；`local/both` 才提供安装。
 
 ## 生命周期与审核
 
