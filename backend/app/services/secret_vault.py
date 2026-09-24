@@ -234,3 +234,8 @@ def attach_user_env(config: dict[str, Any], user_env: dict[str, str]) -> dict[st
             env[k] = v
     cfg["env"] = env
     return cfg
+
+
+def attach_platform_env(config: dict[str, Any], platform_env: dict[str, str]) -> dict[str, Any]:
+    """把能力级平台密钥挂到 connect 配置上（合并逻辑与 attach_user_env 一致）。"""
+    return attach_user_env(config, platform_env)

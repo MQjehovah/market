@@ -388,3 +388,24 @@ class UserSecret(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
     )
+
+
+class CapabilitySecret(Base):
+    """能力级平台密钥（Fernet 密文）：按能力名跨版本、全用户共用，作者/admin 配置。
+
+    平台轨（网关 / runtime / 安装探测）统一注入；与用户个人密钥（user_secrets）无关。
+    """
+
+    __tablename__ = "capability_secrets"
+    __table_args__ = (
+        UniqueConstraint("capability_name", "key_name", name="uq_capability_secret_name_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    capability_name: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    key_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_by: Mapped[str] = mapped_column(String(36), default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )

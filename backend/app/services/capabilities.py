@@ -428,6 +428,8 @@ async def delete_capability_row(db: AsyncSession, cap: Capability, *, commit: bo
     await db.execute(sql_delete(Review).where(Review.capability_id == cid))
     await db.execute(sql_delete(Rating).where(Rating.capability_id == cid))
     await db.execute(sql_delete(UsageEvent).where(UsageEvent.capability_id == cid))
+    # 平台密钥（capability_secrets）按能力名跨版本：删除单版本行不清理，
+    # 仅当能力名整体删除时才应显式按名删除（当前无该路径）
     await db.execute(sql_delete(UserCapability).where(UserCapability.capability_id == cid))
     await db.execute(sql_delete(A2ATask).where(A2ATask.agent_id == cid))
     await db.execute(sql_delete(WorkflowExecution).where(WorkflowExecution.workflow_id == cid))

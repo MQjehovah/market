@@ -321,6 +321,23 @@ class UserSecretStatusOut(BaseModel):
     complete: bool = False
 
 
+class CapabilitySecretUpsert(BaseModel):
+    secrets: dict[str, str] = Field(default_factory=dict, description="key_name → 明文值，空值跳过")
+
+
+class CapabilitySecretItemOut(BaseModel):
+    key_name: str
+    updated_at: datetime | None = None
+    updated_by: str = ""
+
+
+class CapabilitySecretsOut(BaseModel):
+    """平台密钥元数据（不含明文）+ 能力声明的 env 键。"""
+
+    items: list[CapabilitySecretItemOut] = Field(default_factory=list)
+    declared_env: list[str] = Field(default_factory=list)
+
+
 class ServiceTokenCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     scopes: list[str] = Field(default_factory=lambda: ["runtime", "gateway", "sync"])

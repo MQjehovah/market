@@ -24,6 +24,9 @@ from app.schemas import (
     AccessPolicyUpdate,
     CapabilityOut,
     CapabilityPage,
+    CapabilitySecretItemOut,
+    CapabilitySecretsOut,
+    CapabilitySecretUpsert,
     InstallPolicyUpdate,
     MessageOut,
     NotificationOut,
@@ -37,6 +40,12 @@ from app.schemas import (
 )
 from app.services.access import capability_access_ok
 from app.services.act_as import resolve_act_as
+from app.services.capability_secrets import (
+    declared_env_keys,
+    delete_capability_secret,
+    list_capability_secrets,
+    upsert_capability_secrets_bulk,
+)
 from app.services.capabilities import get_visible_capabilities, parse_semver, record_rating
 from app.services.capabilities import to_capability_out
 from app.services.service_tokens import is_service_token, require_service_scope
@@ -661,6 +670,68 @@ async def update_install_policy(
     await db.commit()
     await db.refresh(cap)
     return _to_out(cap)
+
+
+def _require_platform_secret_admin(cap: Capability, user: User) -> None:
+    """平台密钥管理权限：作者或 admin（与其他管理接口一致）。"""
+    if user.role != "admin" and cap.author_id != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "只有作者或管理员可以管理平台密钥")
+
+
+async def _platform_secrets_out(db: DbSession, cap: Capability) -> CapabilitySecretsOut:
+    rows = await list_capability_secrets(db, cap.name)
+    return CapabilitySecretsOut(
+        items=[
+            CapabilitySecretItemOut(
+                key_name=row.key_name,
+                updated_at=row.updated_at,
+                updated_by=row.updated_by,
+            )
+            for row in rows
+        ],
+        declared_env=declared_env_keys(cap),
+    )
+
+
+@router.get("/capabilities/{cap_id}/platform-secrets", response_model=CapabilitySecretsOut)
+async def get_platform_secrets(cap_id: str, db: DbSession, user: CurrentUser):
+    """能力级平台密钥（按名跨版本、全用户共用）：平台轨注入；仅作者或管理员可读。"""
+    cap = await db.get(Capability, cap_id)
+    if cap is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
+    _require_platform_secret_admin(cap, user)
+    return await _platform_secrets_out(db, cap)
+
+
+@router.put("/capabilities/{cap_id}/platform-secrets", response_model=CapabilitySecretsOut)
+async def put_platform_secrets(
+    cap_id: str, data: CapabilitySecretUpsert, db: DbSession, user: CurrentUser
+):
+    """批量写入平台密钥（空值跳过），按能力名落库。"""
+    cap = await db.get(Capability, cap_id)
+    if cap is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
+    _require_platform_secret_admin(cap, user)
+    await upsert_capability_secrets_bulk(
+        db, cap.name, data.secrets, updated_by=user.id
+    )
+    await db.commit()
+    return await _platform_secrets_out(db, cap)
+
+
+@router.delete(
+    "/capabilities/{cap_id}/platform-secrets/{key_name}", response_model=MessageOut
+)
+async def remove_platform_secret(
+    cap_id: str, key_name: str, db: DbSession, user: CurrentUser
+):
+    cap = await db.get(Capability, cap_id)
+    if cap is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
+    _require_platform_secret_admin(cap, user)
+    await delete_capability_secret(db, cap.name, key_name)
+    await db.commit()
+    return MessageOut(message=f"已删除平台密钥 {key_name}")
 
 
 @router.delete("/subscriptions", response_model=MessageOut)
