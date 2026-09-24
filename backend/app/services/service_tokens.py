@@ -1,8 +1,9 @@
-"""服务令牌（M2M）：创建 / 校验 / 吊销。"""
+"""服务令牌（M2M）：创建 / 校验 / 吊销 / scope 门禁。"""
 
 from __future__ import annotations
 
 import hashlib
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 
@@ -15,6 +16,7 @@ from app.models import ServiceToken, User
 
 TOKEN_PREFIX = "mkt_svc_"
 ALLOWED_SCOPES = frozenset({"runtime", "gateway", "sync", "admin"})
+logger = logging.getLogger("market.service_tokens")
 
 
 def hash_service_token(raw: str) -> str:
@@ -102,7 +104,40 @@ async def resolve_service_token(db: AsyncSession, raw: str) -> User | None:
     # 把 scopes 挂到用户对象上，供调用方可选检查（不入库）
     setattr(user, "_service_token_scopes", list(row.scopes or []))
     setattr(user, "_service_token_id", row.id)
+    setattr(user, "_service_token_prefix", row.token_prefix)
     return user
+
+
+def is_service_token(user: User) -> bool:
+    """当前身份是否来自服务令牌（resolve_service_token 挂载的标记属性）。"""
+    return getattr(user, "_service_token_scopes", None) is not None
+
+
+def require_service_scope(user: User, *scopes: str) -> None:
+    """服务令牌 scope 门禁：仅在确认调用方是服务令牌后调用。
+
+    - 非服务令牌（无 ``_service_token_scopes`` 属性/为 None）→ 403；
+    - 服务令牌但 scopes 为空列表（存量令牌，早于 scope 强制）→ 放行 + 告警；
+    - scopes 非空且与要求无交集 → 403（文案含所需 scope）。
+    """
+    granted = getattr(user, "_service_token_scopes", None)
+    if granted is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "该操作仅服务令牌可访问")
+    granted = [str(s).strip() for s in granted if str(s).strip()]
+    if not granted:
+        logger.warning(
+            "服务令牌 %s（绑定用户 %s）未配置 scopes，按存量令牌放行；本次要求 %s",
+            getattr(user, "_service_token_prefix", "") or getattr(user, "_service_token_id", ""),
+            user.username,
+            "/".join(scopes),
+        )
+        return
+    required = {s for s in scopes if s}
+    if not required.intersection(granted):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            f"服务令牌缺少所需 scope：{'/'.join(sorted(required))}（当前：{', '.join(granted)}）",
+        )
 
 
 async def list_service_tokens(db: AsyncSession) -> list[ServiceToken]:

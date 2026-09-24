@@ -1,16 +1,25 @@
 """门户：浏览 / 搜索 / 详情 / 评分 / 订阅 / 通知 / 版本列表。"""
 
 import io
+import logging
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import String, and_, case, cast, func, or_, select
 from sqlalchemy.orm import joinedload, selectinload
 
 from app.auth import CurrentUser, DbSession, OptionalUser
 from app.config import get_settings
-from app.models import Capability, MCPGatewayServer, Notification, Rating, Subscription, User
+from app.models import (
+    Capability,
+    MCPGatewayServer,
+    Notification,
+    Rating,
+    Subscription,
+    User,
+    UserCapability,
+)
 from app.schemas import (
     AccessPolicyUpdate,
     CapabilityOut,
@@ -26,8 +35,11 @@ from app.schemas import (
     TaskSearchHitOut,
     TaskSearchOut,
 )
+from app.services.access import capability_access_ok
+from app.services.act_as import resolve_act_as
 from app.services.capabilities import get_visible_capabilities, parse_semver, record_rating
 from app.services.capabilities import to_capability_out
+from app.services.service_tokens import is_service_token, require_service_scope
 from app.services.task_search import task_search as run_task_search
 from app.services.visibility import visibility_condition
 from app.services.taxonomy import (
@@ -38,6 +50,7 @@ from app.services.taxonomy import (
 from app.storage import get_storage
 
 router = APIRouter(prefix="/api", tags=["portal"])
+logger = logging.getLogger("market.portal")
 
 
 def _to_out(cap: Capability, versions: list[Capability] | None = None) -> CapabilityOut:
@@ -286,6 +299,7 @@ async def task_search_capabilities(
 
 @router.get("/capabilities/sync", response_model=list[dict])
 async def sync_capabilities(
+    request: Request,
     db: DbSession,
     user: OptionalUser,
     since: str | None = Query(
@@ -297,10 +311,38 @@ async def sync_capabilities(
 
     含已发布的 plugin 拆出组件（skill/mcp 等），便于其他 Agent 依赖复用。
     传 since 时改为增量：返回该时刻之后更新的全部 published/deprecated 行（不折叠为最新版）。
+    服务令牌须带 sync scope；``X-Act-As-Sub`` 代表目标用户，仅返回其已订阅且可访问的
+    remote/both 能力（非服务令牌忽略该头）。
     """
     from datetime import datetime
 
-    visible = await get_visible_capabilities(db, user)
+    act_user: User | None = None
+    if is_service_token(user):
+        require_service_scope(user, "sync")
+        act_sub = (request.headers.get("x-act-as-sub") or "").strip()
+        if act_sub:
+            act_user = await resolve_act_as(db, user, act_sub)
+    elif (request.headers.get("x-act-as-sub") or "").strip():
+        logger.debug("非服务令牌携带 X-Act-As-Sub，已忽略")
+
+    visible = await get_visible_capabilities(db, act_user or user)
+    if act_user is not None:
+        subscribed = set(
+            (
+                await db.scalars(
+                    select(UserCapability.capability_id).where(
+                        UserCapability.user_id == act_user.id
+                    )
+                )
+            ).all()
+        )
+        visible = [
+            c
+            for c in visible
+            if c.id in subscribed
+            and capability_access_ok(c, act_user)
+            and (getattr(c, "distribution", None) or "both") != "local"
+        ]
     published = [c for c in visible if c.status in ("published", "deprecated")]
 
     since_dt = None
