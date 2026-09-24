@@ -85,6 +85,15 @@ def build_package(args) -> str:
         "command": "python",
         "args": [f"implementation/{os.path.basename(args.server)}"],
     }
+    env = {}
+    for pair in args.env or []:
+        if "=" not in pair:
+            print(f"  [warn] 忽略非法 --env: {pair}")
+            continue
+        k, v = pair.split("=", 1)
+        env[k.strip()] = v.strip()
+    if env:
+        conn["env"] = env
     mcp_meta = {"name": args.name, "description": args.description, "version": args.version}
     sec = {"notes": args.security_notes or "凭证走 ${VAR} 占位符（在市场「我的密钥」中配置）"}
     readme = f"# {args.name}\n\n{args.description}\n\n- 传输：stdio（平台侧解压 implementation 后拉起）\n- 依赖：见实现代码 import（市场镜像预装 requests/rich/pymysql/websockets 等）\n"
@@ -124,6 +133,7 @@ def main() -> int:
     ap.add_argument("--version", default="1.0.0")
     ap.add_argument("--server", required=True, help="server 入口 .py 路径")
     ap.add_argument("--extra", action="append", help="随包附件（如 env_guard.py），可多次")
+    ap.add_argument("--env", action="append", help="connection.json 的 env 键值（KEY=VALUE），可多次；值用 ${VAR} 占位符")
     ap.add_argument("--description", default="")
     ap.add_argument("--risk", default="write", choices=["read", "write", "destructive"])
     ap.add_argument("--distribution", default="both", choices=["local", "remote", "both"])
