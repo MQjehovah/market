@@ -60,7 +60,7 @@ async def _set_platform_secret(client, headers, cap_id: str, key: str, value: st
     return r.json()
 
 
-async def _create_user(client, admin_headers, username: str) -> dict:
+async def _create_user(client, admin_headers, username: str, role: str = "user") -> dict:
     r = await client.post(
         "/api/admin/users",
         headers=admin_headers,
@@ -68,6 +68,7 @@ async def _create_user(client, admin_headers, username: str) -> dict:
             "username": username,
             "email": f"{username}@example.com",
             "password": "secret123",
+            "role": role,
         },
     )
     assert r.status_code == 201, r.text
@@ -551,3 +552,280 @@ async def test_relay_platform_secret_decrypt_failure_returns_502(
     )
     assert cfg is None and status == 502, body
     assert "密钥" in body["detail"] or "解析" in body["detail"]
+
+
+# ---------- 其余创建入口的名称归属 ----------
+
+
+def _plugin_with_skill_zip(plugin_name: str, skill_name: str) -> bytes:
+    """构造只含一个 skill 组件的 plugin 包（skill 名可控）。"""
+    files = {
+        "plugin.json": json.dumps(
+            {"name": plugin_name, "version": "1.0.0"}, ensure_ascii=False
+        ).encode("utf-8"),
+        f"skills/{skill_name}/SKILL.md": "# 组件\n".encode("utf-8"),
+    }
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for fn, data in files.items():
+            zf.writestr(fn, data)
+    return buf.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_workflow_create_same_name_other_author_forbidden(
+    client, publisher_headers, admin_headers
+):
+    """工作流创建入口也须归属校验（实测投毒路径）。"""
+    name = "工作流占名能力"
+    await _publish_capability(
+        client, publisher_headers, admin_headers, name, "mcp", _mcp_zip(name)
+    )
+    await _create_user(client, admin_headers, "wf-thief")
+    thief_headers = await _login(client, "wf-thief")
+
+    r = await client.post(
+        "/api/workflows",
+        headers=thief_headers,
+        json={"name": name, "version": "1.0.0", "workflow": {"nodes": [], "edges": []}},
+    )
+    assert r.status_code == 403, r.text
+    assert "占用" in r.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_assemble_create_same_name_other_author_forbidden(
+    client, publisher_headers, admin_headers
+):
+    """Agent 组装入口也须归属校验（实测投毒路径）。"""
+    from test_workflow import _agent_zip, _tool_zip
+
+    persona = "assemble-own-persona"
+    victim_name = "assemble-victim-cap"
+    await _publish_capability(
+        client, publisher_headers, admin_headers, persona, "agent", _agent_zip(persona)
+    )
+    await _publish_capability(
+        client, publisher_headers, admin_headers, victim_name, "tool", _tool_zip(victim_name)
+    )
+    await _create_user(client, admin_headers, "assemble-thief", role="publisher")
+    thief_headers = await _login(client, "assemble-thief")
+
+    r = await client.post(
+        "/api/assemble/agents",
+        headers=thief_headers,
+        json={
+            "persona": persona,
+            "name": victim_name,
+            "version": "0.1.0",
+            "dependencies": [],
+        },
+    )
+    assert r.status_code == 403, r.text
+    assert "占用" in r.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_plugin_component_same_name_other_author_forbidden(
+    client, publisher_headers, admin_headers
+):
+    """plugin 组件名撞他人能力名：上传即 403（防借组件创建同名行）。"""
+    victim_name = "组件占名技能"
+    await _publish_capability(
+        client, publisher_headers, admin_headers, victim_name, "mcp", _mcp_zip(victim_name)
+    )
+    await _create_user(client, admin_headers, "plugin-thief", role="publisher")
+    thief_headers = await _login(client, "plugin-thief")
+
+    r = await client.post(
+        "/api/publish/capabilities",
+        headers=thief_headers,
+        json={"name": "thief-plugin", "type": "plugin", "version": "1.0.0"},
+    )
+    assert r.status_code == 201, r.text
+    plugin_id = r.json()["id"]
+    r = await client.post(
+        f"/api/publish/capabilities/{plugin_id}/artifact",
+        headers=thief_headers,
+        files={"file": ("p.zip", _plugin_with_skill_zip("thief-plugin", victim_name), "application/zip")},
+    )
+    assert r.status_code == 403, r.text
+    assert "占用" in r.json()["detail"]
+
+
+# ---------- canonical：deprecated 纳入 / 非 semver 容错 ----------
+
+
+@pytest.mark.asyncio
+async def test_canonical_author_keeps_deprecated_row(
+    client, publisher_headers, admin_headers
+):
+    """能力弃用后 canonical 仍为原作者；攻击者更高版本行不能夺走管理权。"""
+    from sqlalchemy import select
+
+    from app.database import SessionLocal
+    from app.models import Capability, User
+    from app.services.capability_secrets import (
+        canonical_capability_author_id,
+        resolve_capability_env,
+    )
+
+    name = "弃用正主能力"
+    cap_id = await _publish_capability(
+        client,
+        publisher_headers,
+        admin_headers,
+        name,
+        "mcp",
+        _mcp_zip(name, {"APP_SECRET": "${APP_SECRET}"}),
+    )
+    await _set_platform_secret(client, admin_headers, cap_id, "APP_SECRET", "victim-v")
+    r = await client.post(f"/api/admin/capabilities/{cap_id}/deprecate", headers=admin_headers)
+    assert r.status_code == 200, r.text
+
+    publisher_id = (await client.get("/api/auth/me", headers=publisher_headers)).json()["id"]
+    await _create_user(client, admin_headers, "deprecate-thief")
+    async with SessionLocal() as db:
+        thief = await db.scalar(select(User).where(User.username == "deprecate-thief"))
+        forged = Capability(
+            name=name,
+            type="mcp",
+            version="9.9.9",
+            status="draft",
+            author_id=thief.id,
+            visibility="internal",
+        )
+        db.add(forged)
+        await db.commit()
+        await db.refresh(forged)
+        forged_id = forged.id
+        assert await canonical_capability_author_id(db, name) == publisher_id
+
+    thief_headers = await _login(client, "deprecate-thief")
+    r = await client.put(
+        f"/api/capabilities/{forged_id}/platform-secrets",
+        headers=thief_headers,
+        json={"secrets": {"APP_SECRET": "poisoned"}},
+    )
+    assert r.status_code == 403, r.text
+    async with SessionLocal() as db:
+        env = await resolve_capability_env(db, name)
+    assert env == {"APP_SECRET": "victim-v"}
+
+
+@pytest.mark.asyncio
+async def test_non_semver_version_canonical_endpoints_ok(
+    client, publisher_headers, admin_headers
+):
+    """非 semver 版本行（WorkflowCreate 无 semver 校验，落库后响应序列化才报错）
+    不得让 canonical 判定 500。"""
+    from sqlalchemy import select
+
+    from app.database import SessionLocal
+    from app.models import Capability, User
+    from app.services.capability_secrets import resolve_capability_env
+
+    name = "非语义版本流"
+    await _create_user(client, admin_headers, "nonsemver-owner")
+    async with SessionLocal() as db:
+        owner = await db.scalar(select(User).where(User.username == "nonsemver-owner"))
+        cap = Capability(
+            name=name,
+            type="workflow",
+            version="weird-version",
+            status="published",
+            author_id=owner.id,
+            visibility="internal",
+        )
+        db.add(cap)
+        await db.commit()
+        await db.refresh(cap)
+        cap_id = cap.id
+    owner_headers = await _login(client, "nonsemver-owner")
+
+    r = await client.get(f"/api/capabilities/{cap_id}/platform-secrets", headers=owner_headers)
+    assert r.status_code == 200, r.text
+    r = await client.put(
+        f"/api/capabilities/{cap_id}/platform-secrets",
+        headers=owner_headers,
+        json={"secrets": {"K": "v"}},
+    )
+    assert r.status_code == 200, r.text
+    async with SessionLocal() as db:
+        env = await resolve_capability_env(db, name)
+    assert env == {"K": "v"}
+    r = await client.delete(
+        f"/api/capabilities/{cap_id}/platform-secrets/K", headers=owner_headers
+    )
+    assert r.status_code == 200, r.text
+
+
+# ---------- 最后一行删除/改名的密钥清理 ----------
+
+
+@pytest.mark.asyncio
+async def test_delete_last_row_clears_platform_secrets(
+    client, publisher_headers, admin_headers
+):
+    """删除同名最后一行：清空该 name 的平台密钥；仍有其他行时保留。"""
+    from app.database import SessionLocal
+    from app.services.capability_secrets import list_capability_secrets
+
+    name = "清理密钥能力"
+
+    async def _create_draft(version: str) -> str:
+        r = await client.post(
+            "/api/publish/capabilities",
+            headers=publisher_headers,
+            json={"name": name, "type": "tool", "version": version},
+        )
+        assert r.status_code == 201, r.text
+        return r.json()["id"]
+
+    first = await _create_draft("1.0.0")
+    second = await _create_draft("2.0.0")
+    await _set_platform_secret(client, publisher_headers, first, "K", "v")
+
+    r = await client.delete(f"/api/publish/capabilities/{first}", headers=publisher_headers)
+    assert r.status_code == 200, r.text
+    async with SessionLocal() as db:
+        assert await list_capability_secrets(db, name)  # 仍有同名行 → 保留
+
+    r = await client.delete(f"/api/publish/capabilities/{second}", headers=publisher_headers)
+    assert r.status_code == 200, r.text
+    async with SessionLocal() as db:
+        assert await list_capability_secrets(db, name) == []
+
+    # 同作者重建同名草稿：无残留元数据
+    rebuilt = await _create_draft("3.0.0")
+    r = await client.get(
+        f"/api/capabilities/{rebuilt}/platform-secrets", headers=publisher_headers
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["items"] == []
+
+
+@pytest.mark.asyncio
+async def test_rename_last_row_clears_old_name_secrets(client, publisher_headers, admin_headers):
+    """最后一行改名：清理旧 name 的平台密钥，避免名称释放后孤儿密钥被认领。"""
+    from app.database import SessionLocal
+    from app.services.capability_secrets import list_capability_secrets
+
+    old_name = "改名清理旧名"
+    r = await client.post(
+        "/api/publish/capabilities",
+        headers=publisher_headers,
+        json={"name": old_name, "type": "tool", "version": "1.0.0"},
+    )
+    assert r.status_code == 201, r.text
+    cap_id = r.json()["id"]
+    await _set_platform_secret(client, publisher_headers, cap_id, "K", "v")
+
+    r = await client.put(
+        f"/api/publish/capabilities/{cap_id}",
+        headers=publisher_headers,
+        json={"name": "改名清理新名"},
+    )
+    assert r.status_code == 200, r.text
+    async with SessionLocal() as db:
+        assert await list_capability_secrets(db, old_name) == []

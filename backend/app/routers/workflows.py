@@ -19,7 +19,7 @@ from app.schemas import (
     WorkflowExecutionOut,
     WorkflowUpdate,
 )
-from app.services.capabilities import to_capability_out
+from app.services.capabilities import ensure_name_ownership, to_capability_out
 from app.services.marketplace import resolve_capability
 from app.services.workflows import execute_workflow, load_workflow_definition, validate_definition
 from app.storage import get_storage
@@ -55,6 +55,8 @@ async def create_workflow(data: WorkflowCreate, db: DbSession, user: CurrentUser
         raise HTTPException(
             status.HTTP_409_CONFLICT, f"工作流 {data.name} 已存在版本 {data.version}"
         )
+    # 名称归属：同名只能由既有作者继续发版本（防抢注同名后污染按名资源）
+    await ensure_name_ownership(db, data.name, user)
     pkg = _workflow_zip(data.workflow)
     from app.services.packages import extract_readme_text
 

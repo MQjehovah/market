@@ -777,6 +777,11 @@ async def _upsert_component(
     if comp.get("input_schema"):
         parent_schema = {**comp["input_schema"], **parent_schema}
 
+    # 名称归属：组件名可能是包内自带的新 name，须防抢注他人名称建行
+    from app.services.capabilities import ensure_name_ownership
+
+    await ensure_name_ownership(db, name, user)
+
     existing = await db.scalar(
         select(Capability)
         .options(selectinload(Capability.artifacts))

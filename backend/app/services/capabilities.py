@@ -274,6 +274,27 @@ async def get_visible_capabilities(
     return [cap for cap in result if is_capability_visible(cap, user)]
 
 
+async def ensure_name_ownership(db: AsyncSession, name: str, user: User) -> None:
+    """名称归属：同名已存在且存在非本人作者的行 → 403；同作者多版本放行。
+
+    admin 不豁免（代管走编辑既有行，见 publish _require_owner）。
+    所有可能创建新 name 能力行的入口（市场创建、工作流、组装、plugin 组件等）都应调用。
+    """
+    cap_name = (name or "").strip()
+    if not cap_name:
+        return
+    foreign = await db.scalar(
+        select(Capability.id)
+        .where(and_(Capability.name == cap_name, Capability.author_id != user.id))
+        .limit(1)
+    )
+    if foreign:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            f"能力名称 {cap_name} 已被其他作者占用，请换名或联系管理员",
+        )
+
+
 async def create_capability(
     db: AsyncSession, user: User, data: CapabilityCreate
 ) -> Capability:
@@ -286,21 +307,7 @@ async def create_capability(
         raise HTTPException(
             status.HTTP_409_CONFLICT, f"能力 {data.name} 已存在版本 {data.version}"
         )
-    # 名称归属：同名只能由既有作者继续发版本（参照 plugins.py 组件口径）。
-    # admin 不例外：代管走编辑既有行（publish _require_owner 已放行 admin），
-    # 而非另建同名行，避免同名跨作者行引发平台密钥等按名资源的归属歧义。
-    foreign = await db.scalar(
-        select(Capability.id)
-        .where(
-            and_(Capability.name == data.name, Capability.author_id != user.id)
-        )
-        .limit(1)
-    )
-    if foreign:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            f"能力名称 {data.name} 已被其他作者占用，请换名或联系管理员",
-        )
+    await ensure_name_ownership(db, data.name, user)
     cap = Capability(
         name=data.name,
         description=data.description,
@@ -389,7 +396,12 @@ async def update_capability(
             raise HTTPException(
                 status.HTTP_409_CONFLICT, f"能力 {data.name} 已存在版本 {cap.version}"
             )
+        old_name = cap.name
         cap.name = data.name
+        # 改名要求无其他版本（siblings==0）：旧名最后一行释放，清理其平台密钥
+        from app.services.capability_secrets import delete_capability_secrets_by_name
+
+        await delete_capability_secrets_by_name(db, old_name)
     if data.type is not None and data.type != cap.type:
         if siblings:
             raise HTTPException(
@@ -455,18 +467,30 @@ async def delete_capability_row(db: AsyncSession, cap: Capability, *, commit: bo
             storage.delete(artifact.uri)
         except Exception:
             pass
+    others = (
+        await db.scalar(
+            select(func.count())
+            .select_from(Capability)
+            .where(and_(Capability.name == cap.name, Capability.id != cap.id))
+        )
+    ) or 0
+    cap_name = cap.name
     cid = cap.id
     await db.execute(sql_delete(CapabilityArtifact).where(CapabilityArtifact.capability_id == cid))
     await db.execute(sql_delete(Review).where(Review.capability_id == cid))
     await db.execute(sql_delete(Rating).where(Rating.capability_id == cid))
     await db.execute(sql_delete(UsageEvent).where(UsageEvent.capability_id == cid))
-    # 平台密钥（capability_secrets）按能力名跨版本：删除单版本行不清理，
-    # 仅当能力名整体删除时才应显式按名删除（当前无该路径）
     await db.execute(sql_delete(UserCapability).where(UserCapability.capability_id == cid))
     await db.execute(sql_delete(A2ATask).where(A2ATask.agent_id == cid))
     await db.execute(sql_delete(WorkflowExecution).where(WorkflowExecution.workflow_id == cid))
     await db.execute(sql_delete(AgentBinding).where(AgentBinding.agent_id == cid))
     await db.delete(cap)
+    if others == 0:
+        # 该 name 的最后一行被删除：清理平台密钥，避免名称释放后孤儿密钥被他人认领；
+        # 仍有同名行时不清理（按名跨版本共用）
+        from app.services.capability_secrets import delete_capability_secrets_by_name
+
+        await delete_capability_secrets_by_name(db, cap_name)
     if commit:
         await db.commit()
 

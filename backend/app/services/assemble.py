@@ -22,7 +22,7 @@ from sqlalchemy.orm import joinedload, selectinload
 
 from app.models import Capability, CapabilityArtifact, User
 from app.schemas import AssembleDependency, AssembleRequest
-from app.services.capabilities import parse_semver, to_capability_out
+from app.services.capabilities import ensure_name_ownership, parse_semver, to_capability_out
 from app.storage import get_storage
 
 
@@ -170,6 +170,8 @@ async def assemble_agent(db: AsyncSession, user: User, data: AssembleRequest) ->
         raise HTTPException(
             status.HTTP_409_CONFLICT, f"能力 {data.name} 已存在版本 {data.version}"
         )
+    # 名称归属：同名只能由既有作者继续发版本（防抢注同名后污染按名资源）
+    await ensure_name_ownership(db, data.name, user)
 
     pkg = build_assembled_package(persona, dep_caps, data)
     cap = Capability(

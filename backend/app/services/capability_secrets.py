@@ -10,7 +10,7 @@ import json
 import logging
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Capability, CapabilitySecret
@@ -24,11 +24,19 @@ def _norm_name(name: str) -> str:
     return (name or "").strip()
 
 
+def _version_sort_key(cap: Capability) -> tuple[int, int, int]:
+    """版本排序键：非 semver（workflow 等入口允许）按最低优先级兜底，不抛异常。"""
+    try:
+        return parse_semver(cap.version)
+    except (ValueError, TypeError):
+        return (-1, -1, -1)
+
+
 async def canonical_capability_author_id(db: AsyncSession, name: str) -> str | None:
     """该能力名 canonical 行的作者 id（平台密钥归属判定用）。
 
-    canonical 口径：优先已发布（published）行并取其中最高版本；
-    无已发布行时退回全部行中的最高版本（草稿/审核中亦可管理）。
+    canonical 口径：优先已发布/弃用（published ∪ deprecated）行并取其中最高版本；
+    池空时退回全部行中的最高版本（草稿/审核中亦可管理）。
     """
     cap_name = _norm_name(name)
     rows = list(
@@ -36,9 +44,9 @@ async def canonical_capability_author_id(db: AsyncSession, name: str) -> str | N
     )
     if not rows:
         return None
-    published = [c for c in rows if c.status == "published"]
-    pool = published or rows
-    canonical = max(pool, key=lambda c: parse_semver(c.version))
+    active = [c for c in rows if c.status in ("published", "deprecated")]
+    pool = active or rows
+    canonical = max(pool, key=_version_sort_key)
     return canonical.author_id
 
 
@@ -101,6 +109,17 @@ async def delete_capability_secret(db: AsyncSession, name: str, key_name: str) -
         raise HTTPException(status.HTTP_404_NOT_FOUND, "平台密钥不存在")
     await db.delete(row)
     await db.flush()
+
+
+async def delete_capability_secrets_by_name(db: AsyncSession, name: str) -> int:
+    """删除某能力名下的全部平台密钥（能力名最后一行删除/改名时调用）。返回删除条数。"""
+    cap_name = _norm_name(name)
+    if not cap_name:
+        return 0
+    result = await db.execute(
+        delete(CapabilitySecret).where(CapabilitySecret.capability_name == cap_name)
+    )
+    return int(result.rowcount or 0)
 
 
 async def resolve_capability_env(db: AsyncSession, name: str) -> dict[str, str]:
