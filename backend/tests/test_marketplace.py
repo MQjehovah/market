@@ -626,3 +626,108 @@ async def test_default_on_respects_access_predicate(
     r = await client.get("/api/my/capabilities?scope=added", headers=user_headers)
     assert r.status_code == 200
     assert any(c["id"] == cap_id for c in r.json())
+
+
+@pytest.mark.asyncio
+async def test_default_on_skips_invisible_capabilities(
+    client, publisher_headers, admin_headers, user_headers
+):
+    """default_on + private/team 不可见：不自动加入；同团队可见者才加入。"""
+    async with SessionLocal() as db:
+        publisher = await db.scalar(select(User).where(User.username == "publisher"))
+        private_cap = Capability(
+            name="default-private-tool",
+            type="tool",
+            version="1.0.0",
+            status="published",
+            visibility="private",
+            install_policy="default_on",
+            author_id=publisher.id,
+            organization=publisher.organization,
+        )
+        team_cap = Capability(
+            name="default-team-tool",
+            type="tool",
+            version="1.0.0",
+            status="published",
+            visibility="team",
+            install_policy="default_on",
+            author_id=publisher.id,
+            organization=publisher.organization,
+        )
+        teammate = User(
+            username="default-teammate",
+            email="default-teammate@example.com",
+            password_hash=hash_password("teammate-secret-123"),
+            role="user",
+            team="中台团队",
+        )
+        db.add_all([private_cap, team_cap, teammate])
+        await db.commit()
+        private_id, team_id = private_cap.id, team_cap.id
+
+    r = await client.get("/api/my/capabilities?scope=added", headers=user_headers)
+    assert r.status_code == 200
+    ids = {c["id"] for c in r.json()}
+    assert private_id not in ids
+    assert team_id not in ids
+
+    r = await client.post(
+        "/api/auth/login", json={"username": "default-teammate", "password": "teammate-secret-123"}
+    )
+    assert r.status_code == 200
+    teammate_headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    r = await client.get("/api/my/capabilities?scope=added", headers=teammate_headers)
+    assert r.status_code == 200
+    ids = {c["id"] for c in r.json()}
+    assert team_id in ids
+    assert private_id not in ids
+
+
+@pytest.mark.asyncio
+async def test_default_on_plugin_joins_only_accessible_components(
+    client, publisher_headers, admin_headers, user_headers
+):
+    """default_on plugin：只自动加入有权限的组件，无权限组件跳过。"""
+    from test_plugin import _plugin_zip
+
+    r = await client.post(
+        "/api/publish/capabilities",
+        headers=publisher_headers,
+        json={"name": "默认权限插件", "type": "plugin", "version": "1.0.0", "description": "x"},
+    )
+    assert r.status_code == 201, r.text
+    plugin_id = r.json()["id"]
+    r = await client.post(
+        f"/api/publish/capabilities/{plugin_id}/artifact",
+        headers=publisher_headers,
+        files={"file": ("p.zip", _plugin_zip(name="默认权限插件", version="1.0.0"), "application/zip")},
+    )
+    assert r.status_code == 200, r.text
+    comps = r.json()["input_schema"]["components"]
+    await client.post(f"/api/publish/capabilities/{plugin_id}/submit", headers=publisher_headers)
+    await client.post(
+        f"/api/admin/capabilities/{plugin_id}/review",
+        headers=admin_headers,
+        json={"action": "approve"},
+    )
+    r = await client.post(
+        f"/api/capabilities/{plugin_id}/install-policy",
+        headers=admin_headers,
+        json={"install_policy": "default_on"},
+    )
+    assert r.status_code == 200, r.text
+
+    blocked = next(c for c in comps if c["type"] == "skill")
+    await _set_access(client, publisher_headers, blocked["capability_id"], "admin_only")
+
+    r = await client.get(
+        "/api/my/capabilities?scope=added&include_components=true", headers=user_headers
+    )
+    assert r.status_code == 200
+    ids = {c["id"] for c in r.json()}
+    assert plugin_id in ids
+    assert blocked["capability_id"] not in ids
+    for c in comps:
+        if c["capability_id"] != blocked["capability_id"]:
+            assert c["capability_id"] in ids

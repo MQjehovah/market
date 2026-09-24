@@ -254,3 +254,97 @@ async def test_join_agent_also_joins_dependencies(
     assert agent_name in names
     assert skill_name in names
     assert tool_name in names
+
+
+@pytest.mark.asyncio
+async def test_join_invisible_draft_returns_404(client, publisher_headers, user_headers):
+    """他人不可见的草稿：先判可见性，返回 404 而非 422（不泄露状态）。"""
+    r = await client.post(
+        "/api/publish/capabilities",
+        headers=publisher_headers,
+        json={"name": "私密草稿", "type": "tool", "version": "0.1.0", "visibility": "private"},
+    )
+    assert r.status_code == 201, r.text
+    draft_id = r.json()["id"]
+
+    r = await client.post(
+        "/api/my/capabilities", headers=user_headers, json={"capability_id": draft_id}
+    )
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_join_agent_skips_denied_dependency(
+    client, publisher_headers, admin_headers, user_headers
+):
+    """助手依赖无权限时：主能力加入成功，文案按「依赖」提示跳过数。"""
+    import io
+    import json
+    import zipfile
+
+    from test_skill_edit import _skill_zip
+    from test_workflow import _publish_capability, _tool_zip
+
+    skill_name = "join-skip-skill"
+    tool_name = "join-skip-tool"
+    agent_name = "join-skip-agent"
+    await _publish_capability(
+        client, publisher_headers, admin_headers, skill_name, "skill", _skill_zip(skill_name)
+    )
+    await _publish_capability(
+        client, publisher_headers, admin_headers, tool_name, "tool", _tool_zip(tool_name)
+    )
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(
+            "agent.json",
+            json.dumps(
+                {"name": agent_name, "description": "join skip", "version": "1.0.0"},
+                ensure_ascii=False,
+            ),
+        )
+        zf.writestr("PROMPT.md", f"你是{agent_name}。")
+        zf.writestr(
+            "dependencies.json",
+            json.dumps(
+                [
+                    {"name": skill_name, "type": "skill", "version": "1.0.0"},
+                    {"name": tool_name, "type": "tool", "version": ""},
+                ],
+                ensure_ascii=False,
+            ),
+        )
+    await _publish_capability(
+        client, publisher_headers, admin_headers, agent_name, "agent", buf.getvalue()
+    )
+
+    r = await client.get("/api/capabilities", params={"q": agent_name})
+    agent_id = next(c["id"] for c in r.json()["items"] if c["name"] == agent_name)
+    r = await client.get("/api/capabilities", params={"q": skill_name})
+    skill_id = next(c["id"] for c in r.json()["items"] if c["name"] == skill_name)
+    r = await client.get("/api/capabilities", params={"q": tool_name})
+    tool_id = next(c["id"] for c in r.json()["items"] if c["name"] == tool_name)
+
+    # 收紧 skill 为 admin_only（作者=publisher）
+    r = await client.post(
+        f"/api/capabilities/{skill_id}/access",
+        headers=publisher_headers,
+        json={"access_policy": "admin_only"},
+    )
+    assert r.status_code == 200, r.text
+
+    r = await client.post(
+        "/api/my/capabilities", headers=user_headers, json={"capability_id": agent_id}
+    )
+    assert r.status_code == 201, r.text
+    assert "1 个依赖因权限不足未加入" in r.json()["message"]
+
+    r = await client.get(
+        "/api/my/capabilities?scope=added&include_components=true", headers=user_headers
+    )
+    assert r.status_code == 200
+    ids = {c["id"] for c in r.json()}
+    assert agent_id in ids
+    assert tool_id in ids
+    assert skill_id not in ids

@@ -13,15 +13,18 @@ from test_workflow import _publish_capability, _tool_zip
 async def _set_access(
     client, headers, cap_id, policy, allowed=None, departments=None, roles=None
 ):
+    """三态更新：参数为 None 表示不传（新字段保持原值），[] 表示显式清空。"""
+    payload: dict = {"access_policy": policy}
+    if allowed is not None:
+        payload["allowed_users"] = allowed
+    if departments is not None:
+        payload["allowed_departments"] = departments
+    if roles is not None:
+        payload["allowed_roles"] = roles
     r = await client.post(
         f"/api/capabilities/{cap_id}/access",
         headers=headers,
-        json={
-            "access_policy": policy,
-            "allowed_users": allowed or [],
-            "allowed_departments": departments or [],
-            "allowed_roles": roles or [],
-        },
+        json=payload,
     )
     assert r.status_code == 200, r.text
     return r.json()
@@ -133,6 +136,31 @@ def test_allowlists_gate_beyond_restricted_policy():
     cap = _c(access_policy="open", allowed_roles=["publisher"])
     assert capability_access_ok(cap, _u("u", role="publisher"))
     assert not capability_access_ok(cap, _u("u", role="user"))
+
+
+def test_unknown_policy_with_empty_lists_denies():
+    # 未知 policy + 空名单：fail-closed
+    assert not capability_access_ok(_c(access_policy="weird"), _u("u"))
+    assert access_deny_reason(_c(access_policy="weird"), _u("u")) == "没有该能力的访问权限"
+
+
+def test_blank_and_null_entries_ignored():
+    # None/空白项跳过，不污染白名单
+    cap = _c(
+        access_policy="restricted",
+        allowed_users=[None, "alice", None, ""],
+        allowed_roles=[None, "  "],
+    )
+    assert capability_access_ok(cap, _u("alice"))
+    assert not capability_access_ok(cap, _u("bob"))
+
+
+def test_non_sequence_allowlist_treated_as_empty():
+    # 脏数据（非 list/tuple）视为空名单：restricted 拒绝、open 放行
+    assert not capability_access_ok(
+        _c(access_policy="restricted", allowed_users="alice"), _u("alice")
+    )
+    assert capability_access_ok(_c(access_policy="open", allowed_roles="publisher"), _u("u"))
 
 
 @pytest.mark.asyncio
@@ -261,6 +289,70 @@ async def test_access_policy_roundtrip_departments_roles(client, publisher_heade
     detail = r.json()
     assert detail["allowed_departments"] == ["研发部", "市场部"]
     assert detail["allowed_roles"] == ["publisher"]
+
+
+@pytest.mark.asyncio
+async def test_access_policy_partial_update_keeps_new_allowlists(
+    client, publisher_headers, admin_headers
+):
+    """旧调用只传 access_policy/allowed_users：新字段保持原值；显式 [] 才清空。"""
+    name = "partial-access-tool"
+    await _publish_capability(client, publisher_headers, admin_headers, name, "tool", _tool_zip(name))
+    r = await client.get("/api/capabilities", params={"q": name})
+    cap_id = r.json()["items"][0]["id"]
+
+    await _set_access(
+        client,
+        admin_headers,
+        cap_id,
+        "restricted",
+        allowed=["user"],
+        departments=["研发部"],
+        roles=["publisher"],
+    )
+
+    # 未传新字段：保持原值（allowed_users 按旧语义未传即清空）
+    body = await _set_access(client, admin_headers, cap_id, "open")
+    assert body["allowed_users"] == []
+    assert body["allowed_departments"] == ["研发部"]
+    assert body["allowed_roles"] == ["publisher"]
+
+    # 显式传 []：清空
+    body = await _set_access(client, admin_headers, cap_id, "restricted", departments=[], roles=[])
+    assert body["allowed_departments"] == []
+    assert body["allowed_roles"] == []
+
+
+@pytest.mark.asyncio
+async def test_subscription_author_and_admin_early_pass(
+    client, publisher_headers, admin_headers
+):
+    """订阅链 author/admin 早退：三门全不匹配也能订阅。"""
+    name = "sub-early-tool"
+    await _publish_capability(client, publisher_headers, admin_headers, name, "tool", _tool_zip(name))
+    r = await client.get("/api/capabilities", params={"q": name})
+    cap_id = r.json()["items"][0]["id"]
+    await _set_access(
+        client,
+        admin_headers,
+        cap_id,
+        "restricted",
+        allowed=["stranger"],
+        departments=["研发部"],
+        roles=["user"],
+    )
+
+    # 作者（无部门、非白名单、角色 publisher）仍可订阅自己的能力
+    r = await client.post(
+        "/api/my/capabilities", headers=publisher_headers, json={"capability_id": cap_id}
+    )
+    assert r.status_code == 201, r.text
+
+    # 管理员同样早退
+    r = await client.post(
+        "/api/my/capabilities", headers=admin_headers, json={"capability_id": cap_id}
+    )
+    assert r.status_code == 201, r.text
 
 
 @pytest.mark.asyncio
