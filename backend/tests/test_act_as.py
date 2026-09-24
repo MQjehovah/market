@@ -196,6 +196,14 @@ async def test_sync_scope_enforced_and_legacy_passes(client, admin_headers, capl
     assert r.status_code == 403
     assert "sync" in r.json()["detail"]
 
+    # scope 不足 + 带 X-Act-As-Sub：scope 校验先行，仍 403
+    r = await client.get(
+        "/api/capabilities/sync",
+        headers={"Authorization": f"Bearer {token_bad}", "X-Act-As-Sub": "admin"},
+    )
+    assert r.status_code == 403
+    assert "sync" in r.json()["detail"]
+
     _, token_ok = await _make_token(client, admin_headers, ["gateway", "sync"])
     r = await client.get(
         "/api/capabilities/sync", headers={"Authorization": f"Bearer {token_ok}"}
@@ -298,6 +306,13 @@ async def test_relay_scope_gate_and_bound_user(client, publisher_headers, admin_
     assert cfg is None and status == 403
     assert "gateway" in body["detail"]
 
+    # scope 不足 + 带 X-Act-As-Sub：scope 校验先行，仍 403（不切换身份）
+    cfg, status, body = await authorize_capability_gateway(
+        _scope({"Authorization": f"Bearer {token_runtime}", "X-Act-As-Sub": "admin"}), name
+    )
+    assert cfg is None and status == 403
+    assert "gateway" in body["detail"]
+
     # scope 充足 + 绑定管理员：runtime 门禁正常放行
     _, token_admin = await _make_token(
         client, admin_headers, ["gateway", "sync"], user_id=me["id"]
@@ -340,7 +355,7 @@ async def test_relay_act_as_uses_target_user(client, publisher_headers, admin_he
     cap_id = await _publish(client, publisher_headers, admin_headers, name, type_="mcp")
     user = await _create_user(client, admin_headers, "act-b")
     b_headers = await _login(client, "act-b")
-    _, token = await _make_token(client, admin_headers, ["gateway", "sync"])
+    meta, token = await _make_token(client, admin_headers, ["gateway", "sync"])
 
     # 服务令牌自身视角：runtime 门禁拒绝
     cfg, status, _ = await authorize_capability_gateway(
@@ -369,7 +384,45 @@ async def test_relay_act_as_uses_target_user(client, publisher_headers, admin_he
     assert status is None and cfg is not None
     assert cfg["_audit"]["act_as"] == "act-b"
     assert cfg["_audit"]["user_id"] == user["id"]
+    assert cfg["_audit"]["actor_user_id"] == meta["user_id"]
     assert cfg["_audit"]["actor_user_id"] != user["id"]
+
+
+@pytest.mark.asyncio
+async def test_relay_act_as_rate_limits_actor(client, publisher_headers, admin_headers):
+    """act-as 时 actor 与目标用户双键限流：actor 超限即 429。"""
+    from app.config import get_settings
+    from app.services.gateway_governance import check_rate_limit, reset_governance_for_tests
+
+    name = "act-relay-rl"
+    cap_id = await _publish(client, publisher_headers, admin_headers, name, type_="mcp")
+    await _create_user(client, admin_headers, "act-rl")
+    rl_headers = await _login(client, "act-rl")
+    await _subscribe(client, rl_headers, cap_id)  # 目标用户权限通畅，排除 403 干扰
+    meta, token = await _make_token(client, admin_headers, ["gateway", "sync"])
+
+    settings = get_settings()
+    old_limit = settings.mcp_gateway_rate_limit_per_minute
+    reset_governance_for_tests()
+    settings.mcp_gateway_rate_limit_per_minute = 2
+    try:
+        # 预热 actor 键至超限；目标用户键保持干净
+        assert check_rate_limit(f"svc:{meta['user_id']}")[0]
+        assert check_rate_limit(f"svc:{meta['user_id']}")[0]
+        cfg, status, body = await authorize_capability_gateway(
+            _scope({"Authorization": f"Bearer {token}", "X-Act-As-Sub": "act-rl"}), name
+        )
+        assert cfg is None and status == 429
+        assert "限流" in body["detail"]
+
+        # 对照：同一令牌不带 act-as 走 user 键（干净）→ 非 429，actor 键不误伤普通服务调用
+        cfg, status, _ = await authorize_capability_gateway(
+            _scope({"Authorization": f"Bearer {token}"}), name
+        )
+        assert status != 429
+    finally:
+        settings.mcp_gateway_rate_limit_per_minute = old_limit
+        reset_governance_for_tests()
 
 
 @pytest.mark.asyncio

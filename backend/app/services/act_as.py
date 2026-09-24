@@ -18,8 +18,13 @@ async def resolve_act_as(db: AsyncSession, actor: User, sub: str | None) -> User
     raw = (sub or "").strip()
     if not raw:
         return None
+    # 调用方（sync/relay）已按具体 scope 校验，此处兜底防误用；命中任一相关 scope 即可
     require_service_scope(actor, "gateway", "sync")
-    target = await db.scalar(select(User).where(func.lower(User.username) == raw.lower()))
+    # 精确匹配优先；回退大小写不敏感匹配。SQLite 的 lower() 仅折叠 ASCII，
+    # 非 ASCII 用户名回退等价精确匹配（不会误配），够用且避免全表函数扫描。
+    target = await db.scalar(select(User).where(User.username == raw))
+    if target is None:
+        target = await db.scalar(select(User).where(func.lower(User.username) == raw.lower()))
     if target is None or not target.is_active:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, f"act-as 用户不存在或已禁用: {raw}"

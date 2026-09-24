@@ -524,6 +524,8 @@ async def authorize_capability_gateway(
                 detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
                 return None, int(exc.status_code), {"detail": detail}
             if act_sub:
+                # act-as 是会话级身份：env/密钥在建立上游连接时固化，agent 每个
+                # worker 固定 act-as；同一会话内不要切换身份，换身份需新建会话
                 try:
                     target = await resolve_act_as(db, user, act_sub)
                 except HTTPException as exc:
@@ -538,6 +540,11 @@ async def authorize_capability_gateway(
         ok, reason = check_rate_limit(f"user:{user.id}")
         if not ok:
             return None, 429, {"detail": reason}
+        if act_as_name:
+            # act-as 时 actor（服务令牌绑定用户）与目标用户双键限流，防单令牌刷目标配额
+            ok, reason = check_rate_limit(f"svc:{actor_id}")
+            if not ok:
+                return None, 429, {"detail": reason}
 
         cap = await find_published_mcp(db, name)
         if cap is None:
@@ -759,6 +766,10 @@ class GatewayEndpoints:
         return await entry.get()
 
     def cache_config(self, config: dict[str, Any] | None) -> None:
+        """缓存上游配置（含 act-as 身份与已解析 env）。
+
+        act-as 会话内应保持恒定：env/密钥在建立上游连接时固化，换身份需新会话。
+        """
         self._cached_config = config
 
     async def resolve_config(self) -> dict[str, Any] | None:
@@ -1222,7 +1233,11 @@ class GatewayASGIApp:
                 pass
 
     async def _audit_identity(self, config: dict[str, Any], scope) -> GatewayIdentity:
-        """身份来源仅用于审计归因；鉴权已在前一步完成，失败回退匿名。"""
+        """身份来源仅用于审计归因；鉴权已在前一步完成，失败回退匿名。
+
+        审计口径：MCPGatewayCall.user_id 记服务令牌绑定用户（Bearer 解析结果），
+        act-as 的目标用户记在 UsageEvent.params.act_as（即 _audit.act_as）。
+        """
         try:
             identity = await authenticate_request(config, scope)
         except GatewayAuthError:
