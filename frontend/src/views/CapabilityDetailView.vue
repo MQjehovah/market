@@ -460,6 +460,98 @@ async function clearCapEnv(row) {
   }
 }
 
+/** 平台密钥（能力级、全用户共用）：市场网关/在线试用/agent 平台轨注入，仅作者或管理员可维护 */
+const platformSecrets = ref({ items: [], declared_env: [] })
+const platformLoaded = ref(false)
+const platformDraft = ref({})
+const platformSaving = ref(false)
+const platformClearing = ref('')
+const platformNotice = ref('')
+const platformError = ref('')
+
+const platformSecretRows = computed(() => {
+  const configured = new Map((platformSecrets.value.items || []).map((i) => [i.key_name, i]))
+  const keys = [...(platformSecrets.value.declared_env || [])]
+  for (const key of configured.keys()) keys.push(key)
+  return [...new Set(keys.map((k) => String(k).trim()).filter(Boolean))].map((key) => ({
+    key,
+    secret: isSecretKey(key),
+    row: configured.get(key) || null
+  }))
+})
+
+async function loadPlatformSecrets() {
+  platformLoaded.value = false
+  const c = cap.value
+  if (!c || !(isOwner.value || isAdmin.value) || c.type !== 'mcp') {
+    platformSecrets.value = { items: [], declared_env: [] }
+    platformLoaded.value = true
+    return
+  }
+  try {
+    platformSecrets.value =
+      (await api.get(`/capabilities/${c.id}/platform-secrets`)) ||
+      { items: [], declared_env: [] }
+  } catch {
+    platformSecrets.value = { items: [], declared_env: [] }
+  } finally {
+    platformLoaded.value = true
+  }
+}
+
+async function savePlatformSecrets() {
+  const capId = cap.value?.id
+  if (!capId) return
+  const payload = {}
+  for (const [k, v] of Object.entries(platformDraft.value)) {
+    if (String(v || '').trim()) payload[k] = String(v).trim()
+  }
+  if (!Object.keys(payload).length) {
+    platformError.value = '请先填写至少一项平台密钥值'
+    return
+  }
+  platformSaving.value = true
+  platformError.value = ''
+  platformNotice.value = ''
+  try {
+    const res = await api.put(`/capabilities/${capId}/platform-secrets`, { secrets: payload })
+    platformSecrets.value = res || { items: [], declared_env: [] }
+    platformDraft.value = {}
+    platformNotice.value = `平台密钥已保存（${Object.keys(payload).length} 项），全用户生效；更新后需重建连接`
+  } catch (e) {
+    platformError.value = e.message || '保存失败'
+  } finally {
+    platformSaving.value = false
+  }
+}
+
+async function clearPlatformSecret(row) {
+  const capId = cap.value?.id
+  if (!row?.row || !capId) return
+  if (!confirm(`确认清除平台密钥「${row.key}」？清除后平台轨将无法注入该变量。`)) return
+  platformClearing.value = row.key
+  platformError.value = ''
+  platformNotice.value = ''
+  try {
+    await api.delete(
+      `/capabilities/${capId}/platform-secrets/${encodeURIComponent(row.key)}`
+    )
+    platformNotice.value = `已清除平台密钥 ${row.key}`
+    await loadPlatformSecrets()
+  } catch (e) {
+    platformError.value = e.message || '清除失败'
+  } finally {
+    platformClearing.value = ''
+  }
+}
+
+watch(
+  () => [authState.token, authState.user?.id, authState.user?.role],
+  () => {
+    loadPlatformSecrets()
+  }
+)
+
 watch(
   () => [cap.value?.id, authState.token, mcpEnvRows.value.map((r) => r.key).join(',')],
   () => {
@@ -731,6 +823,7 @@ async function load() {
     versions.value = await api.get(`/capabilities/${props.id}/versions`)
     ratings.value = await api.get(`/capabilities/${props.id}/ratings`)
     await loadMcpPackageMeta()
+    await loadPlatformSecrets()
   } catch (e) {
     error.value = e.message
   }
@@ -1286,17 +1379,67 @@ onMounted(() => {
                       <span v-else class="muted">可选</span>
                     </td>
                     <td class="muted">
-                      在下方「环境变量 / 业务凭据」填写，占位 <code>{{ row.hint }}</code>（不回显明文）
+                      在下方「本机凭据（本地安装用）」填写，占位 <code>{{ row.hint }}</code>（不回显明文）
                     </td>
                   </tr>
                 </tbody>
               </table>
 
-              <div v-if="mcpEnvRows.length" class="env-fill-box">
-                <h4 class="env-fill-title">环境变量 / 业务凭据</h4>
+              <div v-if="isMcp && (isOwner || isAdmin)" class="env-fill-box">
+                <h4 class="env-fill-title">平台密钥（云端注入 · 全用户共用）</h4>
                 <p class="muted" style="font-size: 13px; margin: 0 0 10px">
-                  在此填写后加密托管；平台轨（网关 / 在线试用）启动时按当前用户自动注入。
-                  本地轨请在本机 <code>mcp_servers.json</code> 配置。
+                  用于市场网关 / 在线试用 / 零号员工平台轨；由作者或管理员维护，配置后全用户生效，更新后需重建连接。
+                </p>
+                <div v-if="!platformLoaded" class="muted" style="font-size: 13px">加载平台密钥…</div>
+                <div v-else-if="!platformSecretRows.length" class="muted" style="font-size: 13px">
+                  该能力未声明环境变量，无需配置平台密钥。
+                </div>
+                <template v-else>
+                  <div class="env-rows">
+                    <div v-for="row in platformSecretRows" :key="'ps-' + row.key" class="env-row">
+                      <div class="env-row-head">
+                        <code>{{ row.key }}</code>
+                        <span v-if="row.row" class="badge badge-success">已配置</span>
+                        <span v-else class="badge badge-danger">未配置</span>
+                        <span class="muted" style="font-size: 12px">{{ row.secret ? '凭据' : '可选' }}</span>
+                      </div>
+                      <div class="env-row-input">
+                        <input
+                          v-model="platformDraft[row.key]"
+                          class="input"
+                          :type="row.secret ? 'password' : 'text'"
+                          :placeholder="row.row ? '留空保持不变' : '输入平台密钥值'"
+                          autocomplete="off"
+                        />
+                        <button
+                          v-if="row.row"
+                          class="btn btn-sm"
+                          type="button"
+                          :disabled="platformClearing === row.key"
+                          @click="clearPlatformSecret(row)"
+                        >{{ platformClearing === row.key ? '清除中…' : '清除' }}</button>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="flex" style="gap: 8px; margin-top: 12px; flex-wrap: wrap">
+                    <button class="btn btn-primary btn-sm" type="button" :disabled="platformSaving" @click="savePlatformSecrets">
+                      {{ platformSaving ? '保存中…' : '保存平台密钥' }}
+                    </button>
+                  </div>
+                </template>
+                <p v-if="platformNotice" class="alert alert-success mt-12" style="font-size: 13px">{{ platformNotice }}</p>
+                <p v-if="platformError" class="alert alert-error mt-12" style="font-size: 13px">{{ platformError }}</p>
+              </div>
+
+              <div v-if="mcpEnvRows.length" class="env-fill-box">
+                <h4 class="env-fill-title">本机凭据（本地安装用）</h4>
+                <p class="muted" style="font-size: 13px; margin: 0 0 10px">
+                  <template v-if="isOwner || isAdmin">
+                    仅供 dashboard 本地安装 / 本机运行时使用；云端平台轨已改用上方平台密钥。
+                  </template>
+                  <template v-else>
+                    仅供 dashboard 本地安装 / 本机运行时使用；云端平台轨已改用能力级平台密钥（由作者或管理员维护）。
+                  </template>
                 </p>
                 <router-link
                   v-if="!authState.token"
