@@ -689,8 +689,8 @@ watch(
 .hero {
   display: grid;
   grid-template-columns: minmax(0, 1.55fr) minmax(220px, 0.7fr);
-  gap: 24px;
-  padding: 28px;
+  gap: 20px;
+  padding: 20px 24px;
   border: 1px solid var(--border);
   border-radius: 16px;
   background:
@@ -698,32 +698,32 @@ watch(
     linear-gradient(180deg, #ffffff 0%, #f7f9fc 100%);
   box-shadow: var(--shadow);
 }
-.hero-eyebrow { margin: 0 0 8px; color: var(--primary); font-size: 13px; font-weight: 600; }
+.hero-eyebrow { margin: 0 0 6px; color: var(--primary); font-size: 13px; font-weight: 600; }
 .hero-title {
-  margin: 0; font-size: clamp(26px, 3vw, 34px); line-height: 1.2;
+  margin: 0; font-size: clamp(23px, 2.6vw, 29px); line-height: 1.2;
   letter-spacing: -0.02em; font-weight: 700;
 }
-.hero-desc { margin: 12px 0 0; color: var(--muted); font-size: 14px; line-height: 1.65; max-width: 40rem; }
+.hero-desc { margin: 8px 0 0; color: var(--muted); font-size: 14px; line-height: 1.55; max-width: 40rem; }
 .hero-search {
   display: flex;
   gap: 10px;
-  margin-top: 18px;
+  margin-top: 14px;
   max-width: 520px;
 }
 .hero-search-input {
   flex: 1;
   min-width: 0;
-  height: 42px;
+  height: 40px;
   font-size: 15px;
 }
-.hero-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
-.btn-lg { padding: 11px 18px; font-size: 15px; font-weight: 600; }
-.hero-stats { display: grid; gap: 10px; align-content: center; }
+.hero-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.btn-lg { padding: 9px 16px; font-size: 15px; font-weight: 600; }
+.hero-stats { display: grid; gap: 8px; align-content: center; }
 .hero-stat {
   background: #fff; border: 1px solid var(--border); border-radius: 12px;
-  padding: 14px 16px; box-shadow: var(--shadow);
+  padding: 10px 14px; box-shadow: var(--shadow);
 }
-.hero-stat strong { display: block; font-size: 24px; letter-spacing: -0.02em; }
+.hero-stat strong { display: block; font-size: 20px; letter-spacing: -0.02em; }
 .hero-stat span { color: var(--muted); font-size: 12px; }
 .hero-stat-link { cursor: pointer; transition: border-color .15s ease; }
 .hero-stat-link:hover { border-color: var(--primary); }
