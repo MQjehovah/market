@@ -116,7 +116,7 @@ class MCPBridge:
                     "function": {
                         "name": exposed,
                         "description": f"[MCP {mcp_name}] {tool.description or tool.name}",
-                        "parameters": tool.inputSchema,
+                        "parameters": tool.input_schema,
                     },
                 }
             )

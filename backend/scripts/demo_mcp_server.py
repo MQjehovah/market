@@ -1,4 +1,4 @@
-"""MCP HTTP 中转网关演示服务（FastMCP stdio）。
+"""MCP HTTP 中转网关演示服务（MCPServer stdio）。
 
 在管理后台「MCP 网关」注册本脚本即可把工具通过 HTTP 暴露给外部 MCP 客户端：
     transport = stdio
@@ -10,9 +10,9 @@ import sys
 
 sys.stdout.reconfigure(encoding="utf-8")
 
-from mcp.server.fastmcp import FastMCP  # noqa: E402
+from mcp.server.mcpserver import MCPServer  # noqa: E402
 
-mcp = FastMCP("demo-mcp")
+mcp = MCPServer("demo-mcp")
 
 
 @mcp.tool()

@@ -11,26 +11,18 @@ import pytest
 import uvicorn
 from mcp import ClientSession
 from mcp.client.sse import sse_client
-from mcp.client.streamable_http import streamable_http_client
+from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
 
 from app.main import app
 from app.services.mcp_gateway import connect_upstream
-from conftest import MCP_V1_AVAILABLE
 from test_workflow import _publish_capability
 
-# 本文件用真实 MCP SDK 拉起 stdio/SSE 服务：需要 mcp<2（FastMCP）。
-# 本地开发环境若装了 mcp>=2，跳过而不是失败；容器/CI 用 pinned 版本执行。
-pytestmark = pytest.mark.skipif(
-    not MCP_V1_AVAILABLE,
-    reason="需要 mcp<2（本地为 mcp>=2；容器/CI 用 pinned 版本）",
-)
-
-FASTMCP_SERVER = r"""
+MCP_SERVER = r"""
 import sys
 sys.stdout.reconfigure(encoding="utf-8")
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-mcp = FastMCP("demo-mcp")
+mcp = MCPServer("demo-mcp")
 
 @mcp.tool()
 def add(a: int, b: int) -> int:
@@ -49,7 +41,7 @@ mcp.run()
 @pytest.fixture
 def mcp_script(tmp_path):
     p = tmp_path / "demo_server.py"
-    p.write_text(FASTMCP_SERVER, encoding="utf-8")
+    p.write_text(MCP_SERVER, encoding="utf-8")
     return str(p)
 
 
@@ -142,8 +134,8 @@ async def test_stdio_preserves_implementation_tree(tmp_path):
     nested.mkdir()
     script = nested / "server.py"
     script.write_text(
-        "from mcp.server.fastmcp import FastMCP\n"
-        "mcp = FastMCP('nested')\n"
+        "from mcp.server.mcpserver import MCPServer\n"
+        "mcp = MCPServer('nested')\n"
         "@mcp.tool()\n"
         "def ping() -> str:\n"
         "    return 'pong'\n"
@@ -230,9 +222,10 @@ async def test_gateway_streamable_http_inbound(client, admin_headers, mcp_script
             resp = await c.post(gw_url, json={})
         assert resp.status_code == 401
 
-        # 官方 SDK 客户端走 Streamable HTTP 调用
-        async with httpx.AsyncClient(headers=headers, timeout=60) as c:
-            async with streamable_http_client(gw_url, http_client=c) as streams:
+        # 官方 SDK 客户端走 Streamable HTTP 调用（v2 需 httpx2 客户端）
+        mcp_client = create_mcp_http_client(headers=headers)
+        async with mcp_client:
+            async with streamable_http_client(gw_url, http_client=mcp_client) as streams:
                 async with ClientSession(streams[0], streams[1]) as session:
                     await session.initialize()
                     tools = await session.list_tools()
@@ -427,7 +420,8 @@ async def test_upstream_session_survives_beyond_connect_timeout(mcp_script, monk
     """
     import app.services.mcp_gateway as gw
 
-    monkeypatch.setattr(gw, "CONNECT_TIMEOUT", 1.0)
+    # v2 自研 server 冷启动 import 较重（本机实测 initialize 约 1.5s），超时阈值取 3s
+    monkeypatch.setattr(gw, "CONNECT_TIMEOUT", 3.0)
     config = {
         "name": "keepalive",
         "transport": "stdio",
@@ -435,7 +429,7 @@ async def test_upstream_session_survives_beyond_connect_timeout(mcp_script, monk
         "args": [mcp_script],
     }
     async with gw.connect_upstream(config) as session:
-        await asyncio.sleep(1.6)  # 超过 CONNECT_TIMEOUT，旧实现此时上游已被杀掉
+        await asyncio.sleep(3.6)  # 超过 CONNECT_TIMEOUT，旧实现此时上游已被杀掉
         result = await session.call_tool("echo", {"text": "alive"})
     text = result.content[0].text if result.content else ""
     assert "echo:alive" in text

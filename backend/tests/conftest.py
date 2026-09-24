@@ -24,15 +24,6 @@ get_settings.cache_clear()
 from app.database import Base, engine
 from app.main import app
 
-# mcp 2.x 保留了 mcp.server.fastmcp 的 shim 模块（find_spec 能查到，import 才报错），
-# 因此必须真实 import 探测；本地 mcp>=2 时相关真实拉起服务的用例跳过（容器/CI 用 pinned mcp<2）。
-try:  # noqa: SIM105
-    from mcp.server.fastmcp import FastMCP as _FastMCP  # noqa: F401
-
-    MCP_V1_AVAILABLE = True
-except Exception:  # noqa: BLE001
-    MCP_V1_AVAILABLE = False
-
 
 @pytest.fixture(scope="session")
 def event_loop():

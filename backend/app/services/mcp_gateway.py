@@ -35,16 +35,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-import httpx
+import httpx2
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
-from mcp.client.streamable_http import streamable_http_client
+from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
 from mcp.server.lowlevel import Server as MCPServer
 from mcp.server.sse import SseServerTransport
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-from mcp.server.models import InitializationOptions
-from mcp.types import ServerCapabilities
+from mcp.types import CallToolRequestParams, PaginatedRequestParams
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
@@ -324,10 +323,11 @@ async def connect_upstream(
             if not url:
                 raise RuntimeError("http 传输需要配置 url")
             headers = resolve_placeholders(config.get("headers") or {}, user_env)
-            timeout = httpx.Timeout(
+            # v2 SDK 网络层为 httpx2；http_client 必须由 create_mcp_http_client 生成
+            timeout = httpx2.Timeout(
                 connect=CONNECT_TIMEOUT, read=CALL_TIMEOUT, write=CALL_TIMEOUT, pool=CALL_TIMEOUT
             )
-            client = httpx.AsyncClient(headers=headers, timeout=timeout)
+            client = create_mcp_http_client(headers=headers, timeout=timeout)
             try:
                 async with streamable_http_client(url, http_client=client) as streams:
                     read, write = streams[0], streams[1]
@@ -380,7 +380,7 @@ async def probe_tools(config: dict[str, Any], package_files: dict[str, bytes] | 
                 {
                     "name": tool.name,
                     "description": tool.description or "",
-                    "inputSchema": tool.inputSchema,
+                    "inputSchema": tool.input_schema,
                 }
             )
     return tools
@@ -539,25 +539,128 @@ async def authorize_capability_gateway(
         return config, None, None
 
 
-def make_forward_server(name: str, upstream: ClientSession, audit: dict[str, Any] | None = None) -> MCPServer:
-    """构建转发型低层 MCP server：tools/list 与 tools/call 全部转发到上游。"""
+_UPSTREAM_KEY = "_gateway_upstream"
 
-    server = MCPServer(f"gateway-{name}")
-    audit = audit or {}
 
-    @server.list_tools()
-    async def list_tools():
-        result = await upstream.list_tools()
-        return result.tools
+def _connection_of(ctx) -> Any:
+    """取当前请求所属的 MCP 连接对象（客户端会话级，跨请求共享 state/exit_stack）。
 
-    @server.call_tool()
-    async def call_tool(tool_name: str, arguments: dict[str, Any]):
+    v2 低层 ServerRunner 只把每请求的 `ServerRequestContext.session` 交给 handler，
+    连接级状态挂在 `ServerSession._connection`（官方内部字段）上；集中在此访问并兜底。
+    """
+    conn = getattr(getattr(ctx, "session", None), "_connection", None)
+    if conn is None:
+        raise RuntimeError("当前 MCP SDK 未暴露连接级上下文，网关无法按会话管理上游")
+    return conn
+
+
+class _UpstreamSession:
+    """按客户端连接持有的上游 MCP 会话。
+
+    anyio cancel scope 的进出必须在同一任务，故上游连接的建立与收尾都放进专属任务：
+    首个工具请求触发 get()，客户端会话关闭时 connection.exit_stack 调 aclose() 通知
+    专属任务退出，并以 shielded 等待其跑完（不被取消打断）。
+    """
+
+    def __init__(self, endpoints: "GatewayEndpoints") -> None:
+        self._ep = endpoints
+        self._stop = asyncio.Event()
+        self._task: asyncio.Task | None = None
+        self._ready: asyncio.Future | None = None
+
+    async def get(self) -> tuple[ClientSession, dict[str, Any]]:
+        if self._task is None:
+            loop = asyncio.get_running_loop()
+            self._ready = loop.create_future()
+            # 预取异常，避免调用方被取消后留下 "exception never retrieved" 噪音
+            self._ready.add_done_callback(lambda fut: fut.cancelled() or fut.exception())
+            self._task = asyncio.create_task(
+                self._connect(), name=f"mcp-gw-{sanitize(self._ep.name)}"
+            )
+        assert self._ready is not None
+        return await self._ready
+
+    async def _connect(self) -> None:
+        ready = self._ready
+        assert ready is not None
+        try:
+            config = await self._ep.resolve_config()
+            if config is None or not config.get("enabled", True):
+                raise RuntimeError(f"网关服务 {self._ep.name} 不存在或已停用")
+            async with connect_upstream(config) as upstream:
+                if not ready.done():
+                    ready.set_result((upstream, config.get("_audit") or {}))
+                await self._stop.wait()
+        except asyncio.CancelledError:
+            if not ready.done():
+                ready.cancel()
+            raise
+        except BaseException as exc:  # noqa: BLE001
+            if not ready.done():
+                ready.set_exception(exc)
+            else:
+                logger.warning("网关上游会话 %s 退出: %s", self._ep.name, exc)
+
+    async def aclose(self) -> None:
+        self._stop.set()
+        task = self._task
+        if task is None:
+            return
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue  # 等待方被取消不影响专属任务，继续等它收尾
+            except Exception:  # noqa: BLE001
+                break
+        try:
+            task.exception()
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
+
+
+class _ForwardServer(MCPServer):
+    """转发型低层 MCP server：tools/list 与 tools/call 全部转发到上游。
+
+    - SSE 端点传入固定 upstream（生命周期与入站连接一致）；
+    - Streamable HTTP 走 resolver：按客户端会话懒建独立上游（见 _UpstreamSession）。
+    """
+
+    def __init__(
+        self,
+        name: str,
+        upstream: ClientSession | None = None,
+        audit: dict[str, Any] | None = None,
+        resolver: Callable[[Any], Awaitable[tuple[ClientSession, dict[str, Any]]]] | None = None,
+    ) -> None:
+        super().__init__(f"gateway-{name}", version="1.0.0")
+        self._gw_name = name
+        self._fixed_upstream = upstream
+        self._fixed_audit = audit or {}
+        self._resolver = resolver
+        self.add_request_handler("tools/list", PaginatedRequestParams, self._on_list_tools)
+        self.add_request_handler("tools/call", CallToolRequestParams, self._on_call_tool)
+
+    async def _resolve(self, ctx) -> tuple[ClientSession, dict[str, Any]]:
+        if self._fixed_upstream is not None:
+            return self._fixed_upstream, self._fixed_audit
+        if self._resolver is None:
+            raise RuntimeError(f"网关服务 {self._gw_name} 缺少上游解析器")
+        return await self._resolver(ctx)
+
+    async def _on_list_tools(self, ctx, params: PaginatedRequestParams | None):
+        upstream, _audit = await self._resolve(ctx)
+        return await upstream.list_tools()
+
+    async def _on_call_tool(self, ctx, params: CallToolRequestParams):
         from app.services.gateway_governance import record_failure, record_success
 
+        upstream, audit = await self._resolve(ctx)
+        tool_name = params.name
         t0 = time.monotonic()
         result_status = "ok"
         try:
-            result = await upstream.call_tool(tool_name, arguments or {})
+            result = await upstream.call_tool(tool_name, params.arguments or {})
             if audit.get("circuit_key"):
                 record_success(audit["circuit_key"])
             return result
@@ -575,58 +678,13 @@ def make_forward_server(name: str, upstream: ClientSession, audit: dict[str, Any
                     action="gateway_call",
                     params={
                         "tool": tool_name,
-                        "capability": audit.get("capability_name") or name,
+                        "capability": audit.get("capability_name") or self._gw_name,
                         "version": audit.get("capability_version") or "",
                     },
                     result_status=result_status,
                     duration_ms=int((time.monotonic() - t0) * 1000),
                     conversation_id=audit.get("conversation_id") or "",
                 )
-
-    return server
-
-class _ServerProxy:
-    """StreamableHTTPSessionManager 使用的“按会话建上游”的 server 代理。
-
-    manager 每个客户端会话会调用一次 run()，我们在该会话内连接独立的上游，
-    保证 stdio 子进程 / HTTP 会话的生命周期与客户端会话一致。
-    配置优先用 GatewayEndpoints 在鉴权后缓存的 config（能力级 /relay/{name}），
-    否则回退登记表 loader。
-    """
-
-    def __init__(self, endpoints: "GatewayEndpoints") -> None:
-        self._ep = endpoints
-
-    def create_initialization_options(self, **kwargs) -> InitializationOptions:
-        return InitializationOptions(
-            server_name=f"gateway-{self._ep.name}",
-            server_version="1.0.0",
-            capabilities=ServerCapabilities(tools={}),
-        )
-
-    async def run(
-        self,
-        read_stream,
-        write_stream,
-        initialization_options: InitializationOptions,
-        *,
-        raise_exceptions: bool = False,
-        stateless: bool = False,
-    ) -> None:
-        config = await self._ep.resolve_config()
-        if config is None or not config.get("enabled", True):
-            raise RuntimeError(f"网关服务 {self._ep.name} 不存在或已停用")
-        async with connect_upstream(config) as upstream:
-            server = make_forward_server(
-                self._ep.name, upstream, audit=config.get("_audit")
-            )
-            await server.run(
-                read_stream,
-                write_stream,
-                initialization_options,
-                raise_exceptions=raise_exceptions,
-                stateless=stateless,
-            )
 
 
 class GatewayEndpoints:
@@ -641,9 +699,21 @@ class GatewayEndpoints:
         self._loader = loader
         self._cached_config: dict[str, Any] | None = None
         self.sse = SseServerTransport(endpoint=f"/{(route_path or name).strip('/')}/messages/")
+        # Streamable HTTP 用同一个转发 server；上游按客户端会话由 resolver 懒建
+        self._server = _ForwardServer(name, resolver=self._upstream_for)
         self._stream_manager: StreamableHTTPSessionManager | None = None
         self._stream_task: asyncio.Task | None = None
         self._stream_ready = asyncio.Event()
+
+    async def _upstream_for(self, ctx) -> tuple[ClientSession, dict[str, Any]]:
+        """当前客户端会话的上游（首次请求建立，会话关闭由 exit_stack 收尾）。"""
+        conn = _connection_of(ctx)
+        entry = conn.state.get(_UPSTREAM_KEY)
+        if entry is None:
+            entry = _UpstreamSession(self)
+            conn.state[_UPSTREAM_KEY] = entry
+            conn.exit_stack.push_async_callback(entry.aclose)
+        return await entry.get()
 
     def cache_config(self, config: dict[str, Any] | None) -> None:
         self._cached_config = config
@@ -659,9 +729,7 @@ class GatewayEndpoints:
         await self._stream_ready.wait()
 
     async def _run_stream_manager(self) -> None:
-        manager = StreamableHTTPSessionManager(
-            _ServerProxy(self), json_response=True
-        )
+        manager = StreamableHTTPSessionManager(self._server, json_response=True)
         self._stream_manager = manager
         try:
             async with manager.run():
@@ -693,9 +761,7 @@ class GatewayEndpoints:
             )
         async with self.sse.connect_sse(scope, receive, send) as streams:
             async with connect_upstream(config) as upstream:
-                server = make_forward_server(
-                    self.name, upstream, audit=config.get("_audit")
-                )
+                server = _ForwardServer(self.name, upstream, config.get("_audit"))
                 await server.run(
                     streams[0], streams[1], server.create_initialization_options()
                 )
