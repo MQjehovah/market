@@ -354,8 +354,8 @@ class ServiceTokenCreated(ServiceTokenOut):
 class AccessPolicyUpdate(BaseModel):
     access_policy: Literal["open", "admin_only", "restricted"] = "open"
     allowed_users: list[str] = Field(default_factory=list, description="restricted 时的白名单用户名")
-    allowed_departments: list[str] = Field(default_factory=list, description="部门白名单")
-    allowed_roles: list[str] = Field(default_factory=list, description="角色白名单")
+    allowed_departments: list[str] | None = Field(default=None, description="部门白名单；None 表示保持原值，[] 表示清空")
+    allowed_roles: list[str] | None = Field(default=None, description="角色白名单；None 表示保持原值，[] 表示清空")
 
 
 class RuntimeResult(BaseModel):

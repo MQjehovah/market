@@ -594,8 +594,10 @@ async def update_access_policy(
         raise HTTPException(status.HTTP_409_CONFLICT, f"当前状态（{cap.status}）不允许修改调用权限")
     cap.access_policy = data.access_policy
     cap.allowed_users = [u.strip() for u in data.allowed_users if u.strip()]
-    cap.allowed_departments = [d.strip() for d in data.allowed_departments if d.strip()]
-    cap.allowed_roles = [r.strip() for r in data.allowed_roles if r.strip()]
+    if data.allowed_departments is not None:
+        cap.allowed_departments = [d.strip() for d in data.allowed_departments if d.strip()]
+    if data.allowed_roles is not None:
+        cap.allowed_roles = [r.strip() for r in data.allowed_roles if r.strip()]
     await db.commit()
     await db.refresh(cap)
     return _to_out(cap)

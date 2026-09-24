@@ -18,7 +18,7 @@ from app.schemas import (
     UserSecretStatusOut,
     UserSecretUpsert,
 )
-from app.services.access import access_deny_reason, capability_access_ok
+from app.services.access import access_deny_reason, accessible_connected_ids, capability_access_ok
 from app.services.capabilities import parse_semver, to_capability_out
 from app.services.dashboard_consume import attach_consumer_fields
 from app.services.install_policy import ensure_default_on_joins, is_required_policy
@@ -240,45 +240,20 @@ async def add_capability(data: MyCapabilityAdd, db: DbSession, user: CurrentUser
     )
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
+    if not is_capability_visible(cap, user):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
     if cap.status not in ("published", "deprecated"):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "只有已发布（或弃用期内）的能力可以加入我的能力",
         )
-    if not is_capability_visible(cap, user):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
     if not capability_access_ok(cap, user):
         raise HTTPException(
-            status.HTTP_403_FORBIDDEN, f"没有订阅权限：{access_deny_reason(cap, user)}"
+            status.HTTP_403_FORBIDDEN, f"没有订阅权限（{access_deny_reason(cap, user)}）"
         )
 
-    ids = [cap.id]
-    if cap.type == "plugin":
-        from app.services.plugins import plugin_component_ids
-
-        ids.extend(plugin_component_ids(cap))
-    elif cap.type == "agent":
-        from app.services.marketplace import agent_dependency_capability_ids
-
-        ids.extend(await agent_dependency_capability_ids(db, user, cap))
-
     # 连带能力（plugin 组件 / agent 依赖）逐个过滤：不可见或无访问权限则跳过
-    skipped = 0
-    if len(ids) > 1:
-        rows = (
-            await db.scalars(
-                select(Capability)
-                .options(joinedload(Capability.author))
-                .where(Capability.id.in_(ids[1:]))
-            )
-        ).all()
-        allowed_ids = {cap.id}
-        for row in rows:
-            if not is_capability_visible(row, user) or not capability_access_ok(row, user):
-                skipped += 1
-                continue
-            allowed_ids.add(row.id)
-        ids = [cid for cid in ids if cid in allowed_ids]
+    ids, skipped = await accessible_connected_ids(db, user, cap)
 
     added = 0
     for cid in ids:
@@ -295,7 +270,8 @@ async def add_capability(data: MyCapabilityAdd, db: DbSession, user: CurrentUser
         db.add(UserCapability(user_id=user.id, capability_id=cid))
         added += 1
     await db.commit()
-    skipped_note = f"（{skipped} 个组件因权限不足未加入）" if skipped else ""
+    skipped_unit = "依赖" if cap.type == "agent" else "组件"
+    skipped_note = f"（{skipped} 个{skipped_unit}因权限不足未加入）" if skipped else ""
     if added == 0:
         return MessageOut(message=f"已在你的能力中{skipped_note}")
     dep_count = len(ids) - 1

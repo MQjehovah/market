@@ -93,10 +93,10 @@ async def require_runtime_access(user: User, cap: Capability, db: AsyncSession) 
         )
     )
     if joined is not None:
-        if not capability_access_ok(cap, user, joined=True):
+        if not capability_access_ok(cap, user):
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN,
-                f"没有调用该能力的权限：{access_deny_reason(cap, user)}",
+                f"没有调用该能力的权限（{access_deny_reason(cap, user)}）",
             )
         return
     raise HTTPException(
