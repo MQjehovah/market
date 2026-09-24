@@ -200,7 +200,7 @@ def text_file(files: dict[str, bytes], path: str, default: str = "") -> str:
 
 
 def draft_policy_kwargs(base: Capability) -> dict:
-    """新版本草稿从已发布行继承访问/安装策略与元数据标签。"""
+    """新版本草稿从已发布行继承访问/安装策略、元数据标签与头像。"""
     return {
         "access_policy": getattr(base, "access_policy", None) or "open",
         "allowed_users": list(getattr(base, "allowed_users", None) or []),
@@ -210,7 +210,18 @@ def draft_policy_kwargs(base: Capability) -> dict:
         "distribution": getattr(base, "distribution", None) or "both",
         "risk_default": getattr(base, "risk_default", None) or "read",
         "data_domain": getattr(base, "data_domain", None) or "",
+        # 头像按文件共享（icon_path 存文件名），新版本直接继承
+        "icon_path": getattr(base, "icon_path", "") or "",
     }
+
+
+def capability_icon_url(cap: Capability) -> str:
+    """头像 URL：有图时附 ?v={updated_at 时间戳} 破缓存；无图返回空串。"""
+    if not getattr(cap, "icon_path", ""):
+        return ""
+    updated = getattr(cap, "updated_at", None)
+    stamp = int(updated.timestamp()) if updated else 0
+    return f"/api/capabilities/{cap.id}/icon?v={stamp}"
 
 
 def to_capability_out(
@@ -239,9 +250,7 @@ def to_capability_out(
         "data_domain": getattr(cap, "data_domain", None) or "",
         "changelog": getattr(cap, "changelog", None) or "",
         "readme_md": getattr(cap, "readme_md", None) or "",
-        "icon_url": (
-            f"/api/capabilities/{cap.id}/icon" if getattr(cap, "icon_path", "") else ""
-        ),
+        "icon_url": capability_icon_url(cap),
         "validation_report": getattr(cap, "validation_report", None) or {},
         "author_id": cap.author_id,
         "organization": cap.organization or "",
@@ -691,6 +700,8 @@ async def create_new_version(
         distribution=getattr(cap, "distribution", None) or "both",
         risk_default=getattr(cap, "risk_default", None) or "read",
         data_domain=getattr(cap, "data_domain", None) or "",
+        # 头像随版本继承（icon_path 存文件名，文件按能力 id 共享读取）
+        icon_path=getattr(cap, "icon_path", "") or "",
         author_id=user.id,
         organization=cap.organization,
         status="draft",

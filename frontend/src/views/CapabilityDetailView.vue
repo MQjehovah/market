@@ -674,9 +674,18 @@ const readmeHtml = computed(() => {
 })
 
 watch(cap, () => {
+  iconFailed.value = false
   const keys = contentTabs.value.map((t) => t.key)
   if (!keys.includes(contentTab.value)) contentTab.value = 'intro'
 })
+
+// 切换能力时立即重置头像加载失败态（cap 尚未加载完成也会先生效）
+watch(
+  () => props.id,
+  () => {
+    iconFailed.value = false
+  }
+)
 
 async function copyInstallCommand() {
   const cmd = installCommand.value

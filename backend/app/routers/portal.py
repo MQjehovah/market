@@ -59,9 +59,10 @@ from app.services.capability_secrets import (
 )
 from app.services.capabilities import get_visible_capabilities, parse_semver, record_rating
 from app.services.capabilities import to_capability_out
+from app.services.capabilities import capability_icon_url
 from app.services.service_tokens import is_service_token, require_service_scope
 from app.services.task_search import task_search as run_task_search
-from app.services.visibility import visibility_condition
+from app.services.visibility import is_capability_visible, visibility_condition
 from app.services.taxonomy import (
     DEFAULT_BROWSE_KINDS,
     kinds_for_shelf,
@@ -421,9 +422,7 @@ async def sync_capabilities(
             "category": cap.category or "",
             "description": cap.description or "",
             "tags": cap.tags or [],
-            "icon_url": f"/api/capabilities/{cap.id}/icon"
-            if getattr(cap, "icon_path", "")
-            else "",
+            "icon_url": capability_icon_url(cap),
             "distribution": getattr(cap, "distribution", None) or "both",
             "risk_default": getattr(cap, "risk_default", None) or "read",
             "data_domain": getattr(cap, "data_domain", None) or "",
@@ -769,10 +768,14 @@ async def delete_capability_icon(cap_id: str, db: DbSession, user: CurrentUser):
 
 
 @router.get("/capabilities/{cap_id}/icon")
-async def get_capability_icon(cap_id: str, db: DbSession):
-    """读取能力头像；无图或文件缺失 404。"""
-    cap = await db.get(Capability, cap_id)
-    if cap is None or not cap.icon_path:
+async def get_capability_icon(cap_id: str, db: DbSession, user: OptionalUser):
+    """读取能力头像；无图 / 不可见 / 文件缺失一律 404（与详情一致，不泄露存在性）。"""
+    cap = await db.scalar(
+        select(Capability)
+        .options(joinedload(Capability.author))
+        .where(Capability.id == cap_id)
+    )
+    if cap is None or not cap.icon_path or not is_capability_visible(cap, user):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力头像不存在")
     path = icon_abs_path(cap.icon_path)
     if not path.is_file():

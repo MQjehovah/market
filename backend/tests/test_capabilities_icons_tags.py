@@ -34,7 +34,13 @@ async def _login(client, username: str) -> dict:
 
 
 async def _publish(
-    client, publisher_headers, admin_headers, name: str, *, tags: list[str] | None = None
+    client,
+    publisher_headers,
+    admin_headers,
+    name: str,
+    *,
+    tags: list[str] | None = None,
+    visibility: str = "internal",
 ) -> str:
     """带标签发布一个 tool 能力，返回能力 id。"""
     r = await client.post(
@@ -47,7 +53,7 @@ async def _publish(
             "version": "1.0.0",
             "category": "测试",
             "tags": tags or [],
-            "visibility": "internal",
+            "visibility": visibility,
         },
     )
     assert r.status_code == 201, r.text
@@ -111,10 +117,10 @@ async def test_icon_upload_read_replace_delete(client, publisher_headers, admin_
     r = await _upload(client, user_headers, cap_id, PNG)
     assert r.status_code == 403
 
-    # 作者上传成功：icon_url 输出，文件落盘
+    # 作者上传成功：icon_url 输出（带 ?v= 破缓存），文件落盘
     r = await _upload(client, publisher_headers, cap_id, PNG)
     assert r.status_code == 200, r.text
-    assert r.json()["icon_url"] == url
+    assert r.json()["icon_url"].startswith(f"{url}?v=")
     assert (icon_dir / f"{cap_id}.png").is_file()
 
     # 读取 200 + 缓存头 + media type
@@ -124,13 +130,13 @@ async def test_icon_upload_read_replace_delete(client, publisher_headers, admin_
     assert r.headers["cache-control"] == "public, max-age=3600"
     assert r.content == PNG
 
-    # 列表 / 详情 / sync 均输出 icon_url
+    # 列表 / 详情 / sync 均输出 icon_url（带版本参数）
     r = await client.get("/api/capabilities", params={"q": name})
     item = next(i for i in r.json()["items"] if i["id"] == cap_id)
-    assert item["icon_url"] == url
+    assert item["icon_url"].startswith(f"{url}?v=")
     r = await client.get("/api/capabilities/sync")
     item = next(i for i in r.json() if i["id"] == cap_id)
-    assert item["icon_url"] == url
+    assert item["icon_url"].startswith(f"{url}?v=")
 
     # 替换为 jpg：旧 png 被清理，只保留一个文件
     r = await _upload(client, publisher_headers, cap_id, JPG, filename="a.jpg", content_type="image/jpeg")
@@ -204,3 +210,53 @@ async def test_browse_tag_filter_and_meta_tags(client, publisher_headers, admin_
     assert r.status_code == 201, r.text
     r = await client.get("/api/meta/tags")
     assert "草稿标签" not in r.json()["tags"]
+
+
+@pytest.mark.asyncio
+async def test_new_version_inherits_icon(client, publisher_headers, admin_headers):
+    """新版本继承头像：v1 设图后发新版本，新行 icon_url 非空且读取 200。"""
+    name = "头像继承能力"
+    cap_id = await _publish(client, publisher_headers, admin_headers, name)
+    r = await _upload(client, publisher_headers, cap_id, PNG)
+    assert r.status_code == 200, r.text
+
+    r = await client.post(
+        f"/api/publish/capabilities/{cap_id}/versions",
+        headers=publisher_headers,
+        json={"new_version": "1.0.1", "changelog": "patch"},
+    )
+    assert r.status_code == 201, r.text
+    v2 = r.json()["id"]
+
+    r = await client.get(f"/api/capabilities/{v2}", headers=publisher_headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["icon_url"].startswith(f"/api/capabilities/{v2}/icon?v=")
+    r = await client.get(f"/api/capabilities/{v2}/icon")
+    assert r.status_code == 200
+    assert r.content == PNG
+
+
+@pytest.mark.asyncio
+async def test_icon_read_respects_visibility(client, publisher_headers, admin_headers):
+    """头像读取做可见性：不可见一律 404（不泄露存在性），作者/admin 200。"""
+    name = "私有头像能力"
+    cap_id = await _publish(
+        client, publisher_headers, admin_headers, name, visibility="private"
+    )
+    r = await _upload(client, publisher_headers, cap_id, PNG)
+    assert r.status_code == 200, r.text
+    url = f"/api/capabilities/{cap_id}/icon"
+
+    # 匿名 / 其他登录用户：不可见 → 404
+    r = await client.get(url)
+    assert r.status_code == 404
+    await _create_user(client, admin_headers, "icon-outsider")
+    outsider = await _login(client, "icon-outsider")
+    r = await client.get(url, headers=outsider)
+    assert r.status_code == 404
+
+    # 作者 / admin：200
+    r = await client.get(url, headers=publisher_headers)
+    assert r.status_code == 200
+    r = await client.get(url, headers=admin_headers)
+    assert r.status_code == 200

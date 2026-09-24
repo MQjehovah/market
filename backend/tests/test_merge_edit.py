@@ -26,6 +26,7 @@ def test_draft_policy_kwargs():
         distribution="remote",
         risk_default="write",
         data_domain="设备",
+        icon_path="cap-1.png",
     )
     assert draft_policy_kwargs(base) == {
         "access_policy": "restricted",
@@ -36,11 +37,12 @@ def test_draft_policy_kwargs():
         "distribution": "remote",
         "risk_default": "write",
         "data_domain": "设备",
+        "icon_path": "cap-1.png",
     }
 
 
 def test_draft_policy_kwargs_tolerates_legacy_objects():
-    """老对象缺新字段时回退空列表，不抛异常。"""
+    """老对象缺新字段时回退空列表/空串，不抛异常。"""
     base = SimpleNamespace(
         access_policy="open",
         allowed_users=[],
@@ -52,6 +54,7 @@ def test_draft_policy_kwargs_tolerates_legacy_objects():
     kwargs = draft_policy_kwargs(base)
     assert kwargs["allowed_departments"] == []
     assert kwargs["allowed_roles"] == []
+    assert kwargs["icon_path"] == ""
 
 
 def test_merge_edit_skips_blank_core_overlay(monkeypatch):
