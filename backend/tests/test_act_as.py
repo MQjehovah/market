@@ -502,3 +502,90 @@ async def test_relay_non_service_token_ignores_act_as(client, publisher_headers,
         name,
     )
     assert status is None and cfg is not None
+
+
+# ---------- /my：加入/移出/订阅清单的 act-as ----------
+
+
+def _act_headers(token: str, sub: str | None) -> dict:
+    headers = {"Authorization": f"Bearer {token}"}
+    if sub is not None:
+        headers["X-Act-As-Sub"] = sub
+    return headers
+
+
+@pytest.mark.asyncio
+async def test_my_capabilities_and_subscriptions_act_as(client, publisher_headers, admin_headers):
+    """服务令牌+act-as：/my 列表/加入/移出/订阅清单全部按目标用户执行。"""
+    name = "act-my-cap"
+    cap_id = await _publish(client, publisher_headers, admin_headers, name, type_="tool")
+    await _create_user(client, admin_headers, "act-my-user")
+    a_headers = await _login(client, "act-my-user")
+    _, token = await _make_token(client, admin_headers, ["gateway", "sync"])
+    act = _act_headers(token, "act-my-user")
+    service = _act_headers(token, None)
+
+    # 目标用户初始未加入
+    r = await client.get("/api/my/capabilities?scope=added", headers=act)
+    assert r.status_code == 200, r.text
+    assert not any(c["id"] == cap_id for c in r.json())
+
+    # 加入：落到目标用户（目标本人可见；服务自身不可见）
+    r = await client.post(
+        "/api/my/capabilities", headers=act, json={"capability_id": cap_id}
+    )
+    assert r.status_code == 201, r.text
+    r = await client.get("/api/my/capabilities?scope=added", headers=act)
+    assert any(c["id"] == cap_id for c in r.json())
+    r = await client.get("/api/my/capabilities?scope=added", headers=a_headers)
+    assert any(c["id"] == cap_id for c in r.json())
+    r = await client.get("/api/my/capabilities?scope=added", headers=service)
+    assert not any(c["id"] == cap_id for c in r.json())
+
+    # 订阅清单：目标用户订阅后 act-as 可见；服务自身为空
+    r = await client.get("/api/my/subscriptions", headers=act)
+    assert r.status_code == 200, r.text
+    assert r.json()["names"] == []
+    r = await client.post(
+        "/api/subscriptions", headers=a_headers, json={"capability_name": name}
+    )
+    assert r.status_code == 201, r.text
+    r = await client.get("/api/my/subscriptions", headers=act)
+    assert r.json()["names"] == [name]
+    r = await client.get("/api/my/subscriptions", headers=service)
+    assert r.json()["names"] == []
+
+    # 移出：同样落到目标用户
+    r = await client.delete(f"/api/my/capabilities/{cap_id}", headers=act)
+    assert r.status_code == 200, r.text
+    r = await client.get("/api/my/capabilities?scope=added", headers=act)
+    assert not any(c["id"] == cap_id for c in r.json())
+
+
+@pytest.mark.asyncio
+async def test_my_act_as_scope_and_target_errors(client, admin_headers):
+    """scope 不足或 act-as 目标不存在/禁用 → 403。"""
+    _, token_bad = await _make_token(client, admin_headers, ["runtime"])
+    r = await client.get(
+        "/api/my/capabilities", headers=_act_headers(token_bad, "admin")
+    )
+    assert r.status_code == 403, r.text
+
+    _, token_ok = await _make_token(client, admin_headers, ["sync"])
+    r = await client.get(
+        "/api/my/capabilities", headers=_act_headers(token_ok, "ghost")
+    )
+    assert r.status_code == 403, r.text
+
+
+@pytest.mark.asyncio
+async def test_my_act_as_ignored_for_regular_user(client, admin_headers):
+    """非服务令牌带 X-Act-As-Sub：忽略该头，按本人身份执行。"""
+    r = await client.get(
+        "/api/my/capabilities", headers={**admin_headers, "X-Act-As-Sub": "ghost"}
+    )
+    assert r.status_code == 200, r.text
+    r = await client.get(
+        "/api/my/subscriptions", headers={**admin_headers, "X-Act-As-Sub": "ghost"}
+    )
+    assert r.status_code == 200, r.text

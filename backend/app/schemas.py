@@ -689,6 +689,12 @@ class MyCapabilityPatch(BaseModel):
     enabled: bool
 
 
+class MySubscriptionsOut(BaseModel):
+    """订阅更新清单（能力名），详情页两态按钮用。"""
+
+    names: list[str] = Field(default_factory=list)
+
+
 class HostSyncItem(BaseModel):
     """宿主（零号员工 / 桌面）应安装的一条已加入且启用能力。"""
 

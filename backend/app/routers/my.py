@@ -1,24 +1,28 @@
 """我的能力：从市场加入的能力集合 + 我创建的能力，支持加入 / 移除 / 按来源筛选。"""
 
+import logging
+from typing import Annotated
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import and_, select
 from sqlalchemy.orm import joinedload, selectinload
 
 from app.auth import CurrentUser, DbSession
-from app.models import Capability, UserCapability
+from app.models import Capability, Subscription, User, UserCapability
 from app.schemas import (
     HostSyncOut,
     MessageOut,
     MyCapabilityAdd,
     MyCapabilityPatch,
+    MySubscriptionsOut,
     UserSecretBulkUpsert,
     UserSecretOut,
     UserSecretStatusOut,
     UserSecretUpsert,
 )
 from app.services.access import access_deny_reason, accessible_connected_ids, capability_access_ok
+from app.services.act_as import resolve_act_as
 from app.services.capabilities import parse_semver, to_capability_out
 from app.services.dashboard_consume import attach_consumer_fields
 from app.services.install_policy import ensure_default_on_joins, is_required_policy
@@ -30,10 +34,12 @@ from app.services.secret_vault import (
     upsert_secret,
     upsert_secrets_bulk,
 )
+from app.services.service_tokens import is_service_token
 from app.services.taxonomy import KIND_META
 from app.services.visibility import is_capability_visible
 
 router = APIRouter(prefix="/api/my", tags=["my"])
+logger = logging.getLogger("market.my")
 
 # 宿主可落地的 kind（与 taxonomy local_install + 远程 tool 对齐；不含 workflow）
 _HOST_KINDS = {
@@ -55,9 +61,38 @@ def _out(cap: Capability, *, added: bool, owned: bool, enabled: bool = True) -> 
     return data
 
 
+async def current_my_user(request: Request, db: DbSession, user: CurrentUser) -> User:
+    """`/my` 操作主体：服务令牌 + X-Act-As-Sub 时代表目标用户执行（agent web 代理）。
+
+    仅服务令牌生效（scope 由 resolve_act_as 兜底校验 gateway/sync 任一）；
+    非服务令牌带该头忽略（沿用全局约定）；无该头时保持服务自身/本人身份。
+    审计口径与 sync/relay 一致：act_as 落到目标用户名，actor 为服务令牌绑定用户。
+    """
+    sub = (request.headers.get("x-act-as-sub") or "").strip()
+    if not is_service_token(user):
+        if sub:
+            logger.debug("非服务令牌携带 X-Act-As-Sub，已忽略 path=%s", request.url.path)
+        return user
+    if not sub:
+        return user
+    target = await resolve_act_as(db, user, sub)
+    if target is not None:
+        logger.info(
+            "我的能力代表用户访问：actor=%s act_as=%s path=%s",
+            user.id,
+            target.username,
+            request.url.path,
+        )
+        return target
+    return user
+
+
+MyUser = Annotated[User, Depends(current_my_user)]
+
+
 @router.get("/capabilities")
 async def my_capabilities(
-    db: DbSession, user: CurrentUser, scope: str = "all", include_components: bool = False
+    db: DbSession, user: MyUser, scope: str = "all", include_components: bool = False
 ):
     """我的能力列表：scope=all | added（从市场加入）| owned（我创建的）。
 
@@ -172,8 +207,8 @@ async def my_capabilities(
 async def host_sync(db: DbSession, user: CurrentUser, include_components: bool = False):
     """宿主同步清单：已加入且启用、可落地的已发布能力。
 
-    零号员工 / 桌面应拉此接口安装，而不是让员工复制 cap install。
-    默认隐藏 plugin-component（与 my/capabilities 一致）；需要子能力时传 include_components=true。
+    legacy：安装与启用改为各运行端本地各记，市场不再提供 UI 引用；
+    保留本接口与 PATCH /my/capabilities 供未来宿主清单兼容，不改字段。
     """
     await ensure_default_on_joins(db, user)
     rows = (
@@ -232,7 +267,7 @@ async def host_sync(db: DbSession, user: CurrentUser, include_components: bool =
 
 
 @router.post("/capabilities", response_model=MessageOut, status_code=status.HTTP_201_CREATED)
-async def add_capability(data: MyCapabilityAdd, db: DbSession, user: CurrentUser):
+async def add_capability(data: MyCapabilityAdd, db: DbSession, user: MyUser):
     cap = await db.scalar(
         select(Capability)
         .options(joinedload(Capability.author), selectinload(Capability.artifacts))
@@ -286,6 +321,7 @@ async def add_capability(data: MyCapabilityAdd, db: DbSession, user: CurrentUser
 async def patch_capability(
     capability_id: str, data: MyCapabilityPatch, db: DbSession, user: CurrentUser
 ):
+    """legacy：宿主启用状态（本地各记后市场不再提供 UI 开关），保留供宿主兼容。"""
     row = await db.scalar(
         select(UserCapability).where(
             and_(
@@ -330,7 +366,7 @@ async def patch_capability(
 
 
 @router.delete("/capabilities/{capability_id}", response_model=MessageOut)
-async def remove_capability(capability_id: str, db: DbSession, user: CurrentUser):
+async def remove_capability(capability_id: str, db: DbSession, user: MyUser):
     row = await db.scalar(
         select(UserCapability).where(
             and_(
@@ -372,6 +408,19 @@ async def remove_capability(capability_id: str, db: DbSession, user: CurrentUser
     if cap is not None and cap.type == "plugin" and removed > 1:
         return MessageOut(message=f"已从我的能力移除能力包及其 {removed - 1} 个组件")
     return MessageOut(message="已从我的能力移除")
+
+
+@router.get("/subscriptions", response_model=MySubscriptionsOut)
+async def my_subscriptions(db: DbSession, user: MyUser):
+    """当前用户的订阅更新清单（能力名），供详情页「订阅更新/取消订阅更新」两态。"""
+    names = (
+        await db.scalars(
+            select(Subscription.capability_name)
+            .where(Subscription.user_id == user.id)
+            .order_by(Subscription.capability_name)
+        )
+    ).all()
+    return MySubscriptionsOut(names=list(names))
 
 
 # ── 业务密钥托管 ──────────────────────────────────────────────
