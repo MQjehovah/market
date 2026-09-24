@@ -20,6 +20,8 @@ def test_draft_policy_kwargs():
     base = SimpleNamespace(
         access_policy="restricted",
         allowed_users=["alice"],
+        allowed_departments=["研发部"],
+        allowed_roles=["publisher"],
         install_policy="required",
         distribution="remote",
         risk_default="write",
@@ -28,11 +30,28 @@ def test_draft_policy_kwargs():
     assert draft_policy_kwargs(base) == {
         "access_policy": "restricted",
         "allowed_users": ["alice"],
+        "allowed_departments": ["研发部"],
+        "allowed_roles": ["publisher"],
         "install_policy": "required",
         "distribution": "remote",
         "risk_default": "write",
         "data_domain": "设备",
     }
+
+
+def test_draft_policy_kwargs_tolerates_legacy_objects():
+    """老对象缺新字段时回退空列表，不抛异常。"""
+    base = SimpleNamespace(
+        access_policy="open",
+        allowed_users=[],
+        install_policy="optional",
+        distribution="both",
+        risk_default="read",
+        data_domain="",
+    )
+    kwargs = draft_policy_kwargs(base)
+    assert kwargs["allowed_departments"] == []
+    assert kwargs["allowed_roles"] == []
 
 
 def test_merge_edit_skips_blank_core_overlay(monkeypatch):

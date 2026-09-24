@@ -200,6 +200,8 @@ class CapabilityOut(CapabilityBase):
     readme_md: str = ""
     input_schema: dict[str, Any] = Field(default_factory=dict)
     validation_report: dict[str, Any] = Field(default_factory=dict)
+    allowed_departments: list[str] = Field(default_factory=list)
+    allowed_roles: list[str] = Field(default_factory=list)
     usage_count: int
     rating_sum: float
     rating_count: int
@@ -352,6 +354,8 @@ class ServiceTokenCreated(ServiceTokenOut):
 class AccessPolicyUpdate(BaseModel):
     access_policy: Literal["open", "admin_only", "restricted"] = "open"
     allowed_users: list[str] = Field(default_factory=list, description="restricted 时的白名单用户名")
+    allowed_departments: list[str] = Field(default_factory=list, description="部门白名单")
+    allowed_roles: list[str] = Field(default_factory=list, description="角色白名单")
 
 
 class RuntimeResult(BaseModel):

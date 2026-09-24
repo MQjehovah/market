@@ -832,6 +832,8 @@ async def _upsert_component(
             visibility=plugin_cap.visibility,
             access_policy=plugin_cap.access_policy,
             allowed_users=list(plugin_cap.allowed_users or []),
+            allowed_departments=list(plugin_cap.allowed_departments or []),
+            allowed_roles=list(plugin_cap.allowed_roles or []),
             author_id=user.id,
             organization=user.organization,
             status="draft",

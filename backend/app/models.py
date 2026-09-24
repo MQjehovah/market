@@ -72,6 +72,9 @@ class Capability(Base):
     access_policy: Mapped[str] = mapped_column(String(20), default="open")
     # open（所有登录用户可加入并调用）| admin_only（仅管理员/作者）| restricted（白名单用户名）
     allowed_users: Mapped[list] = mapped_column(JSON, default=list)
+    allowed_departments: Mapped[list] = mapped_column(JSON, default=list)
+    allowed_roles: Mapped[list] = mapped_column(JSON, default=list)
+    # 三门白名单：任一非空即按 AND 生效（admin_only 除外），判定见 services/access.py
     install_policy: Mapped[str] = mapped_column(String(20), default="optional")
     # optional | default_on | required
     distribution: Mapped[str] = mapped_column(String(16), default="both")

@@ -60,6 +60,14 @@ async def _auto_migrate(conn) -> None:
             sync_conn.exec_driver_sql(
                 "ALTER TABLE capabilities ADD COLUMN allowed_users JSON DEFAULT '[]'"
             )
+        if "allowed_departments" not in cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE capabilities ADD COLUMN allowed_departments JSON DEFAULT '[]'"
+            )
+        if "allowed_roles" not in cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE capabilities ADD COLUMN allowed_roles JSON DEFAULT '[]'"
+            )
         if "install_policy" not in cols:
             sync_conn.exec_driver_sql(
                 "ALTER TABLE capabilities ADD COLUMN install_policy VARCHAR(20) DEFAULT 'optional'"
