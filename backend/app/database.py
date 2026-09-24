@@ -96,6 +96,10 @@ async def _auto_migrate(conn) -> None:
             sync_conn.exec_driver_sql(
                 "ALTER TABLE capabilities ADD COLUMN data_domain VARCHAR(64) DEFAULT ''"
             )
+        if "icon_path" not in cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE capabilities ADD COLUMN icon_path VARCHAR(255) DEFAULT ''"
+            )
         tables = inspector.get_table_names()
         if "usage_events" in tables:
             ue_cols = {c["name"] for c in inspector.get_columns("usage_events")}

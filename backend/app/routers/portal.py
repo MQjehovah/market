@@ -2,10 +2,11 @@
 
 import io
 import logging
+from collections import Counter
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile, status
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import String, and_, case, cast, func, or_, select
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -35,11 +36,20 @@ from app.schemas import (
     RatingCreate,
     RatingOut,
     SubscribeRequest,
+    TagsMetaOut,
     TaskSearchHitOut,
     TaskSearchOut,
 )
 from app.services.access import capability_access_ok
 from app.services.act_as import resolve_act_as
+from app.services.capability_icons import (
+    MAX_ICON_BYTES,
+    delete_icon_file,
+    icon_abs_path,
+    media_type_for,
+    save_icon_file,
+    sniff_icon_ext,
+)
 from app.services.capability_secrets import (
     canonical_capability_author_id,
     declared_env_keys,
@@ -129,6 +139,7 @@ async def browse_capabilities(
     type: str = "",
     shelf: str = "",
     category: str = "",
+    tag: str = "",
     status: str = "",
     visibility: str = "",
     skill: str = "",
@@ -147,6 +158,7 @@ async def browse_capabilities(
     - include_bricks=true。
 
     skill / mcp：按 Agent 内嵌能力名筛选（匹配 input_schema.embedded_*）。
+    tag：JSON 数组包含匹配（cast(tags AS TEXT) LIKE '%"tag"%'）。
     include_components：为 false 时隐藏全部 plugin 拆出子能力（含已发布）。
     """
     conditions: list = []
@@ -201,6 +213,12 @@ async def browse_capabilities(
         if cur is None or parse_semver(cap.version) > parse_semver(cur.version):
             latest[key] = cap
     caps = list(latest.values())
+
+    # 标签筛选：JSON 列在 SQLite 中按 ensure_ascii 转义存储，SQL LIKE 对中文无效，
+    # 与 skill/mcp 筛选一致改为 Python 精确包含（不受转义影响）
+    tag = tag.strip()
+    if tag:
+        caps = [c for c in caps if tag in (c.tags or [])]
 
     def _embedded_names(cap: Capability, key: str) -> set[str]:
         schema = cap.input_schema or {}
@@ -403,6 +421,9 @@ async def sync_capabilities(
             "category": cap.category or "",
             "description": cap.description or "",
             "tags": cap.tags or [],
+            "icon_url": f"/api/capabilities/{cap.id}/icon"
+            if getattr(cap, "icon_path", "")
+            else "",
             "distribution": getattr(cap, "distribution", None) or "both",
             "risk_default": getattr(cap, "risk_default", None) or "read",
             "data_domain": getattr(cap, "data_domain", None) or "",
@@ -487,6 +508,27 @@ async def categories(db: DbSession, user: OptionalUser):
     for cap_type, cat in rows:
         result.setdefault(cap_type, []).append(cat)
     return result
+
+
+@router.get("/meta/tags", response_model=TagsMetaOut)
+async def tags_meta(db: DbSession):
+    """已上架且 internal/public 可见能力的标签聚合 Top 30（过滤 plugin-component）。"""
+    rows = (
+        await db.scalars(
+            select(Capability.tags).where(
+                Capability.status == "published",
+                Capability.visibility.in_(("internal", "public")),
+            )
+        )
+    ).all()
+    counter: Counter[str] = Counter()
+    for tags in rows:
+        for item in tags or []:
+            name = str(item).strip()
+            if name and name != "plugin-component":
+                counter[name] += 1
+    top = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))[:30]
+    return TagsMetaOut(tags=[name for name, _count in top])
 
 
 @router.get("/capabilities/{cap_id}", response_model=CapabilityOut)
@@ -671,6 +713,75 @@ async def update_install_policy(
     await db.commit()
     await db.refresh(cap)
     return _to_out(cap)
+
+
+def _require_icon_owner(cap: Capability, user: User) -> None:
+    """头像管理权限：作者或 admin（与其他管理接口一致）。"""
+    if user.role != "admin" and cap.author_id != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "只有作者或管理员可以设置能力头像")
+
+
+@router.put("/capabilities/{cap_id}/icon", response_model=CapabilityOut)
+async def upload_capability_icon(
+    cap_id: str,
+    db: DbSession,
+    user: CurrentUser,
+    file: UploadFile = File(...),
+):
+    """上传/替换能力头像：png/jpg/webp、≤256KB、magic bytes 校验；作者或 admin。"""
+    cap = await db.get(Capability, cap_id)
+    if cap is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
+    _require_icon_owner(cap, user)
+    declared = (file.content_type or "").lower()
+    if not declared.startswith("image/"):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "仅支持 png/jpg/webp 图片")
+    data = await file.read()
+    if not data:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "图片内容为空")
+    if len(data) > MAX_ICON_BYTES:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "图片不能超过 256KB")
+    ext = sniff_icon_ext(data)
+    if ext is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "图片格式无效（仅支持 png/jpg/webp）"
+        )
+    old = cap.icon_path or ""
+    cap.icon_path = save_icon_file(cap.id, ext, data)
+    await db.commit()
+    if old and old != cap.icon_path:
+        delete_icon_file(old)  # 替换时清理旧文件（同 ext 已被原子覆盖）
+    await db.refresh(cap)
+    return _to_out(cap)
+
+
+@router.delete("/capabilities/{cap_id}/icon", response_model=MessageOut)
+async def delete_capability_icon(cap_id: str, db: DbSession, user: CurrentUser):
+    cap = await db.get(Capability, cap_id)
+    if cap is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
+    _require_icon_owner(cap, user)
+    old = cap.icon_path or ""
+    cap.icon_path = ""
+    await db.commit()
+    delete_icon_file(old)
+    return MessageOut(message="已删除能力头像")
+
+
+@router.get("/capabilities/{cap_id}/icon")
+async def get_capability_icon(cap_id: str, db: DbSession):
+    """读取能力头像；无图或文件缺失 404。"""
+    cap = await db.get(Capability, cap_id)
+    if cap is None or not cap.icon_path:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "能力头像不存在")
+    path = icon_abs_path(cap.icon_path)
+    if not path.is_file():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "能力头像不存在")
+    return FileResponse(
+        path,
+        media_type=media_type_for(cap.icon_path),
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
 
 
 async def _require_platform_secret_admin(db: DbSession, cap: Capability, user: User) -> None:

@@ -239,6 +239,9 @@ def to_capability_out(
         "data_domain": getattr(cap, "data_domain", None) or "",
         "changelog": getattr(cap, "changelog", None) or "",
         "readme_md": getattr(cap, "readme_md", None) or "",
+        "icon_url": (
+            f"/api/capabilities/{cap.id}/icon" if getattr(cap, "icon_path", "") else ""
+        ),
         "validation_report": getattr(cap, "validation_report", None) or {},
         "author_id": cap.author_id,
         "organization": cap.organization or "",

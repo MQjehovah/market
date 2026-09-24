@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     # 能力包存储
     artifact_storage: str = "local"  # local | minio
     artifact_dir: str = "./data/artifacts"
+    # 能力头像目录（本地文件系统，{cap_id}.{ext}）
+    icon_dir: str = "./data/icons"
     minio_endpoint: str = "localhost:9000"
     minio_access_key: str = "minioadmin"
     minio_secret_key: str = "minioadmin"
@@ -96,6 +98,13 @@ class Settings(BaseSettings):
             p = self.base_dir / p
         return p.resolve()
 
+    @property
+    def icon_path(self) -> Path:
+        p = Path(self.icon_dir)
+        if not p.is_absolute():
+            p = self.base_dir / p
+        return p.resolve()
+
     def resolved_database_url(self) -> str:
         if self.database_url.startswith("sqlite") and "///" in self.database_url:
             scheme, raw = self.database_url.split("///", 1)
@@ -115,6 +124,7 @@ def get_settings() -> Settings:
     # 确保数据目录存在
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     settings.artifact_path.mkdir(parents=True, exist_ok=True)
+    settings.icon_path.mkdir(parents=True, exist_ok=True)
     return settings
 
 

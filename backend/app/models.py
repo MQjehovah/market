@@ -64,6 +64,8 @@ class Capability(Base):
     # draft | reviewing | published | deprecated | archived | rejected | returned
     category: Mapped[str] = mapped_column(String(100), default="", index=True)
     tags: Mapped[list] = mapped_column(JSON, default=list)
+    icon_path: Mapped[str] = mapped_column(String(255), default="")
+    # 头像文件相对路径（存于 data/icons/{cap_id}.{ext}）；空 = 无图
     input_schema: Mapped[dict] = mapped_column(JSON, default=dict)  # 工具参数定义（来自 schema.json）
     author_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
     organization: Mapped[str] = mapped_column(String(100), default="")

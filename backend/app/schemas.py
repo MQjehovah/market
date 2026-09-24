@@ -198,6 +198,7 @@ class CapabilityOut(CapabilityBase):
     organization: str
     changelog: str = ""
     readme_md: str = ""
+    icon_url: str = ""
     input_schema: dict[str, Any] = Field(default_factory=dict)
     validation_report: dict[str, Any] = Field(default_factory=dict)
     allowed_departments: list[str] = Field(default_factory=list)
@@ -223,6 +224,12 @@ class CapabilityPage(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class TagsMetaOut(BaseModel):
+    """标签聚合（浏览页筛选 chips）：Top N，过滤 plugin-component。"""
+
+    tags: list[str] = Field(default_factory=list)
 
 
 class TaskSearchHitOut(CapabilityOut):
