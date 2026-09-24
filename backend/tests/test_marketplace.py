@@ -517,6 +517,71 @@ async def test_join_plugin_skips_components_without_access(
 
 
 @pytest.mark.asyncio
+async def test_runtime_access_follows_name_across_republish(
+    client, publisher_headers, admin_headers, user_headers
+):
+    """订阅旧版本后重发布：同名最新版本调用仍放行（订阅按能力名跨版本，之前 403）。"""
+    name = "跨版本工具"
+    cap_id = await _publish_capability(
+        client, publisher_headers, admin_headers, name, "tool", _tool_zip(name)
+    )
+    r = await client.post(
+        "/api/my/capabilities", headers=user_headers, json={"capability_id": cap_id}
+    )
+    assert r.status_code == 201, r.text
+
+    # 重发布 1.0.1（新行）
+    r = await client.post(
+        f"/api/publish/capabilities/{cap_id}/versions",
+        headers=publisher_headers,
+        json={"new_version": "1.0.1", "changelog": "patch"},
+    )
+    assert r.status_code == 201, r.text
+    v2 = r.json()["id"]
+    r = await client.post(
+        f"/api/publish/capabilities/{v2}/artifact",
+        headers=publisher_headers,
+        files={"file": ("pkg.zip", _tool_zip(name), "application/zip")},
+    )
+    assert r.status_code == 200, r.text
+    r = await client.post(f"/api/publish/capabilities/{v2}/submit", headers=publisher_headers)
+    assert r.status_code == 200, r.text
+    r = await client.post(
+        f"/api/admin/capabilities/{v2}/review",
+        headers=admin_headers,
+        json={"action": "approve", "comment": "ok"},
+    )
+    assert r.status_code == 200, r.text
+
+    # 订阅者（订阅的是旧行）调用最新版本 → 放行
+    r = await client.post(
+        f"/api/runtime/tools/{name}/invoke",
+        headers=user_headers,
+        json={"params": {"text": "hi"}},
+    )
+    assert r.status_code == 200, r.text
+
+    # 未订阅者仍被拒
+    r = await client.post(
+        "/api/admin/users",
+        headers=admin_headers,
+        json={"username": "outsider", "email": "outsider@example.com", "password": "secret123"},
+    )
+    assert r.status_code == 201, r.text
+    r = await client.post(
+        "/api/auth/login", json={"username": "outsider", "password": "secret123"}
+    )
+    assert r.status_code == 200
+    outsider_headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    r = await client.post(
+        f"/api/runtime/tools/{name}/invoke",
+        headers=outsider_headers,
+        json={"params": {"text": "hi"}},
+    )
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_runtime_denied_when_department_changed_after_join(
     client, publisher_headers, admin_headers, user_headers
 ):

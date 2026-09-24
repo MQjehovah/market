@@ -14,7 +14,10 @@ logger = logging.getLogger("market.install_policy")
 
 
 async def ensure_default_on_joins(db: AsyncSession, user: User) -> int:
-    """把已发布的 default_on 能力自动加入当前用户的「我的能力」。返回新增条数。"""
+    """把已发布的 default_on 能力自动加入当前用户的「我的能力」。返回新增条数。
+
+    「已加入」按能力名判定（订阅跨版本：重发布后不重复加入新版本行）。
+    """
     caps = (
         await db.scalars(
             select(Capability)
@@ -30,14 +33,18 @@ async def ensure_default_on_joins(db: AsyncSession, user: User) -> int:
     if not caps:
         return 0
 
-    existing = set(
-        await db.scalars(
-            select(UserCapability.capability_id).where(UserCapability.user_id == user.id)
+    rows = (
+        await db.execute(
+            select(UserCapability.capability_id, Capability.name)
+            .join(Capability, Capability.id == UserCapability.capability_id)
+            .where(UserCapability.user_id == user.id)
         )
-    )
+    ).all()
+    existing = {cid for cid, _name in rows}
+    existing_names = {name for _cid, name in rows}
     added = 0
     for cap in caps:
-        if cap.id in existing:
+        if cap.name in existing_names:
             continue
         if not is_capability_visible(cap, user):
             logger.info("default_on 跳过能力「%s」：用户 %s 不可见", cap.name, user.username)
@@ -53,11 +60,25 @@ async def ensure_default_on_joins(db: AsyncSession, user: User) -> int:
                 cap.name,
                 skipped,
             )
+        pending = [cid for cid in ids if cid not in existing]
+        names_by_id: dict[str, str] = {}
+        if pending:
+            names_by_id = {
+                cid: name
+                for cid, name in (
+                    await db.execute(
+                        select(Capability.id, Capability.name).where(Capability.id.in_(pending))
+                    )
+                ).all()
+            }
         for cid in ids:
-            if cid in existing:
+            name = names_by_id.get(cid)
+            if cid in existing or (name and name in existing_names):
                 continue
             db.add(UserCapability(user_id=user.id, capability_id=cid))
             existing.add(cid)
+            if name:
+                existing_names.add(name)
             added += 1
     if added:
         await db.commit()

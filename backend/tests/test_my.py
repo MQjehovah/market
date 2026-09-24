@@ -348,3 +348,68 @@ async def test_join_agent_skips_denied_dependency(
     assert agent_id in ids
     assert tool_id in ids
     assert skill_id not in ids
+
+
+@pytest.mark.asyncio
+async def test_default_on_follows_name_across_republish(
+    client, publisher_headers, admin_headers, user_headers
+):
+    """default_on 重发布后不重复加入新版本行（订阅按能力名判定）。"""
+    from sqlalchemy import select
+
+    from app.database import SessionLocal
+    from app.models import UserCapability
+
+    name = "auto-republish-tool"
+    cap_id = await _publish_capability(
+        client, publisher_headers, admin_headers, name, "tool", _tool_zip(name)
+    )
+    r = await client.post(
+        f"/api/capabilities/{cap_id}/install-policy",
+        headers=admin_headers,
+        json={"install_policy": "default_on"},
+    )
+    assert r.status_code == 200, r.text
+
+    # 首次拉列表自动加入当前版本
+    r = await client.get("/api/my/capabilities?scope=added", headers=user_headers)
+    assert any(c["name"] == name for c in r.json())
+
+    # 重发布 1.0.1
+    r = await client.post(
+        f"/api/publish/capabilities/{cap_id}/versions",
+        headers=publisher_headers,
+        json={"new_version": "1.0.1", "changelog": "patch"},
+    )
+    assert r.status_code == 201, r.text
+    v2 = r.json()["id"]
+    r = await client.post(
+        f"/api/publish/capabilities/{v2}/artifact",
+        headers=publisher_headers,
+        files={"file": ("pkg.zip", _tool_zip(name), "application/zip")},
+    )
+    assert r.status_code == 200, r.text
+    r = await client.post(f"/api/publish/capabilities/{v2}/submit", headers=publisher_headers)
+    assert r.status_code == 200, r.text
+    r = await client.post(
+        f"/api/admin/capabilities/{v2}/review",
+        headers=admin_headers,
+        json={"action": "approve", "comment": "ok"},
+    )
+    assert r.status_code == 200, r.text
+
+    # 再次拉列表：同名已加入，不再新增新版本订阅行
+    r = await client.get("/api/my/capabilities?scope=added", headers=user_headers)
+    assert r.status_code == 200
+    r = await client.get("/api/auth/me", headers=user_headers)
+    uid = r.json()["id"]
+    async with SessionLocal() as db:
+        rows = (
+            await db.scalars(
+                select(UserCapability).where(
+                    UserCapability.user_id == uid,
+                    UserCapability.capability_id == v2,
+                )
+            )
+        ).all()
+    assert not rows, "重发布后不应重复加入新版本行"

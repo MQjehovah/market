@@ -255,6 +255,53 @@ async def test_sync_act_as_filters_subscribed_visible(client, publisher_headers,
 
 
 @pytest.mark.asyncio
+async def test_act_as_subscription_follows_name_on_republish(
+    client, publisher_headers, admin_headers
+):
+    """订阅旧版本后重发布：act-as sync 返回新版本，relay 门禁按名放行。"""
+    name = "act-ver-mcp"
+    cap_id = await _publish(client, publisher_headers, admin_headers, name, type_="mcp")
+    await _create_user(client, admin_headers, "act-ver-u")
+    u_headers = await _login(client, "act-ver-u")
+    await _subscribe(client, u_headers, cap_id)
+
+    # 重发布 1.0.1（新行）
+    r = await client.post(
+        f"/api/publish/capabilities/{cap_id}/versions",
+        headers=publisher_headers,
+        json={"new_version": "1.0.1", "changelog": "patch"},
+    )
+    assert r.status_code == 201, r.text
+    v2 = r.json()["id"]
+    r = await client.post(
+        f"/api/publish/capabilities/{v2}/artifact",
+        headers=publisher_headers,
+        files={"file": ("pkg.zip", _mcp_zip(name), "application/zip")},
+    )
+    assert r.status_code == 200, r.text
+    r = await client.post(f"/api/publish/capabilities/{v2}/submit", headers=publisher_headers)
+    assert r.status_code == 200, r.text
+    r = await client.post(
+        f"/api/admin/capabilities/{v2}/review",
+        headers=admin_headers,
+        json={"action": "approve", "comment": "ok"},
+    )
+    assert r.status_code == 200, r.text
+
+    _, token = await _make_token(client, admin_headers, ["gateway", "sync"])
+
+    # act-as sync：订阅旧版本，仍返回同名最新版本
+    items = {i["name"]: i for i in await _sync(client, token, act_as="act-ver-u")}
+    assert items[name]["version"] == "1.0.1"
+
+    # relay：按名判定订阅，新版本门禁放行
+    cfg, status, body = await authorize_capability_gateway(
+        _scope({"Authorization": f"Bearer {token}", "X-Act-As-Sub": "act-ver-u"}), name
+    )
+    assert status is None and cfg is not None, body
+
+
+@pytest.mark.asyncio
 async def test_sync_act_as_admin_skips_subscription(client, publisher_headers, admin_headers):
     """admin 目标用户不依赖订阅（与 access.py 早退一致），等同全量可访问集；local 仍排除。"""
     await _publish(client, publisher_headers, admin_headers, "act-admin-remote")

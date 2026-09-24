@@ -84,11 +84,15 @@ async def require_runtime_access(user: User, cap: Capability, db: AsyncSession) 
             status.HTTP_403_FORBIDDEN,
             "该能力仅限管理员调用（access_policy=admin_only）",
         )
+    # 订阅跟随能力名跨版本：重发布产生新行后，旧订阅行仍应放行；
+    # 权限谓词（部门/角色/白名单）仍按当前解析到的行判定。
     joined = await db.scalar(
-        select(UserCapability.id).where(
+        select(UserCapability.id)
+        .join(Capability, Capability.id == UserCapability.capability_id)
+        .where(
             and_(
                 UserCapability.user_id == user.id,
-                UserCapability.capability_id == cap.id,
+                Capability.name == cap.name,
             )
         )
     )
