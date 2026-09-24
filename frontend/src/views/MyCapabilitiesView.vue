@@ -168,9 +168,11 @@ function setSourceFilter(key) {
   page.value = 1
 }
 
-function onCreated(cap) {
+function onCreated(cap, meta = {}) {
   showCreate.value = false
-  if (canOnlineEdit(cap.type)) {
+  if (meta.warning) {
+    notice.value = `「${cap.name}」草稿已创建（${meta.warning}）`
+  } else if (canOnlineEdit(cap.type)) {
     notice.value = `「${cap.name}」草稿已创建，正在打开在线编辑`
   } else {
     notice.value = `「${cap.name}」草稿已创建，请上传能力包并提交审核`

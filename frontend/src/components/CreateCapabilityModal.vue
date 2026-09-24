@@ -157,6 +157,7 @@ async function create() {
   busy.value = true
   try {
     let cap
+    let accessWarning = ''
     const common = {
       name: form.name.trim(),
       description: form.description,
@@ -196,11 +197,15 @@ async function create() {
         })
       } catch (e) {
         console.warn('能力已创建，但名单未保存，可到详情页补配', e)
-        error.value = '名单未保存，可到详情页补配'
+        accessWarning = '名单未保存，可到详情页补配'
       }
     }
-    emit('created', cap)
+    emit('created', cap, accessWarning ? { warning: accessWarning } : {})
     emit('close')
+    if (accessWarning) {
+      // 跳转会立即卸载本页、父级 notice 画不出来：有警示时留在列表页展示
+      return
+    }
     router.push(nextRouteAfterCreate(cap))
   } catch (e) {
     error.value = e.message
