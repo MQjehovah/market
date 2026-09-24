@@ -3,7 +3,6 @@ import { computed, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api'
 import {
-  KIND_HINTS,
   ORCH_LABELS,
   PACKAGE_HINTS,
   PUBLISH_INTENTS,
@@ -17,6 +16,7 @@ import {
   RISK_DEFAULT_LABELS,
   ROLE_LABELS,
   canOnlineEdit,
+  kindHintFor,
   needsZipUpload,
   nextRouteAfterCreate
 } from '../utils/format'
@@ -59,7 +59,7 @@ const kindsInShelf = computed(() => {
   if (visible) return visible
   return (SHELVES[form.shelf]?.kinds || []).filter((k) => !HIDDEN_BROWSE_KINDS.includes(k))
 })
-const kindHint = computed(() => KIND_HINTS[form.type] || null)
+const kindHint = computed(() => kindHintFor({ type: form.type, distribution: form.distribution }))
 const footHint = computed(() => {
   if (form.type === 'workflow') return '创建后进入编排画布；无需上传 zip'
   if (canOnlineEdit(form.type)) return '创建后进入在线编辑；保存会生成能力包，也可稍后手动上传 zip'
@@ -184,11 +184,12 @@ async function create() {
     } else {
       cap = await api.post('/publish/capabilities', { ...common, type: form.type })
     }
-    // 创建接口暂不收部门/角色白名单，随权限接口补写（失败不阻断，可在详情页补配）
-    if (form.access_policy === 'restricted' && (allowedDepartments.length || allowedRoles.length)) {
+    // 创建接口暂不收部门/角色白名单：任一名单非空或非开放策略时随权限接口补写（失败不阻断，可在详情页补配）
+    const hasAccessList = allowedUsers.length || allowedDepartments.length || allowedRoles.length
+    if (form.access_policy !== 'open' || hasAccessList) {
       try {
         await api.post(`/capabilities/${cap.id}/access`, {
-          access_policy: 'restricted',
+          access_policy: form.access_policy,
           allowed_users: allowedUsers,
           allowed_departments: allowedDepartments,
           allowed_roles: allowedRoles

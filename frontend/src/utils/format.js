@@ -106,6 +106,29 @@ export const KIND_HINTS = {
 /** 可本地 cap install 的 kind（与 taxonomy.local_install_kinds 对齐） */
 export const LOCAL_INSTALL_KINDS = ['agent', 'skill', 'mcp', 'plugin', 'rule', 'command', 'hook']
 
+/** remote（云端订阅即用）时替代 kindHint.where 的文案：不出现本地安装说法 */
+export const REMOTE_WHERE_HINTS = {
+  skill: '订阅后随助手在云端问答使用（无需本地安装）',
+  mcp: '订阅后由平台网关 / 桌面平台桥接调用（无需本地安装）',
+  tool: '仅 POST /api/runtime/tools/{name}/invoke（云端沙箱，无本地安装）',
+  rule: '订阅后由平台 / 宿主线上加载生效（无需本地安装）',
+  command: '订阅后在平台对话中按需使用（无需本地安装）',
+  hook: '订阅后由宿主线上触发（无需本地安装）',
+  agent: '订阅后在零号员工 / A2A 云端调用，详情页可先问一句试用',
+  workflow: '只在云端执行；订阅后由市场引擎 / MCP 桥触发',
+  plugin: '订阅后其组件在云端按权限生效（无需本地安装）'
+}
+
+/** 按能力类型与分发方式取用法提示；remote 时 where 换成云端说明 */
+export function kindHintFor(cap) {
+  const hint = cap ? KIND_HINTS[cap.type] : null
+  if (!hint) return null
+  if (cap.distribution === 'remote' && REMOTE_WHERE_HINTS[cap.type]) {
+    return { ...hint, where: REMOTE_WHERE_HINTS[cap.type] }
+  }
+  return hint
+}
+
 /** 按 kind 生成真实消费命令；workflow/tool 不假装 cap install；remote 云端能力订阅即用，无安装命令 */
 export function installCommandFor(cap) {
   if (!cap?.name) return ''
@@ -215,6 +238,12 @@ export const CONSUME_WAYS = [
   { id: 'gateway', label: 'MCP HTTP 网关', api: '/market/api/mcp-gateway/{name}', who: 'Dify 等' },
   { id: 'join', label: '加入我的能力', api: 'POST /api/my/capabilities', who: '人（调用授权前提）' }
 ]
+
+/** 消费矩阵：remote 云端能力去掉「本地组装 / 本地运行」两行（订阅即用，无需安装） */
+export function consumeWaysFor(cap) {
+  if (cap?.distribution !== 'remote') return CONSUME_WAYS
+  return CONSUME_WAYS.filter((w) => w.id !== 'install' && w.id !== 'local')
+}
 
 /** 审核清单（提交/审核侧提示） */
 export const REVIEW_CHECKLIST = [

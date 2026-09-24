@@ -10,9 +10,9 @@ import {
   VISIBILITY_LABELS,
   STATUS_LABELS,
   PACKAGE_HINTS,
-  KIND_HINTS,
   ORCH_LABELS,
-  CONSUME_WAYS,
+  consumeWaysFor,
+  kindHintFor,
   REVIEW_CHECKLIST,
   OWNER_PROGRESS_STEPS,
   JOIN_VS_INSTALL_HINT,
@@ -143,7 +143,7 @@ const isPlugin = computed(() => cap.value?.type === 'plugin')
 const isWorkflow = computed(() => cap.value?.type === 'workflow')
 const isMcp = computed(() => cap.value?.type === 'mcp')
 const isPublished = computed(() => ['published', 'deprecated'].includes(cap.value?.status))
-const kindHint = computed(() => (cap.value ? KIND_HINTS[cap.value.type] : null))
+const kindHint = computed(() => kindHintFor(cap.value))
 const shelfName = computed(() => (cap.value ? shelfLabel(cap.value.type) : ''))
 const showTemplateDownload = computed(
   () => showPackageUpload.value && ['skill', 'mcp', 'tool', 'agent', 'plugin', 'rule', 'command', 'hook'].includes(cap.value?.type)
@@ -221,13 +221,7 @@ const packageSizeLabel = computed(() =>
 const installCommand = computed(() => (cap.value ? installCommandFor(cap.value) : ''))
 const canLocalInstall = computed(() => (cap.value ? canLocalInstallCapability(cap.value) : false))
 const isRemoteOnly = computed(() => cap.value?.distribution === 'remote')
-const showAccessLists = computed(
-  () =>
-    accessPolicy.value === 'restricted' ||
-    normList(cap.value?.allowed_departments).length > 0 ||
-    normList(cap.value?.allowed_roles).length > 0 ||
-    normList(cap.value?.allowed_users).length > 0
-)
+const consumeWays = computed(() => consumeWaysFor(cap.value))
 const departmentSuggestions = computed(() => {
   const set = new Set()
   const own = String(authState.user?.department || '').trim()
@@ -239,12 +233,16 @@ const accessRestrictions = computed(() => {
   const c = cap.value
   if (!c) return []
   const parts = []
-  if ((c.access_policy || 'open') === 'admin_only') parts.push('仅管理员')
+  const policy = c.access_policy || 'open'
+  if (policy === 'admin_only') parts.push('仅管理员')
   const depts = normList(c.allowed_departments)
-  if (depts.length) parts.push(`部门：${depts.join('、')}`)
   const roles = normList(c.allowed_roles)
-  if (roles.length) parts.push(`角色：${roles.map((r) => ROLE_LABELS[r] || r).join('、')}`)
   const users = normList(c.allowed_users)
+  if (policy === 'restricted' && !(depts.length || roles.length || users.length)) {
+    parts.push('白名单为空（仅管理员/作者可用）')
+  }
+  if (depts.length) parts.push(`部门：${depts.join('、')}`)
+  if (roles.length) parts.push(`角色：${roles.map((r) => ROLE_LABELS[r] || r).join('、')}`)
   if (users.length) parts.push(`用户：${users.join('、')}`)
   return parts
 })
@@ -292,7 +290,12 @@ const exampleList = computed(() => {
   const custom = schema.examples || schema.example_prompts
   if (Array.isArray(custom) && custom.length) return custom.map(String)
   const raw = EXAMPLE_PROMPTS[cap.value.type] || []
-  return raw.map((s) => s.replaceAll('<name>', cap.value.name).replaceAll('<plugin>', cap.value.name))
+  const items = raw.map((s) =>
+    s.replaceAll('<name>', cap.value.name).replaceAll('<plugin>', cap.value.name)
+  )
+  // remote 云端能力不展示安装类示例
+  if (isRemoteOnly.value) return items.filter((s) => !/cap install|--mode local/i.test(s))
+  return items
 })
 const validationReport = computed(() => {
   const raw = cap.value?.validation_report || (cap.value?.input_schema || {})._validation_report
@@ -1477,13 +1480,16 @@ onMounted(() => {
                 <table class="table">
                   <thead><tr><th>方式</th><th>接口</th><th>适用</th></tr></thead>
                   <tbody>
-                    <tr v-for="w in CONSUME_WAYS" :key="w.id">
+                    <tr v-for="w in consumeWays" :key="w.id">
                       <td>{{ w.label }}</td>
                       <td><code style="font-size: 11px">{{ w.api }}</code></td>
                       <td class="muted" style="font-size: 12px">{{ w.who }}</td>
                     </tr>
                   </tbody>
                 </table>
+                <p v-if="isRemoteOnly" class="guide-lead muted" style="margin: 10px 0 0">
+                  云端能力订阅即用：加入后通过云端接口 / 平台轨调用或试用，无需本地安装。
+                </p>
               </div>
             </div>
           </section>
@@ -1842,13 +1848,6 @@ onMounted(() => {
                 <option value="admin_only">仅管理员：普通账号不可调用</option>
                 <option value="restricted">白名单：仅指定用户可调用</option>
               </select>
-              <input
-                v-if="accessPolicy === 'restricted'"
-                v-model="allowedUsers"
-                class="input"
-                style="max-width: 260px"
-                placeholder="白名单用户名（逗号分隔）"
-              />
               <select v-model="installPolicy" class="select" style="max-width: 220px">
                 <option value="optional">{{ INSTALL_POLICY_LABELS.optional }}</option>
                 <option value="default_on">{{ INSTALL_POLICY_LABELS.default_on }}</option>
@@ -1856,7 +1855,15 @@ onMounted(() => {
               </select>
               <button class="btn btn-primary" type="button" @click="saveAccess">保存</button>
             </div>
-            <div v-if="showAccessLists" class="access-lists mt-12">
+            <div class="access-lists mt-12">
+              <div class="field">
+                <label>用户白名单（逗号分隔，留空不限）</label>
+                <input
+                  v-model="allowedUsers"
+                  class="input"
+                  placeholder="zhangsan, lisi（留空不限）"
+                />
+              </div>
               <div class="field">
                 <label>部门白名单（逗号分隔，留空不限）</label>
                 <input
@@ -1999,7 +2006,7 @@ onMounted(() => {
                 type="button"
                 @click="copyInstallCommand"
               >高级 · 复制 cap install（本机运行）</button>
-              <button class="aside-link" type="button" @click="downloadArtifact">
+              <button v-if="!isRemoteOnly" class="aside-link" type="button" @click="downloadArtifact">
                 下载 zip{{ packageSizeLabel ? ` · ${packageSizeLabel}` : '' }}
               </button>
               <button v-if="authState.token" class="aside-link" type="button" @click="subscribe">订阅更新</button>
