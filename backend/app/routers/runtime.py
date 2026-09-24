@@ -128,9 +128,9 @@ async def install(name: str, data: RuntimeInstallRequest, db: DbSession, user: C
 @router.post("/mcp/{name}/connect")
 async def mcp_connect(name: str, db: DbSession, user: CurrentUser):
     """真实连接 MCP 能力包并发现其工具（调试/试用用）。"""
+    from app.services.capability_secrets import resolve_capability_env
     from app.services.mcp_bridge import MCPBridge
     from app.services.mcp_gateway import load_gateway_config_by_name
-    from app.services.secret_vault import resolve_user_env
 
     async def _gateway_loader(gw_name: str):
         try:
@@ -142,8 +142,9 @@ async def mcp_connect(name: str, db: DbSession, user: CurrentUser):
     await require_runtime_access(user, cap, db)
     if cap.type != "mcp":
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{name} 不是 MCP 能力")
-    user_env = await resolve_user_env(db, user.id, capability_id=cap.id)
-    bridge = MCPBridge(gateway_loader=_gateway_loader, user_env=user_env)
+    # 平台轨统一注入平台密钥（按能力名，与调用者身份无关）
+    platform_env = await resolve_capability_env(db, cap.name)
+    bridge = MCPBridge(gateway_loader=_gateway_loader, env=platform_env)
     try:
         info = await bridge.connect_capability(name, cap)
         await record_usage(db, user, cap, "mcp_connect", {"tools": len(bridge.tool_defs)})
@@ -161,7 +162,7 @@ async def mcp_connect(name: str, db: DbSession, user: CurrentUser):
                 }
                   for t in bridge.tool_defs
               ],
-            "secrets_injected": sorted(user_env.keys()),
+            "secrets_injected": sorted(platform_env.keys()),
         }
     finally:
         await bridge.close()
@@ -176,9 +177,9 @@ async def mcp_call(
     x_conversation_id: str | None = Header(default=None, alias="X-Conversation-Id"),
 ):
     """调用 MCP 能力包暴露的某个工具（调试/试用用，每次调用独立连接）。"""
+    from app.services.capability_secrets import resolve_capability_env
     from app.services.mcp_bridge import MCPBridge
     from app.services.mcp_gateway import load_gateway_config_by_name
-    from app.services.secret_vault import resolve_user_env
 
     async def _gateway_loader(gw_name: str):
         try:
@@ -191,8 +192,9 @@ async def mcp_call(
     await require_runtime_access(user, cap, db)
     if cap.type != "mcp":
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{name} 不是 MCP 能力")
-    user_env = await resolve_user_env(db, user.id, capability_id=cap.id)
-    bridge = MCPBridge(gateway_loader=_gateway_loader, user_env=user_env)
+    # 平台轨统一注入平台密钥（按能力名，与调用者身份无关）
+    platform_env = await resolve_capability_env(db, cap.name)
+    bridge = MCPBridge(gateway_loader=_gateway_loader, env=platform_env)
     t0 = time.monotonic()
     result_status = "ok"
     try:

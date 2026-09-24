@@ -195,12 +195,18 @@ async def run_agent(
             return None
 
     bridge = MCPBridge(gateway_loader=_gateway_loader)
+    from app.services.capability_secrets import resolve_capability_env
+
     try:
         mcp_info: list[dict[str, Any]] = []
         for m in runtime.get("mcps") or []:
             try:
                 mcp_cap = await resolve_capability(db, user, m["name"])
-                mcp_info.append(await bridge.connect_capability(m["name"], mcp_cap))
+                # 平台轨：注入该能力名的平台密钥（与调用者身份无关）
+                cap_env = await resolve_capability_env(db, mcp_cap.name)
+                mcp_info.append(
+                    await bridge.connect_capability(m["name"], mcp_cap, env=cap_env)
+                )
             except Exception as exc:  # noqa: BLE001
                 mcp_info.append({"name": m["name"], "connected": False, "error": str(exc)[:200]})
         runtime["mcp_connected"] = mcp_info

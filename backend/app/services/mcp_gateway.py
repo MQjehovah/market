@@ -564,10 +564,13 @@ async def authorize_capability_gateway(
         if config is None:
             return None, 404, {"detail": f"MCP {name} 缺少 connection.json"}
         config = dict(config)
-        from app.services.secret_vault import attach_user_env, resolve_user_env
+        from app.services.capability_secrets import resolve_capability_env
+        from app.services.secret_vault import attach_platform_env
 
-        user_env = await resolve_user_env(db, user.id, capability_id=cap.id)
-        config = attach_user_env(config, user_env)
+        # 平台轨统一注入能力级平台密钥：按能力名跨版本、全用户共用；
+        # act-as 只影响可见/可调用范围，不改变注入的密钥
+        platform_env = await resolve_capability_env(db, cap.name)
+        config = attach_platform_env(config, platform_env)
         config["_audit"] = {
             "user_id": user.id,
             "capability_id": cap.id,
