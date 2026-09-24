@@ -27,7 +27,6 @@ import {
   stars,
   formatSize,
   needsZipUpload,
-  SCENARIO_HINTS,
   EXAMPLE_PROMPTS,
   installCommandFor,
   canLocalInstallCapability,
@@ -283,13 +282,6 @@ const subscribeGate = computed(() => {
 })
 const canSubscribe = computed(() => subscribeGate.value.ok)
 const subscribeBlockedReason = computed(() => subscribeGate.value.reason)
-const scenarioList = computed(() => {
-  if (!cap.value) return []
-  const schema = cap.value.input_schema || {}
-  const custom = schema.scenarios || schema.use_cases
-  if (Array.isArray(custom) && custom.length) return custom.map(String)
-  return SCENARIO_HINTS[cap.value.type] || []
-})
 const exampleList = computed(() => {
   if (!cap.value) return []
   const schema = cap.value.input_schema || {}
@@ -1232,12 +1224,6 @@ onMounted(() => {
             <div v-if="cap.changelog" class="guide-block">
               <h3 class="guide-title">本版说明</h3>
               <div class="guide-body prose">{{ cap.changelog }}</div>
-            </div>
-            <div v-if="scenarioList.length" class="guide-block">
-              <h3 class="guide-title">适用场景</h3>
-              <ul class="guide-list">
-                <li v-for="(s, i) in scenarioList" :key="'sc-'+i">{{ s }}</li>
-              </ul>
             </div>
 
             <div v-if="isMcp" class="guide-block">
