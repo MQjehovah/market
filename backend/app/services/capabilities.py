@@ -246,6 +246,7 @@ def to_capability_out(
         "allowed_roles": list(cap.allowed_roles or []),
         "install_policy": getattr(cap, "install_policy", None) or "optional",
         "distribution": getattr(cap, "distribution", None) or "both",
+        "binding": getattr(cap, "binding", None) or "service",
         "risk_default": getattr(cap, "risk_default", None) or "read",
         "data_domain": getattr(cap, "data_domain", None) or "",
         "changelog": getattr(cap, "changelog", None) or "",
@@ -347,6 +348,7 @@ async def create_capability(
         allowed_users=list(data.allowed_users or []),
         install_policy=data.install_policy or "optional",
         distribution=getattr(data, "distribution", None) or "both",
+        binding=getattr(data, "binding", None) or "service",
         risk_default=getattr(data, "risk_default", None) or "read",
         data_domain=(getattr(data, "data_domain", None) or "").strip(),
         author_id=user.id,
@@ -454,6 +456,8 @@ async def update_capability(
         cap.install_policy = data.install_policy
     if data.distribution is not None:
         cap.distribution = data.distribution
+    if getattr(data, "binding", None) is not None:
+        cap.binding = data.binding
     if data.risk_default is not None:
         cap.risk_default = data.risk_default
     if data.data_domain is not None:

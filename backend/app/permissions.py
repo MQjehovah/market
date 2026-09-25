@@ -24,6 +24,29 @@ from app.models import Capability, User, UserCapability
 from app.services.access import access_deny_reason, capability_access_ok
 from app.services.visibility import is_capability_visible
 
+# 统一 RBAC: 角色 → 权限键(与 agent/market 共享同一词汇)。``*`` 为通配。
+# - capability.publish: 发布/编辑能力(Publisher 及以上)
+# - capability.invoke:  执行能力(默认 Admin; 可由 runtime_access_roles 追加角色)
+# - admin.*:            管理面(沿用 role=admin)
+ROLE_PERMISSIONS: dict[str, set[str]] = {
+    "admin": {"*"},
+    "publisher": {"capability.publish"},
+    "user": set(),
+}
+
+
+def role_has_permission(role: str, perm: str, *, granted_roles: set[str] | None = None) -> bool:
+    """角色是否拥有权限键 ``perm``。
+
+    ``granted_roles`` 为额外被授予该权限的角色集合(如配置 ``runtime_access_roles``
+    视为被授予 ``capability.invoke``), 用于把历史配置统一收敛到权限判定。
+    """
+    perms = ROLE_PERMISSIONS.get(role or "", set())
+    if "*" in perms or perm in perms:
+        return True
+    return bool(granted_roles) and role in granted_roles
+
+
 
 def require_role(*roles: str) -> Callable:
     def decorator(func: Callable) -> Callable:
@@ -58,8 +81,8 @@ def can_use(capability: Capability, user: User | None) -> bool:
 
 
 def require_admin(user: User) -> None:
-    """路由内联管理员校验（比装饰器更易用于依赖注入风格）。"""
-    if user.role != "admin":
+    """路由内联管理员校验（比装饰器更易用于依赖注入风格）。统一走 RBAC 权限判定。"""
+    if not role_has_permission(user.role, "*"):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "需要管理员权限")
 
 
@@ -67,7 +90,7 @@ async def require_runtime_access(user: User, cap: Capability, db: AsyncSession) 
     """执行类接口的授权门禁。
 
     满足任一条件即可调用：
-    1. 角色在 runtime_access_roles 配置中（默认 admin）；
+    1. 角色拥有 ``capability.invoke`` 权限（默认 Admin;含 runtime_access_roles 追加角色）；
     2. 能力作者本人（自己创建的能力）；
     3. 已把该能力加入「我的能力」且通过统一访问谓词（部门/角色/用户白名单）。
     """
@@ -76,7 +99,7 @@ async def require_runtime_access(user: User, cap: Capability, db: AsyncSession) 
         for r in get_settings().runtime_access_roles.split(",")
         if r.strip()
     }
-    if user.role in roles or cap.author_id == user.id:
+    if role_has_permission(user.role, "capability.invoke", granted_roles=roles) or cap.author_id == user.id:
         return
     policy = cap.access_policy or "open"
     if policy == "admin_only":
@@ -107,3 +130,24 @@ async def require_runtime_access(user: User, cap: Capability, db: AsyncSession) 
         status.HTTP_403_FORBIDDEN,
         "没有调用该能力的权限：仅管理员、能力作者或已加入「我的能力」的调用方可用",
     )
+
+
+async def require_runtime_access_obo(
+    db: AsyncSession, actor: User, subject: User | None, cap: Capability
+) -> None:
+    """代授权(on-behalf-of)执行门禁：有效权限 = actor ∩ subject。
+
+    - actor(服务身份, 如零号员工) 必须有权执行；
+    - subject(真实提问者) 若与 actor 不同, 还必须对该能力可见且通过统一访问谓词；
+    - 任一不满足即拒绝。subject 为空或等于 actor 时退化为既有 ``require_runtime_access``。
+
+    与 sync/relay 的「身份切换」不同, 这里保留 actor 门禁形成交集, 防止服务身份被
+    用来放大 subject 之外的权限。
+    """
+    await require_runtime_access(actor, cap, db)
+    if subject is None or subject.id == actor.id:
+        return
+    if not is_capability_visible(cap, subject):
+        # 不泄露能力是否存在: 与 resolve_capability 的不可见语义一致
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在或无权访问")
+    await require_runtime_access(subject, cap, db)

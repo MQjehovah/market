@@ -23,6 +23,7 @@ from app.models import (
 )
 from app.schemas import (
     AccessPolicyUpdate,
+    BindingUpdate,
     CapabilityOut,
     CapabilityPage,
     CapabilitySecretItemOut,
@@ -451,6 +452,7 @@ async def sync_capabilities(
             "icon_url": capability_icon_url(cap),
             "runtime": runtime_spec(cap),
             "distribution": getattr(cap, "distribution", None) or "both",
+            "binding": getattr(cap, "binding", None) or "service",
             "risk_default": getattr(cap, "risk_default", None) or "read",
             "data_domain": getattr(cap, "data_domain", None) or "",
             "visibility": cap.visibility,
@@ -740,6 +742,22 @@ async def update_install_policy(
     if user.role != "admin" and cap.author_id != user.id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "只有作者或管理员可以设置安装策略")
     cap.install_policy = data.install_policy
+    await db.commit()
+    await db.refresh(cap)
+    return _to_out(cap)
+
+
+@router.post("/capabilities/{cap_id}/binding", response_model=CapabilityOut)
+async def update_binding(
+    cap_id: str, data: BindingUpdate, db: DbSession, user: CurrentUser
+):
+    """执行身份绑定：user=按提问者代授权(subject, 走 /api/runtime/*) / service=服务身份。"""
+    cap = await db.get(Capability, cap_id)
+    if cap is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
+    if user.role != "admin" and cap.author_id != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "只有作者或管理员可以设置绑定")
+    cap.binding = data.binding
     await db.commit()
     await db.refresh(cap)
     return _to_out(cap)

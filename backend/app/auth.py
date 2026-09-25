@@ -183,6 +183,12 @@ async def _resolve_sso_user(
     if claim_dept and (user.department or "") != claim_dept:
         user.department = claim_dept
         changed = True
+    # 角色: 以 SSO roles 为权威源, 但仅"升权"(避免误将手工管理员降级, 防锁死)。
+    # 代授权(subject)需要真实角色, 否则管理员在 market 侧会退化为 user 而无运行时准入。
+    claim_role = _sso_role(claims)
+    if _ROLE_RANK.get(claim_role, 0) > _ROLE_RANK.get(user.role, 0):
+        user.role = claim_role
+        changed = True
     if changed:
         await db.commit()
     if not user.is_active:
@@ -193,8 +199,31 @@ async def _resolve_sso_user(
     return user
 
 
+# market 角色优先级(仅升权): user < publisher < admin
+_ROLE_RANK = {"user": 0, "publisher": 1, "admin": 2}
+
+
+def _sso_role(claims: dict) -> str:
+    """把 SSO ``roles`` claim 映射为 market 角色(user/publisher/admin)。
+
+    支持 list[str] 或逗号分隔字符串; 取最高优先级角色; 无匹配回退 user。
+    """
+    raw = claims.get("roles")
+    if isinstance(raw, str):
+        roles = [r.strip().lower() for r in raw.split(",") if r.strip()]
+    elif isinstance(raw, list):
+        roles = [str(r).strip().lower() for r in raw if str(r).strip()]
+    else:
+        roles = []
+    if "admin" in roles:
+        return "admin"
+    if "publisher" in roles:
+        return "publisher"
+    return "user"
+
+
 def _new_sso_user(username: str, claims: dict) -> User:
-    """按 SSO claims 建本地用户：role 取最小权限 user，email/name 有则取 claims。
+    """按 SSO claims 建本地用户：role 由 SSO roles 映射(user/publisher/admin)。
 
     email 为 NOT NULL UNIQUE，claims 缺省时用派生自唯一 username 的占位邮箱，
     避免空串撞唯一索引；password_hash 置随机不可登录占位值（SSO 用户走免密）。
@@ -204,7 +233,7 @@ def _new_sso_user(username: str, claims: dict) -> User:
         email=claims.get("email") or f"{username}@sso.local",
         password_hash=hash_password(secrets.token_urlsafe(32)),
         display_name=claims.get("name") or claims.get("display_name") or username,
-        role="user",
+        role=_sso_role(claims),
         department=(claims.get("dept") or "").strip(),
         is_active=True,
     )

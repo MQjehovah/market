@@ -90,6 +90,7 @@ class CapabilityBase(BaseModel):
     allowed_users: list[str] = Field(default_factory=list, description="restricted 时的白名单用户名")
     install_policy: Literal["optional", "default_on", "required"] = "optional"
     distribution: Literal["local", "remote", "both"] = "both"
+    binding: Literal["user", "service"] = "service"
     risk_default: Literal["read", "write", "destructive"] = "read"
     data_domain: str = Field(default="", max_length=64)
 
@@ -127,12 +128,19 @@ class CapabilityUpdate(BaseModel):
     allowed_users: list[str] | None = None
     install_policy: Literal["optional", "default_on", "required"] | None = None
     distribution: Literal["local", "remote", "both"] | None = None
+    binding: Literal["user", "service"] | None = None
     risk_default: Literal["read", "write", "destructive"] | None = None
     data_domain: str | None = Field(default=None, max_length=64)
 
 
 class InstallPolicyUpdate(BaseModel):
     install_policy: Literal["optional", "default_on", "required"]
+
+
+class BindingUpdate(BaseModel):
+    """执行身份绑定：user=按提问者代授权(subject) / service=服务身份。"""
+
+    binding: Literal["user", "service"]
 
 
 class VersionCreate(BaseModel):

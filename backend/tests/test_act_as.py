@@ -589,3 +589,52 @@ async def test_my_act_as_ignored_for_regular_user(client, admin_headers):
         "/api/my/subscriptions", headers={**admin_headers, "X-Act-As-Sub": "ghost"}
     )
     assert r.status_code == 200, r.text
+
+
+# ---------- /runtime：代授权求交(actor ∩ subject) ----------
+
+
+@pytest.mark.asyncio
+async def test_runtime_act_as_intersection(client, publisher_headers, admin_headers):
+    """runtime 执行接口的代授权求交:
+
+    - actor(服务令牌绑定管理员) 有准入; subject 未订阅 → 403;
+    - subject 订阅后放行(actor ∩ subject);
+    - 非服务令牌带 X-Act-As-Sub 忽略, 按本人身份;
+    - actor 自身(无头)保持原有行为。
+    """
+    name = "rt-obo-tool"
+    cap_id = await _publish(client, publisher_headers, admin_headers, name, type_="tool")
+    admin_id = (await client.get("/api/auth/me", headers=admin_headers)).json()["id"]
+    await _create_user(client, admin_headers, "rt-obo-u")
+    u_headers = await _login(client, "rt-obo-u")
+    _, token = await _make_token(client, admin_headers, ["runtime"], user_id=admin_id)
+
+    act = {"Authorization": f"Bearer {token}", "X-Act-As-Sub": "rt-obo-u"}
+    body = {"params": {}}
+
+    # subject 未订阅 → 403（交集收窄）
+    r = await client.post(f"/api/runtime/tools/{name}/invoke", headers=act, json=body)
+    assert r.status_code == 403, r.text
+
+    # subject 订阅后放行
+    await _subscribe(client, u_headers, cap_id)
+    r = await client.post(f"/api/runtime/tools/{name}/invoke", headers=act, json=body)
+    assert r.status_code == 200, r.text
+
+    # actor 自身(无头): 管理员准入, 放行
+    r = await client.post(
+        f"/api/runtime/tools/{name}/invoke",
+        headers={"Authorization": f"Bearer {token}"},
+        json=body,
+    )
+    assert r.status_code == 200, r.text
+
+    # 非服务令牌带该头: 忽略, 按本人(subject 用户已订阅)放行
+    r = await client.post(
+        f"/api/runtime/tools/{name}/invoke",
+        headers={**u_headers, "X-Act-As-Sub": "ghost"},
+        json=body,
+    )
+    assert r.status_code == 200, r.text
+

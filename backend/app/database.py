@@ -88,6 +88,10 @@ async def _auto_migrate(conn) -> None:
             sync_conn.exec_driver_sql(
                 "ALTER TABLE capabilities ADD COLUMN distribution VARCHAR(16) DEFAULT 'both'"
             )
+        if "binding" not in cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE capabilities ADD COLUMN binding VARCHAR(16) DEFAULT 'service'"
+            )
         if "risk_default" not in cols:
             sync_conn.exec_driver_sql(
                 "ALTER TABLE capabilities ADD COLUMN risk_default VARCHAR(20) DEFAULT 'read'"
