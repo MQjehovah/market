@@ -142,6 +142,10 @@ const needsPackageFirst = computed(
 const canDelete = computed(() => isOwner.value && ['draft', 'returned', 'rejected', 'reviewing'].includes(cap.value?.status))
 const canWithdraw = computed(() => isOwner.value && cap.value?.status === 'reviewing')
 const canReview = computed(() => isAdmin.value && cap.value?.status === 'reviewing')
+/** 可查看/管理能力包与产物（作者/管理员/发布者）：文件预览等作者面仅对其可见 */
+const canViewPackage = computed(
+  () => isOwner.value || isAdmin.value || isPublisher.value || canEdit.value || canReview.value
+)
 const isAgent = computed(() => cap.value?.type === 'agent')
 const isPlugin = computed(() => cap.value?.type === 'plugin')
 const isWorkflow = computed(() => cap.value?.type === 'workflow')
@@ -652,7 +656,7 @@ const contentTabs = computed(() => {
   if (isMcp.value && mcpToolRows.value.length) {
     tabs.push({ key: 'tools', label: `工具（${mcpToolRows.value.length}）` })
   }
-  if ((cap.value.artifacts || []).length) {
+  if ((cap.value.artifacts || []).length && canViewPackage.value) {
     tabs.push({ key: 'files', label: '文件预览' })
   }
   if (isPlugin.value) tabs.push({ key: 'components', label: '组件' })
@@ -1635,7 +1639,7 @@ onMounted(() => {
                 <div v-else-if="!(validationReport.errors || []).length" class="muted" style="font-size: 13px">结构校验通过，无警告。</div>
               </div>
             </div>
-            <div v-if="(cap.artifacts || []).length" class="guide-block">
+            <div v-if="(cap.artifacts || []).length && canViewPackage" class="guide-block">
               <div class="flex-between flex-wrap" style="align-items: center">
                 <div>
                   <h3 class="guide-title" style="margin: 0">能力包</h3>
@@ -1927,6 +1931,7 @@ onMounted(() => {
         </div>
 
         <div v-show="contentTab === 'manage'">
+          <h3 class="manage-group">基本信息</h3>
           <div v-if="isOwner || isAdmin" class="panel">
             <h3>能力头像</h3>
             <p class="muted" style="font-size: 13px; margin: 6px 0 0">
@@ -2036,6 +2041,7 @@ onMounted(() => {
             </div>
           </div>
 
+          <h3 class="manage-group">发布操作</h3>
           <div v-if="canSubmit || canWithdraw || canDelete || preferOnlineEdit || isAdmin || isPublisher" class="panel">
             <h3>操作</h3>
             <div class="flex flex-wrap" style="gap: 8px">
@@ -2065,6 +2071,7 @@ onMounted(() => {
             </div>
           </div>
 
+          <h3 class="manage-group">治理</h3>
           <div v-if="(isOwner || isAdmin) && ['published', 'deprecated'].includes(cap.status)" class="panel">
             <div class="flex-between flex-wrap">
               <h3>调用权限与安装策略</h3>
@@ -2466,6 +2473,15 @@ onMounted(() => {
 .aside-meta dt { margin: 0; color: var(--muted); }
 .aside-meta dd { margin: 0; color: var(--text); }
 .detail-section-title { margin: 0 0 16px; font-size: 20px; font-weight: 650; }
+/* 管理 tab 分组标题：把「基本信息 / 发布操作 / 治理」分开，避免堆叠 */
+.manage-group {
+  margin: 22px 0 8px;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+.manage-group:first-child { margin-top: 0; }
 .guide-block + .guide-block { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
 .guide-title { margin: 0 0 8px; font-size: 15px; font-weight: 650; }
 .guide-body { margin-top: 8px; }
