@@ -39,7 +39,8 @@ def test_assert_egress_allowed_scheme_and_host():
     assert e.value.status_code == 400
 
 
-def test_assert_egress_allowlist_trusts_host():
+def test_assert_egress_allowlist_trusts_host(monkeypatch):
+    monkeypatch.delenv("MCP_EGRESS_ALLOWLIST_ONLY", raising=False)
     # 白名单命中即放行(允许内网), 不做解析
     assert_egress_allowed(
         "http://internal.local:8090/mcp",
@@ -48,17 +49,8 @@ def test_assert_egress_allowlist_trusts_host():
     )
 
 
-def test_assert_egress_allowlist_blocks_others():
-    with pytest.raises(HTTPException) as e:
-        assert_egress_allowed(
-            "https://evil.example.com/mcp",
-            allow_hosts={"internal.local"},
-            resolver=_resolver("8.8.8.8"),
-        )
-    assert e.value.status_code == 403
-
-
-def test_assert_egress_blocks_private_without_allowlist():
+def test_assert_egress_blocks_private_without_allowlist(monkeypatch):
+    monkeypatch.delenv("MCP_EGRESS_ALLOWLIST_ONLY", raising=False)
     with pytest.raises(HTTPException) as e:
         assert_egress_allowed(
             "https://meta.example.com/latest",
@@ -68,7 +60,8 @@ def test_assert_egress_blocks_private_without_allowlist():
     assert e.value.status_code == 403
 
 
-def test_assert_egress_allows_public():
+def test_assert_egress_allows_public(monkeypatch):
+    monkeypatch.delenv("MCP_EGRESS_ALLOWLIST_ONLY", raising=False)
     assert_egress_allowed(
         "https://mcp.example.com/mcp",
         allow_hosts=set(),
@@ -76,12 +69,27 @@ def test_assert_egress_allows_public():
     )
 
 
+def test_assert_egress_allowlist_only_blocks_others(monkeypatch):
+    monkeypatch.setenv("MCP_EGRESS_ALLOWLIST_ONLY", "1")
+    with pytest.raises(HTTPException) as e:
+        assert_egress_allowed(
+            "https://evil.example.com/mcp",
+            allow_hosts={"internal.local"},
+            resolver=_resolver("8.8.8.8"),
+        )
+    assert e.value.status_code == 403
+    # 白名单内正常
+    assert_egress_allowed(
+        "https://internal.local/mcp", allow_hosts={"internal.local"}, resolver=_resolver("10.0.0.5")
+    )
+
+
 def test_egress_enforced_gate(monkeypatch):
     monkeypatch.delenv("MCP_EGRESS_ENFORCE", raising=False)
     monkeypatch.delenv("MCP_EGRESS_ALLOW_HOSTS", raising=False)
     assert egress_enforced() is False
-    monkeypatch.setenv("MCP_EGRESS_ENFORCE", "1")
-    assert egress_enforced() is True
-    monkeypatch.delenv("MCP_EGRESS_ENFORCE")
+    # 仅配白名单不触发强制(需显式 ENFORCE)
     monkeypatch.setenv("MCP_EGRESS_ALLOW_HOSTS", "a.com,b.com")
+    assert egress_enforced() is False
+    monkeypatch.setenv("MCP_EGRESS_ENFORCE", "1")
     assert egress_enforced() is True

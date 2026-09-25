@@ -2,10 +2,11 @@
 
 用于所有"由服务端发起的出网请求"（MCP 上游连接、registry 导入、fetch 等）：
 - 仅允许 http/https；
-- 拒绝解析到私有 / 回环 / 链路本地 / 保留 / 组播 / CGNAT(100.64.0.0/10) 的地址；
-- 白名单 `MCP_EGRESS_ALLOW_HOSTS`（逗号分隔）内的主机视为可信（可内网），其余按公网校验；
-- **灰度**：默认不强制（保持既有行为）；设置 `MCP_EGRESS_ENFORCE=1` 或配置了
-  `MCP_EGRESS_ALLOW_HOSTS` 时启用强制。
+- **开启**（`MCP_EGRESS_ENFORCE=1`）后：默认拒绝解析到私有/回环/链路本地/保留/
+  组播/CGNAT(100.64.0.0/10) 的地址（放行公网）；
+- `MCP_EGRESS_ALLOW_HOSTS`（逗号分隔）内的主机视为**可信**（可内网），开启后直接放行；
+- **白名单专用模式** `MCP_EGRESS_ALLOWLIST_ONLY=1`：只放行白名单主机（连公网也需列入）；
+- **灰度**：默认不强制（保持既有行为）。
 
 校验"解析后的 IP"以缓解 DNS 重绑定（TOCTOU 仍有窗口，配合出网代理更佳）。
 """
@@ -30,9 +31,13 @@ def egress_allow_hosts() -> set[str]:
 
 
 def egress_enforced() -> bool:
-    if os.getenv("MCP_EGRESS_ENFORCE", "").strip().lower() in _TRUE:
-        return True
-    return bool(egress_allow_hosts())
+    """是否启用出网校验（仅 MCP_EGRESS_ENFORCE 决定；白名单本身不触发强制）。"""
+    return os.getenv("MCP_EGRESS_ENFORCE", "").strip().lower() in _TRUE
+
+
+def egress_allowlist_only() -> bool:
+    """白名单专用: 只放行白名单主机(连公网也需列入)。"""
+    return os.getenv("MCP_EGRESS_ALLOWLIST_ONLY", "").strip().lower() in _TRUE
 
 
 def is_private_ip(ip: str) -> bool:
@@ -58,7 +63,12 @@ def assert_egress_allowed(
     allow_hosts: set[str] | None = None,
     resolver: Callable[[str, object], Iterable[tuple]] | None = None,
 ) -> None:
-    """校验出网 URL；不合规抛 HTTPException(400/403)。白名单主机视为可信。"""
+    """校验出网 URL；不合规抛 HTTPException(400/403)。
+
+    - 白名单主机视为可信(可内网)，直接放行；
+    - 白名单专用模式下未列入白名单一律拒绝；
+    - 否则拒绝解析到私有/保留地址的目标。
+    """
     parsed = urlparse(url or "")
     if parsed.scheme not in ("http", "https"):
         raise HTTPException(
@@ -69,12 +79,14 @@ def assert_egress_allowed(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "出网 URL 缺少主机名")
 
     allow = egress_allow_hosts() if allow_hosts is None else allow_hosts
-    if allow:
+    if egress_allowlist_only():
         if host not in allow:
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN, f"目标主机不在出网白名单: {host}"
             )
         return
+    if host in allow:
+        return  # 可信内网主机
 
     resolve = resolver or socket.getaddrinfo
     try:
