@@ -89,14 +89,14 @@ def require_admin(user: User) -> None:
 def _enforce_scope(user: User, cap: Capability, runtime_roles: set[str]) -> None:
     """SCOPE_ENFORCE 开启时按 scope 收窄（默认关闭，灰度迁移用）。
 
-    未开启保持既有授权判定不变；开启后，通过现有准入的角色还需拥有该能力所需的
-    scope，否则 403 并提示 step-up 所需 scope。
+    调用点均已在现有准入之后，故只对**写/高危类** scope 做提升要求（只读不额外要求），
+    避免误伤已订阅用户的只读使用。
     """
-    from app.services.scopes import missing_scopes, scope_enforced
+    from app.services.scopes import elevated_missing_scopes, scope_enforced
 
     if not scope_enforced():
         return
-    missing = missing_scopes(user.role, cap, runtime_roles=runtime_roles)
+    missing = elevated_missing_scopes(user.role, cap, runtime_roles=runtime_roles)
     if missing:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,

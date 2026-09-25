@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from app.services.scopes import (  # noqa: E402
     SCOPE_CATALOG,
     capability_required_scopes,
+    elevated_missing_scopes,
     missing_scopes,
     role_scopes,
     scope_catalog,
@@ -51,3 +52,14 @@ def test_scope_enforced_default_off(monkeypatch):
     assert scope_enforced() is False
     monkeypatch.setenv("MARKET_SCOPE_ENFORCE", "1")
     assert scope_enforced() is True
+
+
+def test_elevated_missing_scopes_only_write_for_regular():
+    read_cap = SimpleNamespace(type="mcp", risk_default="read")
+    write_cap = SimpleNamespace(type="mcp", risk_default="destructive")
+    # 已通过准入的普通用户: 只读不额外要求; 写/高危需 step-up
+    assert elevated_missing_scopes("user", read_cap) == set()
+    assert elevated_missing_scopes("user", write_cap) == {"mcp:write"}
+    # admin / runtime 授予角色具备写 scope → 无缺失
+    assert elevated_missing_scopes("admin", write_cap) == set()
+    assert elevated_missing_scopes("svc", write_cap, runtime_roles={"svc"}) == set()

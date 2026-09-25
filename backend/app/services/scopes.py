@@ -63,6 +63,19 @@ def missing_scopes(role: str, cap: Any, *, runtime_roles: set[str] | None = None
     return capability_required_scopes(cap) - role_scopes(role, runtime_roles=runtime_roles)
 
 
+# 通过运行时准入后即隐含授予的 scope（只读 + 调用）：scope 收窄只针对写/高危类。
+_ACCESS_IMPLIED = {"capability:invoke", "capability:read", "mcp:read", "data:read"}
+
+
+def elevated_missing_scopes(role: str, cap: Any, *, runtime_roles: set[str] | None = None) -> set[str]:
+    """在**已通过运行时准入**前提下，仍需提升(elevated)的 scope。
+
+    仅写/高危类(``mcp:write``/``data:write`` 等)需要额外授权；只读调用不额外要求，
+    因此开启 ``MARKET_SCOPE_ENFORCE`` 不会误伤已订阅用户的只读使用。
+    """
+    return capability_required_scopes(cap) - _ACCESS_IMPLIED - role_scopes(role, runtime_roles=runtime_roles)
+
+
 def scope_catalog() -> list[dict[str, str]]:
     return [{"key": k, "description": v} for k, v in SCOPE_CATALOG.items()]
 

@@ -2283,6 +2283,7 @@ onMounted(() => {
             <div v-if="provenance.origin"><dt>来源</dt><dd>{{ provenance.registry_name || provenance.origin }}<span v-if="provenance.license" class="muted"> · {{ provenance.license }}</span></dd></div>
             <div v-if="requiresBinary"><dt>依赖 CLI</dt><dd class="mono">{{ requiresBinary }}<span v-if="cap.requires.min_version" class="muted"> ≥ {{ cap.requires.min_version }}</span></dd></div>
             <div v-if="requiresAuth"><dt>依赖登录</dt><dd class="mono">{{ requiresAuth }}</dd></div>
+            <div v-if="(cap.required_scopes || []).length"><dt>调用 scope</dt><dd class="mono">{{ (cap.required_scopes || []).join(', ') }}</dd></div>
             <div v-if="isMcp"><dt>传输</dt><dd>{{ mcpTransport }}</dd></div>
             <div v-if="isMcp && isPublished"><dt>试用</dt><dd>{{ mcpTrial.label }}</dd></div>
             <div v-if="isMcp && mcpToolRows.length"><dt>工具</dt><dd>{{ mcpToolRows.length }} 个</dd></div>

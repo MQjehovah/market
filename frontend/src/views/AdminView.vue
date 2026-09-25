@@ -9,6 +9,7 @@ import {
   TYPE_LABELS,
   REVIEW_CHECKLIST,
   VISIBILITY_LABELS,
+  INSTALL_POLICY_LABELS,
   shelfLabel,
   formatDate
 } from '../utils/format'
@@ -348,6 +349,28 @@ async function statusAction(cap, action) {
     await api.post(`/admin/capabilities/${cap.id}/${action}`)
     notice.value = action === 'deprecate' ? `「${cap.name}」已下架` : `「${cap.name}」已归档`
     await load()
+  } catch (e) {
+    error.value = e.message
+  }
+}
+
+/** 可信认证: 标记/取消管理员认证(前端展示徽标) */
+async function toggleVerify(cap) {
+  try {
+    await api.post(`/admin/capabilities/${cap.id}/verify`, { verified: !cap.verified })
+    notice.value = cap.verified ? `已取消「${cap.name}」的认证` : `已认证「${cap.name}」`
+    await load()
+  } catch (e) {
+    error.value = e.message
+  }
+}
+
+/** 安装策略: optional / default_on / required(组织级必装) */
+async function setInstallPolicy(cap, policy) {
+  try {
+    await api.post(`/capabilities/${cap.id}/install-policy`, { install_policy: policy })
+    cap.install_policy = policy
+    notice.value = `「${cap.name}」安装策略已设为 ${INSTALL_POLICY_LABELS[policy] || policy}`
   } catch (e) {
     error.value = e.message
   }
@@ -1004,7 +1027,8 @@ watch(
                     <div v-else class="skill-icon" :style="{ background: typeColor(cap.type) }">{{ typeInitial(cap.type) }}</div>
                     <div class="skill-meta">
                       <div class="skill-name-row">
-                        <router-link class="skill-name link" :to="`/capabilities/${cap.id}`">{{ cap.name }}</router-link>
+                        <router-link class="skill-name link" :to="`/capabilities/${cap.id}`">{{ cap.display_name || cap.name }}</router-link>
+                        <span v-if="cap.verified" class="ver-tag" style="color: var(--success); border-color: var(--success)">认证</span>
                         <span class="ver-tag">v{{ cap.version }}</span>
                       </div>
                       <div class="skill-desc muted">{{ cap.description || TYPE_LABELS[cap.type] }}</div>
@@ -1018,6 +1042,17 @@ watch(
                 <td>
                   <div class="ops">
                     <router-link class="op-link" :to="`/capabilities/${cap.id}`">详情</router-link>
+                    <button class="op-link" type="button" @click="toggleVerify(cap)">{{ cap.verified ? '取消认证' : '认证' }}</button>
+                    <select
+                      class="op-link"
+                      :value="cap.install_policy || 'optional'"
+                      title="安装策略（必装=组织级强制）"
+                      @change="setInstallPolicy(cap, $event.target.value)"
+                    >
+                      <option value="optional">可选</option>
+                      <option value="default_on">默认安装</option>
+                      <option value="required">必装</option>
+                    </select>
                     <button v-if="cap.status === 'published'" class="op-link danger" type="button" @click="statusAction(cap, 'deprecate')">下架</button>
                     <button
                       v-if="['published', 'deprecated'].includes(cap.status)"
