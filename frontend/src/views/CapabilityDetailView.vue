@@ -1335,6 +1335,7 @@ onMounted(() => {
           >{{ mcpTrial.label }}</span>
           <span v-if="isMcp && mcpToolRows.length" class="badge badge-primary">{{ mcpToolRows.length }} 工具</span>
           <span v-if="provenance.origin === 'mcp-registry'" class="badge badge-primary" :title="provenance.registry_name || '外部导入'">外部导入</span>
+          <span v-if="cap.verified" class="badge badge-success" title="管理员认证">认证</span>
           <span v-if="requiresBinary" class="badge" :title="`依赖本机 CLI：${requiresBinary}`">需 {{ requiresBinary }}</span>
         </div>
         <h1 class="detail-title">

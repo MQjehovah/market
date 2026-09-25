@@ -28,6 +28,7 @@ from app.models import (
 )
 from app.storage import get_storage
 from app.schemas import ArtifactOut, CapabilityCreate, CapabilityOut, CapabilityUpdate
+from app.services.scopes import capability_required_scopes
 from app.services.visibility import is_capability_visible
 
 SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
@@ -259,6 +260,8 @@ def to_capability_out(
         "author_id": cap.author_id,
         "organization": cap.organization or "",
         "provenance": getattr(cap, "provenance", None) or {},
+        "verified": bool(getattr(cap, "verified", False)),
+        "required_scopes": sorted(capability_required_scopes(cap)),
         "input_schema": cap.input_schema or {},
         "usage_count": cap.usage_count,
         "rating_sum": cap.rating_sum,
@@ -657,6 +660,22 @@ async def _notify_subscribers(db: AsyncSession, cap: Capability) -> None:
         )
 
 
+async def _notify_subscribers_deprecated(db: AsyncSession, cap: Capability) -> None:
+    """弃用通知订阅者：提醒迁移，避免继续依赖被弃用版本。"""
+    subs = (await db.scalars(select(Subscription).where(Subscription.capability_name == cap.name))).all()
+    for sub in subs:
+        if sub.user_id == cap.author_id:
+            continue
+        db.add(
+            Notification(
+                user_id=sub.user_id,
+                title=f"你订阅的能力已弃用：{cap.name} v{cap.version}",
+                body="该版本已弃用，请迁移到新版本或联系作者。",
+                link=f"/capabilities/{cap.id}",
+            )
+        )
+
+
 async def change_status(db: AsyncSession, cap: Capability, target: str) -> Capability:
     _transition(cap, target)
     if target == "deprecated":
@@ -668,6 +687,7 @@ async def change_status(db: AsyncSession, cap: Capability, target: str) -> Capab
                 link=f"/capabilities/{cap.id}",
             )
         )
+        await _notify_subscribers_deprecated(db, cap)
         if cap.type == "plugin":
             from app.services.plugins import cascade_plugin_components
 

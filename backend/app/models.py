@@ -92,6 +92,8 @@ class Capability(Base):
     # 来源与合规: {origin, registry_name, source_url, commit, checksum, license, imported_at}
     requires: Mapped[dict] = mapped_column(JSON, default=dict)
     # 运行时依赖声明(CLI 类): {binary, min_version, install, auth}; 空=无外部依赖
+    verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 可信标识: 管理员认证(官方/可信发布者); 前端展示徽标
     risk_default: Mapped[str] = mapped_column(String(20), default="read")
     # read | write | destructive
     data_domain: Mapped[str] = mapped_column(String(64), default="")

@@ -96,6 +96,7 @@ watch(
           :title="`默认风险：${RISK_DEFAULT_LABELS[cap.risk_default] || cap.risk_default}`"
         >{{ RISK_DEFAULT_LABELS[cap.risk_default] || cap.risk_default }}</span>
         <span v-if="displayCategory" class="badge">{{ displayCategory }}</span>
+        <span v-if="cap.verified" class="badge badge-success" title="管理员认证">认证</span>
         <span v-if="fromPlugin" class="badge badge-primary">来自能力包</span>
         <span v-if="isImported" class="badge badge-primary" :title="provenanceTitle">外部导入</span>
         <span v-if="requiresBinary" class="badge" :title="`依赖本机 CLI：${requiresBinary}`">需 {{ requiresBinary }}</span>

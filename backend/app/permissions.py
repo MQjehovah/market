@@ -86,6 +86,24 @@ def require_admin(user: User) -> None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "需要管理员权限")
 
 
+def _enforce_scope(user: User, cap: Capability, runtime_roles: set[str]) -> None:
+    """SCOPE_ENFORCE 开启时按 scope 收窄（默认关闭，灰度迁移用）。
+
+    未开启保持既有授权判定不变；开启后，通过现有准入的角色还需拥有该能力所需的
+    scope，否则 403 并提示 step-up 所需 scope。
+    """
+    from app.services.scopes import missing_scopes, scope_enforced
+
+    if not scope_enforced():
+        return
+    missing = missing_scopes(user.role, cap, runtime_roles=runtime_roles)
+    if missing:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            f"需要额外授权(step-up): {', '.join(sorted(missing))}",
+        )
+
+
 async def require_runtime_access(user: User, cap: Capability, db: AsyncSession) -> None:
     """执行类接口的授权门禁。
 
@@ -100,6 +118,7 @@ async def require_runtime_access(user: User, cap: Capability, db: AsyncSession) 
         if r.strip()
     }
     if role_has_permission(user.role, "capability.invoke", granted_roles=roles) or cap.author_id == user.id:
+        _enforce_scope(user, cap, roles)
         return
     policy = cap.access_policy or "open"
     if policy == "admin_only":
@@ -125,6 +144,7 @@ async def require_runtime_access(user: User, cap: Capability, db: AsyncSession) 
                 status.HTTP_403_FORBIDDEN,
                 f"没有调用该能力的权限（{access_deny_reason(cap, user)}）",
             )
+        _enforce_scope(user, cap, roles)
         return
     raise HTTPException(
         status.HTTP_403_FORBIDDEN,

@@ -284,6 +284,8 @@ class CapabilityOut(CapabilityBase):
     changelog: str = ""
     readme_md: str = ""
     provenance: dict[str, Any] = Field(default_factory=dict)
+    verified: bool = False
+    required_scopes: list[str] = Field(default_factory=list)
     icon_url: str = ""
     runtime: RuntimeSpecOut = Field(default_factory=RuntimeSpecOut)
     input_schema: dict[str, Any] = Field(default_factory=dict)

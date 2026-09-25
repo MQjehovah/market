@@ -108,6 +108,10 @@ async def _auto_migrate(conn) -> None:
             sync_conn.exec_driver_sql(
                 "ALTER TABLE capabilities ADD COLUMN requires JSON DEFAULT '{}'"
             )
+        if "verified" not in cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE capabilities ADD COLUMN verified BOOLEAN DEFAULT 0"
+            )
         if "risk_default" not in cols:
             sync_conn.exec_driver_sql(
                 "ALTER TABLE capabilities ADD COLUMN risk_default VARCHAR(20) DEFAULT 'read'"

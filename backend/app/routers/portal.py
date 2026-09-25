@@ -458,6 +458,7 @@ async def sync_capabilities(
             "risk_default": getattr(cap, "risk_default", None) or "read",
             "data_domain": getattr(cap, "data_domain", None) or "",
             "visibility": cap.visibility,
+            "verified": bool(getattr(cap, "verified", False)),
             "usage_count": cap.usage_count,
             "has_artifact": bool(cap.artifacts),
             "updated_at": (cap.updated_at or cap.created_at).isoformat()
@@ -538,6 +539,14 @@ async def categories(db: DbSession, user: OptionalUser):
     for cap_type, cat in rows:
         result.setdefault(cap_type, []).append(cat)
     return result
+
+
+@router.get("/meta/scopes")
+async def scopes_meta():
+    """能力 scope 目录（前端展示 / step-up 提示用）。"""
+    from app.services.scopes import scope_catalog
+
+    return {"scopes": scope_catalog()}
 
 
 @router.get("/meta/tags", response_model=TagsMetaOut)

@@ -105,6 +105,19 @@ async def archive(cap_id: str, db: DbSession, user: CurrentUser):
     return to_capability_out(cap)
 
 
+@router.post("/capabilities/{cap_id}/verify", response_model=CapabilityOut)
+async def verify(cap_id: str, db: DbSession, user: CurrentUser, payload: dict = Body(...)):
+    """可信认证：标记/取消管理员认证（前端展示「认证」徽标）。"""
+    require_admin(user)
+    cap = await db.get(Capability, cap_id)
+    if cap is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
+    cap.verified = bool(payload.get("verified", True))
+    await db.commit()
+    await db.refresh(cap)
+    return to_capability_out(cap)
+
+
 # ---- 官方 MCP Registry 导入(仅元数据; 导入为草稿, 待审核) ----
 
 @router.get("/registry/servers")

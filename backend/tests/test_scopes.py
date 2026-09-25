@@ -12,6 +12,7 @@ from app.services.scopes import (  # noqa: E402
     missing_scopes,
     role_scopes,
     scope_catalog,
+    scope_enforced,
 )
 
 
@@ -43,3 +44,10 @@ def test_role_scopes_and_missing():
     cap = SimpleNamespace(type="mcp", risk_default="read")
     assert missing_scopes("user", cap)  # 非空: 提示需要 step-up
     assert missing_scopes("admin", cap) == set()
+
+
+def test_scope_enforced_default_off(monkeypatch):
+    monkeypatch.delenv("MARKET_SCOPE_ENFORCE", raising=False)
+    assert scope_enforced() is False
+    monkeypatch.setenv("MARKET_SCOPE_ENFORCE", "1")
+    assert scope_enforced() is True

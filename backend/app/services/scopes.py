@@ -11,6 +11,7 @@ P0：定义标准 scope 键、从能力元数据推导"调用所需 scope"、角
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 # scope 键目录（市场/运行时共用；`*` 语义由 admin/service 角色承载）
@@ -64,3 +65,11 @@ def missing_scopes(role: str, cap: Any, *, runtime_roles: set[str] | None = None
 
 def scope_catalog() -> list[dict[str, str]]:
     return [{"key": k, "description": v} for k, v in SCOPE_CATALOG.items()]
+
+
+_TRUE = frozenset({"1", "true", "yes", "on"})
+
+
+def scope_enforced() -> bool:
+    """scope 强制开关（灰度）：`MARKET_SCOPE_ENFORCE=1` 时在既有授权之上按 scope 收窄。"""
+    return os.getenv("MARKET_SCOPE_ENFORCE", "").strip().lower() in _TRUE
