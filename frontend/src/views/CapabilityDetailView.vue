@@ -1657,12 +1657,12 @@ onMounted(() => {
                     <strong>{{ ['skill', 'mcp', 'agent', 'plugin'].includes(cap.type) ? '谁来答' : '谁执行' }}</strong>
                     ：{{ kindHint.whoRuns }}
                   </li>
-                  <li v-if="PACKAGE_HINTS[cap.type]"><strong>包规范</strong>：{{ PACKAGE_HINTS[cap.type] }}</li>
+                  <li v-if="PACKAGE_HINTS[cap.type] && (isOwner || isAdmin)"><strong>包规范</strong>：{{ PACKAGE_HINTS[cap.type] }}</li>
                 </ul>
-                <div v-if="isAgent" class="guide-note">
+                <div v-if="isAgent && (isOwner || isAdmin)" class="guide-note">
                   <strong>{{ ORCH_LABELS.team.name }}</strong>（TEAM.md）：节点是角色，在零号员工 TeamOrchestrator 执行。与「能力编排」平行，禁止互转。
                 </div>
-                <div v-if="isWorkflow" class="guide-note">
+                <div v-if="isWorkflow && (isOwner || isAdmin)" class="guide-note">
                   <strong>{{ ORCH_LABELS.capability.name }}</strong>：节点是已上架能力，只在云端执行；可将带 TEAM.md 的 Agent 作为 agent 节点调用。
                 </div>
               </div>
@@ -1672,11 +1672,11 @@ onMounted(() => {
               <div class="guide-body">
                 <p class="guide-lead muted">市场是控制面目录。日常在零号员工问答里用；试用只验证连接，不是生产主路径。</p>
                 <table class="table">
-                  <thead><tr><th>方式</th><th>接口</th><th>适用</th></tr></thead>
+                  <thead><tr><th>方式</th><th v-if="isOwner || isAdmin">接口</th><th>适用</th></tr></thead>
                   <tbody>
                     <tr v-for="w in consumeWays" :key="w.id">
                       <td>{{ w.label }}</td>
-                      <td><code style="font-size: 11px">{{ w.api }}</code></td>
+                      <td v-if="isOwner || isAdmin"><code style="font-size: 11px">{{ w.api }}</code></td>
                       <td class="muted" style="font-size: 12px">{{ w.who }}</td>
                     </tr>
                   </tbody>

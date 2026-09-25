@@ -49,74 +49,87 @@ export const KIND_SHELF = Object.fromEntries(
 export const KIND_HINTS = {
   skill: {
     shelf: 'brick',
-    what: '问答说明书（SKILL.md）。自己不执行，专家按需读入后按步骤回答。',
-    where: '随专家装到零号员工；在对话里提问即可触发',
-    whoRuns: '问答专家（零号员工）'
+    what: '技能：一套方法与步骤。专家按它来回答和办事，自己不会直接执行。',
+    where: '添加到专家后，提问时即按此技能处理。',
+    whoRuns: '专家（零号员工）'
   },
   mcp: {
     shelf: 'brick',
-    what: '连接器：给专家接外部系统。真正可调的是连上后发现的工具，单独下载不是一项服务。',
-    where: '随专家装到零号员工；桌面可连 /api/mcp-gateway/relay/{name}/sse（SSO Bearer）',
-    whoRuns: '问答专家通过连接器调用外部系统'
+    what: '连接器：把专家接到你的业务系统（数据库、工单、日历等），连上后就能查询和操作。',
+    where: '配置后由专家调用；也支持桌面或平台统一接入。',
+    whoRuns: '专家通过连接器调用外部系统'
   },
   tool: {
     shelf: 'brick',
-    what: '云端沙箱函数（tool.py）；主要给 Workflow 节点；无本地安装',
-    where: '仅 POST /api/runtime/tools/{name}/invoke；不写 src/tools',
-    whoRuns: '市场 runtime 沙箱 / Workflow 节点'
+    what: '编排函数：自动化流程里的一步，由「能力编排」调用。',
+    where: '在能力编排中作为节点使用；不单独安装到专家。',
+    whoRuns: '能力编排（云端执行）'
   },
   rule: {
     shelf: 'brick',
-    what: '持久指导（RULE.mdc）；alwaysApply / globs 控制何时生效',
-    where: 'cap install --type rule → config/rules/<name>/',
-    whoRuns: 'IDE / Agent 读入上下文'
+    what: '规则：给开发者或 AI 的持久约定（可控制何时生效）。',
+    where: '由作者/开发者按需加载到工程或宿主。',
+    whoRuns: '开发者工具 / 宿主'
   },
   command: {
     shelf: 'brick',
-    what: '可复用提示（COMMAND.md）；对话里用 / 唤起',
-    where: 'cap install --type command → config/commands/<name>/',
-    whoRuns: 'IDE / Agent 斜杠命令'
+    what: '命令：可复用的一段提示或操作，用“/名称”唤起。',
+    where: '在支持命令的对话或工具里按需使用。',
+    whoRuns: '开发者工具 / 宿主'
   },
   hook: {
     shelf: 'brick',
-    what: '生命周期脚本（hooks.json）；观察、拦截或跟进 Agent 事件',
-    where: 'cap install --type hook → config/hooks/<name>/',
-    whoRuns: 'IDE / 宿主 hook 运行时'
+    what: '钩子：在特定时机自动触发的脚本（观察、拦截或跟进）。',
+    where: '由宿主在对应事件触发。',
+    whoRuns: '开发者工具 / 宿主'
   },
   agent: {
     shelf: 'recipe',
-    what: '人设 + 依赖容器；日常靠 skill 说明书 + 连接器发现的工具',
-    where: 'cap install 后在零号员工打开该专家并提问',
-    whoRuns: '零号员工问答 / A2A；详情页可云端试用'
+    what: '专家：有明确职责的数字员工，能按流程完成一类任务。',
+    where: '加入后即可在零号员工里使用并提问。',
+    whoRuns: '零号员工 / 其他 Agent 调用'
   },
   workflow: {
     shelf: 'recipe',
-    what: '已上架能力的静态 DAG（tool|agent|skill|mcp），与 TEAM.md 平行；无本地安装',
-    where: '不进 Agent 目录；只云端执行',
-    whoRuns: '市场 workflows 引擎 / MCP 桥 marketplace_run_workflow'
+    what: '能力编排：把多个能力按顺序串成一条自动化流程。',
+    where: '加入后由平台云端执行，可查看每次运行的节点日志。',
+    whoRuns: '市场编排引擎'
   },
   plugin: {
     shelf: 'install',
-    what: '分发袋（skills + mcp + rules/commands/hooks + 可选 agents/tools）；上传后拆子能力',
-    where: 'cap install --type plugin 后拆到零号员工，对话里按子能力生效',
-    whoRuns: '问答专家（零号员工）执行子组件'
+    what: '能力包：把技能、连接器等打包，一次分发、一次生效。',
+    where: '加入后其中的能力按权限生效。',
+    whoRuns: '零号员工执行包内能力'
   }
+}
+
+/** 技术细节（面向作者/开发者；消费者面默认不展示） */
+export const KIND_TECH = {
+  skill: 'skill.json + SKILL.md（frontmatter: name/description，可选 license/compatibility/metadata/allowed-tools）',
+  mcp: 'server.json（标准，MCP Registry）或 mcp.json + connection.json + tools.json + security.json',
+  tool: 'tool.json + schema.json + implementation/tool.py（云端沙箱执行）',
+  rule: 'rule.json + RULE.mdc（alwaysApply / globs）',
+  command: 'command.json + COMMAND.md',
+  hook: 'hook.json + hooks.json（可选 scripts/）',
+  agent: 'agent.json + PROMPT.md（可含 TEAM.md、skills/、mcp/）',
+  workflow: 'workflow.json（nodes/edges 引用已上架能力；云端执行）',
+  plugin: 'plugin.json 或 .cursor-plugin/plugin.json + skills/ rules/ commands/ hooks/ mcp.json'
 }
 
 /** 可本地 cap install 的 kind（与 taxonomy.local_install_kinds 对齐） */
 export const LOCAL_INSTALL_KINDS = ['agent', 'skill', 'mcp', 'plugin', 'rule', 'command', 'hook']
 
-/** remote（云端订阅即用）时替代 kindHint.where 的文案：不出现本地安装说法 */
+/** remote（云端订阅即用）时的用法文案：不出现本地安装/命令/接口等说法 */
 export const REMOTE_WHERE_HINTS = {
-  skill: '加入后随专家在云端问答使用（无需本地安装）',
-  mcp: '加入后由云端托管调用（无需本地安装）',
-  tool: '仅 POST /api/runtime/tools/{name}/invoke（云端沙箱，无本地安装）',
-  rule: '加入后由平台 / 宿主线上加载生效（无需本地安装）',
-  command: '加入后在平台对话中按需使用（无需本地安装）',
-  hook: '加入后由宿主线上触发（无需本地安装）',
-  agent: '加入后在零号员工 / A2A 云端调用，详情页可先问一句试用',
-  workflow: '只在云端执行；加入后由市场引擎 / MCP 桥触发',
-  plugin: '加入后其组件在云端按权限生效（无需本地安装）'
+  skill: '加入后即可在专家的回答中生效，无需本地安装。',
+  mcp: '加入后由平台统一连接调用，无需本地安装。',
+  tool: '加入后由能力编排调用，无需本地安装。',
+  rule: '加入后在平台或宿主中按需生效。',
+  command: '加入后在支持的对话中按需使用。',
+  hook: '加入后由宿主在对应事件触发。',
+  agent: '加入后可在零号员工中使用；详情页可先问一句试用。',
+  workflow: '加入后由平台执行，可查看运行结果。',
+  plugin: '加入后其中能力按权限生效，无需本地安装。'
 }
 
 /** 按能力类型与分发方式取用法提示；remote 时 where 换成云端说明 */
@@ -181,15 +194,30 @@ export const EXAMPLE_PROMPTS = {
     '帮我查一条示例数据并说明用了哪个工具',
     '先列出会用到的工具，再试着调用一个只读接口'
   ],
-  tool: ['在 Workflow 中添加 tool 节点并选择本能力', 'POST /api/runtime/tools/{name}/invoke 调试'],
-  rule: ['cap install <name> --type rule 后由 Agent 按 alwaysApply/globs 加载', '作为能力包组件随 plugin 分发'],
-  command: ['cap install <name> --type command 后在对话中输入 /<name>', '把固定操作步骤写成 COMMAND.md'],
-  hook: ['cap install <name> --type hook 后由宿主按事件触发 scripts', '在 hooks.json 声明 matcher 与 fail 策略'],
+  tool: [
+    '把它加进一条自动化流程并运行，然后告诉我结果',
+    '说明这一步具体会做什么'
+  ],
+  rule: [
+    '这条规则会在什么情况下生效？',
+    '它约束的是哪些内容？'
+  ],
+  command: [
+    '在支持命令的对话里输入 /<名称> 看看效果',
+    '这个命令解决什么场景？'
+  ],
+  hook: [
+    '这个钩子在什么时机触发？',
+    '触发后会做什么？'
+  ],
   agent: [
     '用三句话说清你能帮我做什么',
     '假设我是新同事，请按你的职责处理一件典型任务'
   ],
-  workflow: ['在市场运行本 Workflow 并查看节点日志', 'marketplace_run_workflow 通过 MCP 桥触发'],
+  workflow: [
+    '运行这个自动化流程，并告诉我结果',
+    '说明这条流程包含哪些步骤'
+  ],
   plugin: [
     '用三句话说清这个能力包装完后能做什么',
     '按场景演示一次你最擅长的任务'
