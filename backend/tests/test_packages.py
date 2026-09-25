@@ -162,3 +162,33 @@ def test_registry_import_mapping_only_metadata():
     assert fields["binding"] == "service"
     assert fields["provenance"]["origin"] == "mcp-registry"
     assert fields["provenance"]["server_json"]["name"] == "ac.inference.sh/mcp"
+
+
+def test_normalize_requires():
+    from app.schemas import _normalize_requires
+
+    assert _normalize_requires(None) == {}
+    assert _normalize_requires({"binary": "dws", "min_version": "1.0.7"}) == {
+        "binary": "dws",
+        "min_version": "1.0.7",
+    }
+    with pytest.raises(ValueError):
+        _normalize_requires({"binary": ""})
+    with pytest.raises(ValueError):
+        _normalize_requires({"unsupported": "x"})
+
+
+def test_validate_skill_requires_in_skill_json():
+    files = {
+        "skill.json": json.dumps(
+            {
+                "name": "dws-calendar",
+                "version": "1.0.0",
+                "requires": {"binary": "dws", "install": "npm i -g dingtalk-workspace-cli", "auth": "dws auth login"},
+            },
+            ensure_ascii=False,
+        ),
+        "SKILL.md": "# 日历\n",
+    }
+    details = validate_package("skill", _zip_bytes(files))
+    assert details["requires"]["binary"] == "dws"

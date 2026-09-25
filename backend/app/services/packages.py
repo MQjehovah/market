@@ -10,6 +10,8 @@ from typing import Any
 
 from fastapi import HTTPException, status
 
+from app.schemas import _normalize_requires
+
 REQUIRED_FILES: dict[str, list[str]] = {
     "agent": ["agent.json", "PROMPT.md"],
     "tool": ["tool.json", "schema.json", "implementation/tool.py"],
@@ -525,6 +527,13 @@ def validate_package(capability_type: str, content: bytes) -> dict[str, Any]:
         _check_name(str(meta["name"]), meta_file)
 
     details: dict[str, Any] = {"meta": meta, "files": files, "warnings": []}
+    if meta.get("requires"):
+        try:
+            details["requires"] = _normalize_requires(meta["requires"])
+        except ValueError as exc:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, f"requires 校验失败: {exc}"
+            ) from exc
     if capability_type == "workflow":
         if not isinstance(meta.get("nodes"), list) or not meta["nodes"]:
             raise HTTPException(

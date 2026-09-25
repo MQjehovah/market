@@ -104,6 +104,10 @@ async def _auto_migrate(conn) -> None:
             sync_conn.exec_driver_sql(
                 "ALTER TABLE capabilities ADD COLUMN provenance JSON DEFAULT '{}'"
             )
+        if "requires" not in cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE capabilities ADD COLUMN requires JSON DEFAULT '{}'"
+            )
         if "risk_default" not in cols:
             sync_conn.exec_driver_sql(
                 "ALTER TABLE capabilities ADD COLUMN risk_default VARCHAR(20) DEFAULT 'read'"

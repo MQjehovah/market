@@ -236,6 +236,7 @@ def to_capability_out(
         "description": cap.description or "",
         "display_name": getattr(cap, "display_name", None) or "",
         "slug": getattr(cap, "slug", None) or "",
+        "requires": getattr(cap, "requires", None) or {},
         "type": cap.type,
         "version": cap.version,
         "status": cap.status,
@@ -354,6 +355,7 @@ async def create_capability(
         binding=getattr(data, "binding", None) or "service",
         display_name=(getattr(data, "display_name", None) or "").strip(),
         slug=(getattr(data, "slug", None) or "").strip(),
+        requires=dict(getattr(data, "requires", None) or {}),
         risk_default=getattr(data, "risk_default", None) or "read",
         data_domain=(getattr(data, "data_domain", None) or "").strip(),
         author_id=user.id,
@@ -467,6 +469,8 @@ async def update_capability(
         cap.display_name = data.display_name.strip()
     if getattr(data, "slug", None) is not None:
         cap.slug = data.slug.strip()
+    if getattr(data, "requires", None) is not None:
+        cap.requires = dict(data.requires)
     if data.risk_default is not None:
         cap.risk_default = data.risk_default
     if data.data_domain is not None:

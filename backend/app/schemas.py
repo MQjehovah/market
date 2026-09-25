@@ -9,6 +9,25 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 # 标准机器名(slug)允许字符: MCP 命名空间(io.github.user/server-name) 与 Skill 名(pdf-processing)
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9._/-]*$")
 
+# 运行时依赖声明(CLI 类)允许的键
+_REQUIRES_KEYS = ("binary", "min_version", "install", "auth")
+
+
+def _normalize_requires(value: Any) -> dict[str, str]:
+    """校验并规范化 requires(空/None → {})。"""
+    if value is None or value == "":
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("requires 必须是对象")
+    out: dict[str, str] = {}
+    for key, val in value.items():
+        if key not in _REQUIRES_KEYS:
+            raise ValueError(f"requires 不支持的键: {key}(允许: {', '.join(_REQUIRES_KEYS)})")
+        if not isinstance(val, str) or not val.strip():
+            raise ValueError(f"requires.{key} 必须是非空字符串")
+        out[key] = val.strip()
+    return out
+
 CAPABILITY_TYPES = (
     "agent",
     "tool",
@@ -87,6 +106,7 @@ class CapabilityBase(BaseModel):
     description: str = Field(default="", max_length=20000)
     display_name: str = Field(default="", max_length=255)
     slug: str = Field(default="", max_length=255, description="标准机器名(MCP server.json.name / Skill name)")
+    requires: dict[str, Any] = Field(default_factory=dict, description="运行时依赖(CLI): binary/min_version/install/auth")
     type: CapabilityType
     version: str = Field(default="0.1.0", max_length=50)
     category: str = Field(default="", max_length=100)
@@ -131,6 +151,11 @@ class CapabilityBase(BaseModel):
             )
         return value
 
+    @field_validator("requires")
+    @classmethod
+    def validate_requires(cls, v: Any) -> dict[str, str]:
+        return _normalize_requires(v)
+
 
 class CapabilityCreate(CapabilityBase):
     pass
@@ -142,6 +167,7 @@ class CapabilityUpdate(BaseModel):
     description: str | None = None
     display_name: str | None = Field(default=None, max_length=255)
     slug: str | None = Field(default=None, max_length=255)
+    requires: dict[str, Any] | None = None
     category: str | None = Field(default=None, max_length=100)
     tags: list[str] | None = None
     visibility: Literal["private", "team", "internal", "public"] | None = None
@@ -159,6 +185,13 @@ class CapabilityUpdate(BaseModel):
         if v is None:
             return None
         return CapabilityBase.validate_slug(v)
+
+    @field_validator("requires")
+    @classmethod
+    def validate_requires_opt(cls, v: Any) -> dict[str, str] | None:
+        if v is None:
+            return None
+        return _normalize_requires(v)
 
 
 class InstallPolicyUpdate(BaseModel):
