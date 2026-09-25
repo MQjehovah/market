@@ -142,12 +142,16 @@ def _public_key(kid: str | None):
 def verify_sso_token(token: str, audience: str | None = None) -> dict:
     """校验 SSO 签发的 RS256 token,通过则返回 claims(含 sub 工号)。
 
-    未配置 sso_issuer 视为 SSO 禁用;iss/aud 不匹配、签名无效、过期、
-    缺少 sub(工号)等一律抛 SsoAuthError。
+    未配置 sso_issuer 视为 SSO 禁用;**audience 强制**:显式 audience 或 sso_audience
+    二者必有一,否则一律拒绝(fail-closed,避免接受未面向本资源的 token)。
+    iss/aud 不匹配、签名无效、过期、缺少 sub(工号)等一律抛 SsoAuthError。
     """
     settings = get_settings()
     if not settings.sso_issuer:
         raise SsoAuthError("SSO not configured")
+    expected_aud = (audience or settings.sso_audience or "").strip()
+    if not expected_aud:
+        raise SsoAuthError("SSO audience 未配置, 拒绝校验(需设置 sso_audience 或显式 audience)")
     try:
         header = jose_jwt.get_unverified_header(token)
     except jose_exceptions.JWTError as e:
@@ -160,7 +164,7 @@ def verify_sso_token(token: str, audience: str | None = None) -> dict:
             key,
             algorithms=[ALGORITHM],
             issuer=settings.sso_issuer,
-            audience=audience or settings.sso_audience or None,
+            audience=expected_aud,
         )
     except SsoAuthError:
         raise

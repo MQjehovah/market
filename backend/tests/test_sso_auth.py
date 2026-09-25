@@ -31,6 +31,28 @@ ISSUER = "https://sso.example.com"
 AUDIENCE = "market-dashboard"
 
 
+def test_verify_sso_token_requires_audience(monkeypatch):
+    """audience 强制: issuer 已配但 audience 缺失(且未显式传) -> 拒绝(fail-closed)。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "sso_issuer", ISSUER)
+    monkeypatch.setattr(settings, "sso_audience", "")
+    with pytest.raises(SsoAuthError):
+        verify_sso_token("x.y.z")
+
+
+def test_verify_sso_token_explicit_audience_satisfies_requirement(tmp_path, monkeypatch):
+    """显式传 audience 时不再要求 sso_audience 配置(在验签前即通过 audience 门槛)。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "sso_issuer", ISSUER)
+    monkeypatch.setattr(settings, "sso_audience", "")
+    key, _ = make_rsa_key()
+    token = sign_token(valid_claims(aud=AUDIENCE), key)
+    # 无 JWKS 配置 -> 验签阶段抛 SsoAuthError, 但已越过"audience 未配置"门槛
+    with pytest.raises(SsoAuthError) as exc:
+        verify_sso_token(token, audience=AUDIENCE)
+    assert "audience 未配置" not in str(exc.value)
+
+
 def make_rsa_key(kid="k1"):
     """生成 RSA2048 私钥,返回 (私钥, 公钥 JWK dict)。"""
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
