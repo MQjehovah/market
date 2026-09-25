@@ -60,6 +60,7 @@ from app.services.capability_secrets import (
 from app.services.capabilities import get_visible_capabilities, parse_semver, record_rating
 from app.services.capabilities import to_capability_out
 from app.services.capabilities import capability_icon_url
+from app.services.dashboard_consume import runtime_spec
 from app.services.service_tokens import is_service_token, require_service_scope
 from app.services.task_search import task_search as run_task_search
 from app.services.visibility import is_capability_visible, visibility_condition
@@ -81,6 +82,28 @@ def _to_out(cap: Capability, versions: list[Capability] | None = None) -> Capabi
 def _visibility_where(user: User | None):
     """可见性过滤（SQL 层）：单一判定来源见 ``app.services.visibility``。"""
     return visibility_condition(user)
+
+
+async def _viewer_identity(request: Request, db: DbSession, user: User | None) -> User | None:
+    """浏览视角身份：服务令牌 + X-Act-As-Sub 时代理目标用户（仅用于可见性过滤）。
+
+    非服务令牌带该头忽略（全局约定）；目标不存在/禁用由 resolve_act_as 抛 403。
+    """
+    if user is None or not is_service_token(user):
+        return user
+    sub = (request.headers.get("x-act-as-sub") or "").strip()
+    if not sub:
+        return user
+    target = await resolve_act_as(db, user, sub)
+    if target is not None:
+        logger.info(
+            "市场浏览代表用户访问：actor=%s act_as=%s path=%s",
+            user.id,
+            target.username,
+            request.url.path,
+        )
+        return target
+    return user
 
 
 def _gateway_payload(
@@ -134,6 +157,7 @@ async def package_template(kind: str, name: str = Query("example", max_length=80
 
 @router.get("/capabilities", response_model=CapabilityPage)
 async def browse_capabilities(
+    request: Request,
     db: DbSession,
     user: OptionalUser,
     q: str = "",
@@ -159,11 +183,13 @@ async def browse_capabilities(
     - include_bricks=true。
 
     skill / mcp：按 Agent 内嵌能力名筛选（匹配 input_schema.embedded_*）。
-    tag：JSON 数组包含匹配（cast(tags AS TEXT) LIKE '%"tag"%'）。
+    tag：标签精确包含（最新版本去重后按 tags 判定）。
+    act-as：服务令牌带 X-Act-As-Sub 时按目标用户可见性过滤（agent 侧防越权）。
     include_components：为 false 时隐藏全部 plugin 拆出子能力（含已发布）。
     """
+    viewer = await _viewer_identity(request, db, user)
     conditions: list = []
-    visibility_where = _visibility_where(user)
+    visibility_where = _visibility_where(viewer)
     if visibility_where is not None:
         conditions.append(visibility_where)
 
@@ -423,6 +449,7 @@ async def sync_capabilities(
             "description": cap.description or "",
             "tags": cap.tags or [],
             "icon_url": capability_icon_url(cap),
+            "runtime": runtime_spec(cap),
             "distribution": getattr(cap, "distribution", None) or "both",
             "risk_default": getattr(cap, "risk_default", None) or "read",
             "data_domain": getattr(cap, "data_domain", None) or "",
@@ -531,8 +558,12 @@ async def tags_meta(db: DbSession):
 
 
 @router.get("/capabilities/{cap_id}", response_model=CapabilityOut)
-async def capability_detail(cap_id: str, db: DbSession, user: OptionalUser):
-    visible = await get_visible_capabilities(db, user)
+async def capability_detail(
+    request: Request, cap_id: str, db: DbSession, user: OptionalUser
+):
+    """能力详情；服务令牌带 X-Act-As-Sub 时按目标用户可见性过滤。"""
+    viewer = await _viewer_identity(request, db, user)
+    visible = await get_visible_capabilities(db, viewer)
     cap = next((c for c in visible if c.id == cap_id), None)
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")

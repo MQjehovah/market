@@ -188,6 +188,22 @@ class RatingOut(BaseModel):
     created_at: datetime
 
 
+class RuntimeSpecOut(BaseModel):
+    """能力运行规格（设计文档 §3）：两端只消费、不各自推导。"""
+
+    cloud: bool = True
+    local: bool = True
+    recommended: str = "cloud"
+    transport: str = ""
+    command: str = ""
+    args: list[str] = Field(default_factory=list)
+    url: str = ""
+    env: dict[str, str] = Field(default_factory=dict)
+    tool_count: int = 0
+    risk: str = "read"
+    dependencies: list[dict[str, str]] = Field(default_factory=list)
+
+
 class CapabilityOut(CapabilityBase):
     model_config = ConfigDict(from_attributes=True)
 
@@ -199,6 +215,7 @@ class CapabilityOut(CapabilityBase):
     changelog: str = ""
     readme_md: str = ""
     icon_url: str = ""
+    runtime: RuntimeSpecOut = Field(default_factory=RuntimeSpecOut)
     input_schema: dict[str, Any] = Field(default_factory=dict)
     validation_report: dict[str, Any] = Field(default_factory=dict)
     allowed_departments: list[str] = Field(default_factory=list)

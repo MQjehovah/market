@@ -239,3 +239,44 @@ def attach_consumer_fields(data: dict[str, Any], cap) -> None:
         comps = (getattr(cap, "input_schema", None) or {}).get("components") or []
         if isinstance(comps, list):
             data["components"] = comps
+
+
+def runtime_spec(cap) -> dict[str, Any]:
+    """能力运行规格契约（设计文档 §3，单一来源）：两端只消费、不各自推导。
+
+    cloud/local/recommended 由 distribution 推导；transport/command/args/url/env
+    来自包内 connection.json —— 发布时已固化到 input_schema（与本模块投影同源，
+    不打开 zip）。清单不可得时给缺省；env 只输出占位形式，不含明文。
+    """
+    dist = getattr(cap, "distribution", None) or "both"
+    schema = getattr(cap, "input_schema", None) or {}
+    if not isinstance(schema, dict):
+        schema = {}
+    # 仅 MCP 类清单才具备 connection 字段，避免把其它 kind 的 schema 误当连接配置
+    has_conn = schema.get("kind") == "mcp" or any(
+        k in schema for k in ("transport", "command", "url")
+    )
+    conn = _mcp_conn_from_schema(schema) if has_conn else {}
+    env_hint = conn.get("env") if isinstance(conn.get("env"), dict) else {}
+    tools = schema.get("tools")
+    dependencies: list[dict[str, str]] = []
+    comps = schema.get("components")
+    if isinstance(comps, list):
+        for item in comps:
+            if isinstance(item, dict) and item.get("name") and item.get("type"):
+                dependencies.append({"name": str(item["name"]), "type": str(item["type"])})
+    return {
+        "cloud": dist != "local",
+        "local": dist != "remote",
+        "recommended": "local" if dist == "local" else "cloud",
+        "transport": str(conn.get("transport") or "").strip(),
+        "command": str(conn.get("command") or ""),
+        "args": [str(a) for a in (conn.get("args") or [])]
+        if isinstance(conn.get("args"), list)
+        else [],
+        "url": str(conn.get("url") or ""),
+        "env": {str(k): str(v) for k, v in env_hint.items() if str(k).strip()},
+        "tool_count": len(tools) if isinstance(tools, list) else 0,
+        "risk": getattr(cap, "risk_default", None) or "read",
+        "dependencies": dependencies,
+    }

@@ -177,8 +177,6 @@ async def upload_artifact(cap_id: str, db: DbSession, user: CurrentUser, file: U
     if cap.type == "tool" and details.get("schema"):
         cap.input_schema = details["schema"]
     if cap.type == "agent":
-        import zipfile
-
         from app.services.agent_metadata import enrich_embedded_with_market, extract_agent_embedded
 
         with zipfile.ZipFile(io.BytesIO(content)) as zf:
