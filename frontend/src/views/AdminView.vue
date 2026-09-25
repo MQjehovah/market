@@ -18,6 +18,7 @@ import DebugCapabilityModal from '../components/DebugCapabilityModal.vue'
 import PackagePreview from '../components/PackagePreview.vue'
 import AdminTrialPanel from '../components/AdminTrialPanel.vue'
 import RegistryImportPanel from '../components/RegistryImportPanel.vue'
+import AdminTokensPanel from '../components/AdminTokensPanel.vue'
 import ConfirmActionModal from '../components/ConfirmActionModal.vue'
 
 const route = useRoute()
@@ -129,23 +130,6 @@ const gatewayForm = ref({
   enabled: true
 })
 const gatewayTest = ref({})
-
-const TOKEN_SCOPE_OPTS = [
-  { key: 'runtime', label: 'runtime', desc: '云端 invoke / persona / mcp call' },
-  { key: 'gateway', label: 'gateway', desc: '能力级 MCP 网关 /relay/…' },
-  { key: 'sync', label: 'sync', desc: '目录同步 capabilities/sync（含 act-as 代理 /my）' },
-  { key: 'admin', label: 'admin', desc: '管理接口（慎用）' }
-]
-const serviceTokens = ref([])
-const tokenNotice = ref('')
-const showTokenModal = ref(false)
-const showCreatedToken = ref(false)
-const createdTokenPlain = ref('')
-const tokenForm = ref({
-  name: '',
-  scopes: ['runtime', 'gateway', 'sync'],
-  expires_days: 365
-})
 
 const auditCounts = computed(() => ({
   pending: reviewQueue.value.length,
@@ -270,15 +254,14 @@ const departmentOptions = computed(() => [
 async function load() {
   error.value = ''
   try {
-    const [queue, rejected, returned, caps, userList, stat, gatewayList, tokenList] = await Promise.all([
+    const [queue, rejected, returned, caps, userList, stat, gatewayList] = await Promise.all([
       api.get('/admin/capabilities?status_filter=reviewing'),
       api.get('/admin/capabilities?status_filter=rejected'),
       api.get('/admin/capabilities?status_filter=returned'),
       api.get('/admin/capabilities'),
       api.get('/admin/users'),
       api.get('/admin/stats'),
-      api.get('/admin/mcp-gateway/servers'),
-      api.get('/admin/service-tokens')
+      api.get('/admin/mcp-gateway/servers')
     ])
     reviewQueue.value = queue
     rejectedQueue.value = rejected
@@ -287,7 +270,6 @@ async function load() {
     users.value = userList
     stats.value = stat
     gatewayServers.value = gatewayList
-    serviceTokens.value = tokenList
     adminState.reviewingCount = reviewQueue.value.length
     if (!selectedId.value && auditList.value.length) {
       selectedId.value = auditList.value[0].id
@@ -603,7 +585,6 @@ async function confirmActionOk() {
   if (!action) return
   if (action.kind === 'remove-user') await doRemoveUser(action.payload)
   if (action.kind === 'remove-gateway') await doRemoveGateway(action.payload)
-  if (action.kind === 'revoke-token') await doRevokeToken(action.payload)
 }
 
 async function testGateway(s) {
@@ -646,89 +627,11 @@ function gatewayPreviewUrl(name) {
   return `${window.location.origin}${__API_BASE__}/mcp-gateway/${name || '…'}/stream`
 }
 
-function copyText(text, noticeRef) {
+function copyText(text) {
   navigator.clipboard?.writeText(text).then(() => {
-    const msg = '已复制到剪贴板'
-    if (noticeRef === 'token') tokenNotice.value = msg
-    else gatewayNotice.value = msg
+    gatewayNotice.value = '已复制到剪贴板'
   })
 }
-
-function openTokenCreate() {
-  tokenForm.value = {
-    name: '',
-    scopes: ['runtime', 'gateway', 'sync'],
-    expires_days: 365
-  }
-  error.value = ''
-  tokenNotice.value = ''
-  createdTokenPlain.value = ''
-  showCreatedToken.value = false
-  showTokenModal.value = true
-}
-
-function toggleTokenScope(key) {
-  const cur = tokenForm.value.scopes
-  if (cur.includes(key)) {
-    tokenForm.value.scopes = cur.filter((s) => s !== key)
-  } else {
-    tokenForm.value.scopes = [...cur, key]
-  }
-}
-
-async function createServiceToken() {
-  error.value = ''
-  tokenNotice.value = ''
-  const f = tokenForm.value
-  if (!f.name.trim()) {
-    error.value = '请填写令牌名称'
-    return
-  }
-  if (!f.scopes.length) {
-    error.value = '至少选择一个 scope'
-    return
-  }
-  const days = Number(f.expires_days)
-  try {
-    const r = await api.post('/admin/service-tokens', {
-      name: f.name.trim(),
-      scopes: f.scopes,
-      expires_days: Number.isFinite(days) && days > 0 ? days : null
-    })
-    createdTokenPlain.value = r.token || ''
-    showTokenModal.value = false
-    showCreatedToken.value = true
-    tokenNotice.value = '令牌已创建；明文仅此一次，请立即复制保存'
-    await load()
-  } catch (e) {
-    error.value = e.message
-  }
-}
-
-function revokeToken(row) {
-  tokenNotice.value = ''
-  confirmAction.value = {
-    kind: 'revoke-token',
-    title: '确认吊销服务令牌？',
-    body: `吊销「${row.name}」（${row.token_prefix}…）后，使用该令牌的调用将立即 401。`,
-    okText: '吊销',
-    danger: true,
-    payload: row
-  }
-}
-
-async function doRevokeToken(row) {
-  try {
-    await api.post(`/admin/service-tokens/${row.id}/revoke`)
-    tokenNotice.value = `已吊销「${row.name}」`
-    await load()
-  } catch (e) {
-    error.value = e.message
-  }
-}
-
-const activeServiceTokens = computed(() => serviceTokens.value.filter((t) => !t.revoked))
-const revokedServiceTokens = computed(() => serviceTokens.value.filter((t) => t.revoked))
 
 const debugCaps = computed(() =>
   allCaps.value.filter((c) => c.status === 'published' && c.type === debugType.value)
@@ -1175,82 +1078,7 @@ watch(
         </div>
       </section>
 
-      <section v-else-if="section === 'tokens'">
-        <div class="flex-between mb-16" style="align-items: flex-end">
-          <p class="muted" style="font-size: 13px; max-width: 720px; margin: 0">
-            服务令牌用于 Agent / CI / dashboard 以
-            <code>Authorization: Bearer mkt_svc_…</code>
-            调用 runtime、能力网关与目录同步。明文仅在创建时展示一次。
-          </p>
-          <button class="btn btn-primary" type="button" @click="openTokenCreate">+ 签发令牌</button>
-        </div>
-        <div v-if="tokenNotice" class="alert alert-success mb-12">{{ tokenNotice }}</div>
-
-        <div v-if="activeServiceTokens.length === 0 && revokedServiceTokens.length === 0" class="panel empty">
-          还没有服务令牌。点击右上角「+ 签发令牌」。
-        </div>
-
-        <template v-else>
-          <h3 class="token-h">有效令牌（{{ activeServiceTokens.length }}）</h3>
-          <table v-if="activeServiceTokens.length" class="table">
-            <thead>
-              <tr>
-                <th>名称</th>
-                <th>前缀</th>
-                <th>绑定账号</th>
-                <th>Scopes</th>
-                <th>过期</th>
-                <th>最近使用</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="t in activeServiceTokens" :key="t.id">
-                <td><strong>{{ t.name }}</strong></td>
-                <td><code class="token-prefix">{{ t.token_prefix }}…</code></td>
-                <td>{{ t.username || t.user_id }}</td>
-                <td>
-                  <div class="token-scopes">
-                    <span v-for="s in (t.scopes || [])" :key="s" class="badge badge-primary">{{ s }}</span>
-                  </div>
-                </td>
-                <td class="muted" style="font-size: 12px">{{ t.expires_at ? formatDate(t.expires_at) : '永不过期' }}</td>
-                <td class="muted" style="font-size: 12px">{{ t.last_used_at ? formatDate(t.last_used_at) : '—' }}</td>
-                <td>
-                  <button class="btn btn-sm btn-danger" type="button" @click="revokeToken(t)">吊销</button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-          <div v-else class="muted mb-16" style="font-size: 13px">当前无有效令牌</div>
-
-          <template v-if="revokedServiceTokens.length">
-            <h3 class="token-h muted">已吊销（{{ revokedServiceTokens.length }}）</h3>
-            <table class="table table-muted">
-              <thead>
-                <tr>
-                  <th>名称</th>
-                  <th>前缀</th>
-                  <th>绑定账号</th>
-                  <th>Scopes</th>
-                  <th>创建时间</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="t in revokedServiceTokens" :key="t.id">
-                  <td>{{ t.name }}</td>
-                  <td><code class="token-prefix">{{ t.token_prefix }}…</code></td>
-                  <td>{{ t.username || t.user_id }}</td>
-                  <td>
-                    <span v-for="s in (t.scopes || [])" :key="s" class="badge">{{ s }}</span>
-                  </td>
-                  <td class="muted" style="font-size: 12px">{{ formatDate(t.created_at) }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </template>
-        </template>
-      </section>
+      <AdminTokensPanel v-else-if="section === 'tokens'" />
 
     <ConfirmActionModal
       :show="!!confirmAction"
@@ -1444,66 +1272,6 @@ watch(
       </div>
     </div>
 
-    <div v-if="showTokenModal" class="modal-mask" @click.self="showTokenModal = false">
-      <div class="modal panel" style="max-width: 520px">
-        <div class="modal-header">
-          <h3 style="margin: 0">签发服务令牌</h3>
-          <button class="modal-close" type="button" @click="showTokenModal = false">✕</button>
-        </div>
-        <div class="field">
-          <label>名称 *</label>
-          <input v-model="tokenForm.name" class="input" placeholder="如：零号员工生产 / CI 同步" />
-        </div>
-        <div class="field mt-12">
-          <label>Scopes *</label>
-          <div class="token-scope-list">
-            <label v-for="opt in TOKEN_SCOPE_OPTS" :key="opt.key" class="token-scope-item">
-              <input
-                type="checkbox"
-                :checked="tokenForm.scopes.includes(opt.key)"
-                @change="toggleTokenScope(opt.key)"
-              />
-              <span>
-                <strong>{{ opt.label }}</strong>
-                <span class="muted" style="font-size: 12px; display: block">{{ opt.desc }}</span>
-              </span>
-            </label>
-          </div>
-        </div>
-        <div class="field mt-12">
-          <label>有效天数（留空或 0 = 不设过期，建议 365）</label>
-          <input v-model.number="tokenForm.expires_days" class="input" type="number" min="0" max="3650" />
-        </div>
-        <div v-if="error" class="alert alert-error mt-12">{{ error }}</div>
-        <div class="modal-foot">
-          <span class="muted" style="font-size: 12px">将自动创建/绑定 svc_* 服务账号</span>
-          <div class="flex" style="gap: 10px">
-            <button class="btn" type="button" @click="showTokenModal = false">取消</button>
-            <button class="btn btn-primary" type="button" @click="createServiceToken">签发</button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div v-if="showCreatedToken" class="modal-mask" @click.self="showCreatedToken = false">
-      <div class="modal panel" style="max-width: 560px">
-        <div class="modal-header">
-          <h3 style="margin: 0">请保存令牌明文</h3>
-          <button class="modal-close" type="button" @click="showCreatedToken = false">✕</button>
-        </div>
-        <p class="muted" style="font-size: 13px; margin: 0 0 12px">
-          关闭后无法再次查看完整令牌。请复制到密钥库或桌面/Agent 配置。
-        </p>
-        <code class="token-plain">{{ createdTokenPlain }}</code>
-        <div class="modal-foot">
-          <span class="muted" style="font-size: 12px">用法：Authorization: Bearer &lt;token&gt;</span>
-          <div class="flex" style="gap: 10px">
-            <button class="btn btn-primary" type="button" @click="copyText(createdTokenPlain, 'token')">复制令牌</button>
-            <button class="btn" type="button" @click="showCreatedToken = false">已保存，关闭</button>
-          </div>
-        </div>
-      </div>
-    </div>
   </div>
 </template>
 
