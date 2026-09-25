@@ -313,17 +313,22 @@ async def browse_capabilities(
 
 @router.get("/capabilities/task-search", response_model=TaskSearchOut)
 async def task_search_capabilities(
+    request: Request,
     db: DbSession,
     user: OptionalUser,
     q: str = Query("", max_length=200),
 ):
-    """按要办的事搜索：关键词打分 + 依赖/used_by 扩展，分组返回助手/技能/连接器/安装包。"""
+    """按要办的事搜索：关键词打分 + 依赖/used_by 扩展，分组返回助手/技能/连接器/安装包。
+
+    服务令牌 + ``X-Act-As-Sub`` 时按**目标用户(subject)**的可见性过滤（与浏览/task-search 一致）。
+    """
     query = (q or "").strip()
     if not query:
         return TaskSearchOut()
 
+    viewer = await _viewer_identity(request, db, user)
     conditions: list = [Capability.status == "published"]
-    visibility_where = _visibility_where(user)
+    visibility_where = _visibility_where(viewer)
     if visibility_where is not None:
         conditions.append(visibility_where)
 
