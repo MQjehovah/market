@@ -51,6 +51,9 @@ async def fetch_registry_servers(
     *, search: str = "", limit: int = 20, cursor: str = ""
 ) -> dict[str, Any]:
     """代理官方 registry 列表（管理员预览用），返回原始响应。"""
+    from app.services.egress import enforce_egress
+
+    enforce_egress(f"{REGISTRY_BASE_URL}{REGISTRY_SEARCH_PATH}")
     params: dict[str, Any] = {"limit": max(1, min(int(limit), 100))}
     if search:
         params["search"] = search

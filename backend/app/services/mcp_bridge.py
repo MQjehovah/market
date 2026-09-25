@@ -58,11 +58,25 @@ class MCPBridge:
         files = _read_package(cap)
         raw = files.get("connection.json")
         if raw is None:
-            return {"name": mcp_name, "connected": False, "error": "能力包缺少 connection.json"}
-        try:
-            conn = json.loads(raw.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
-            return {"name": mcp_name, "connected": False, "error": "connection.json 解析失败"}
+            server_raw = files.get("server.json")
+            if server_raw is None:
+                return {
+                    "name": mcp_name,
+                    "connected": False,
+                    "error": "能力包缺少 connection.json 或 server.json",
+                }
+            try:
+                server = json.loads(server_raw.decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                return {"name": mcp_name, "connected": False, "error": "server.json 解析失败"}
+            from app.services.packages import _server_json_connection
+
+            conn = _server_json_connection(server)
+        else:
+            try:
+                conn = json.loads(raw.decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                return {"name": mcp_name, "connected": False, "error": "connection.json 解析失败"}
         transport = conn.get("transport", "stdio")
         if transport == "gateway":
             if self._gateway_loader is None:
@@ -95,6 +109,15 @@ class MCPBridge:
                 "connected": False,
                 "error": f"暂不支持 transport={transport}",
             }
+        # 出网白名单(防 SSRF): remotes/url 上游连接前校验(灰度, 见 egress 模块)
+        if config.get("url"):
+            from app.services.egress import enforce_egress
+
+            try:
+                enforce_egress(config["url"])
+            except Exception as exc:  # noqa: BLE001 — HTTPException 等
+                detail = getattr(exc, "detail", str(exc))
+                return {"name": mcp_name, "connected": False, "error": f"出网校验失败: {detail}"}
         config = attach_platform_env(dict(config), {**self._env, **(env or {})})
         try:
             async with asyncio.timeout(CONNECT_TIMEOUT):
