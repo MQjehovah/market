@@ -147,6 +147,12 @@ const isPlugin = computed(() => cap.value?.type === 'plugin')
 const isWorkflow = computed(() => cap.value?.type === 'workflow')
 const isMcp = computed(() => cap.value?.type === 'mcp')
 const isPublished = computed(() => ['published', 'deprecated'].includes(cap.value?.status))
+/** 展示名: 中文 display_name 优先; name 为标准机器名/内部标识 */
+const displayName = computed(() => (cap.value?.display_name || '').trim() || (cap.value?.name || ''))
+/** 外部导入来源(官方 MCP Registry)与运行时依赖 */
+const provenance = computed(() => cap.value?.provenance || {})
+const requiresBinary = computed(() => (cap.value?.requires?.binary || '').trim())
+const requiresAuth = computed(() => (cap.value?.requires?.auth || '').trim())
 const kindHint = computed(() => kindHintFor(cap.value))
 const shelfName = computed(() => (cap.value ? shelfLabel(cap.value.type) : ''))
 const showTemplateDownload = computed(
@@ -1289,7 +1295,7 @@ onMounted(() => {
       <router-link v-else-if="cap.type === 'plugin'" :to="{ path: '/', query: { shelf: 'install' } }">能力包</router-link>
       <router-link v-else-if="shelfName" :to="{ path: '/', query: { type: cap.type } }">{{ TYPE_LABELS[cap.type] || shelfName }}</router-link>
       <span v-if="cap.type || shelfName">/</span>
-      <span>{{ cap.name }}</span>
+      <span>{{ displayName }}</span>
     </nav>
 
     <div v-if="isOwner" class="owner-progress panel mb-16">
@@ -1328,11 +1334,14 @@ onMounted(() => {
             :class="mcpTrial.canOneClick ? 'badge-success' : 'badge-warning'"
           >{{ mcpTrial.label }}</span>
           <span v-if="isMcp && mcpToolRows.length" class="badge badge-primary">{{ mcpToolRows.length }} 工具</span>
+          <span v-if="provenance.origin === 'mcp-registry'" class="badge badge-primary" :title="provenance.registry_name || '外部导入'">外部导入</span>
+          <span v-if="requiresBinary" class="badge" :title="`依赖本机 CLI：${requiresBinary}`">需 {{ requiresBinary }}</span>
         </div>
         <h1 class="detail-title">
-          {{ cap.name }}
+          {{ displayName }}
           <span class="detail-ver">v{{ cap.version }}</span>
         </h1>
+        <p v-if="cap.slug" class="detail-tagline muted" style="margin-top: -6px">标准名：{{ cap.slug }}</p>
         <p class="detail-tagline">{{ cap.description || '暂无简介' }}</p>
         <div class="detail-byline muted">
           <span>作者 {{ cap.author_name || '-' }}</span>
@@ -2269,6 +2278,10 @@ onMounted(() => {
             <div><dt>数据域</dt><dd>{{ cap.data_domain || '—' }}</dd></div>
             <div v-if="cap.category"><dt>分类</dt><dd>{{ cap.category }}</dd></div>
             <div><dt>作者</dt><dd>{{ cap.author_name || '-' }}</dd></div>
+            <div v-if="cap.slug"><dt>标准名</dt><dd class="mono">{{ cap.slug }}</dd></div>
+            <div v-if="provenance.origin"><dt>来源</dt><dd>{{ provenance.registry_name || provenance.origin }}<span v-if="provenance.license" class="muted"> · {{ provenance.license }}</span></dd></div>
+            <div v-if="requiresBinary"><dt>依赖 CLI</dt><dd class="mono">{{ requiresBinary }}<span v-if="cap.requires.min_version" class="muted"> ≥ {{ cap.requires.min_version }}</span></dd></div>
+            <div v-if="requiresAuth"><dt>依赖登录</dt><dd class="mono">{{ requiresAuth }}</dd></div>
             <div v-if="isMcp"><dt>传输</dt><dd>{{ mcpTransport }}</dd></div>
             <div v-if="isMcp && isPublished"><dt>试用</dt><dd>{{ mcpTrial.label }}</dd></div>
             <div v-if="isMcp && mcpToolRows.length"><dt>工具</dt><dd>{{ mcpToolRows.length }} 个</dd></div>

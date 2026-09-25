@@ -16,6 +16,7 @@ import StatusBadge from '../components/StatusBadge.vue'
 import DebugCapabilityModal from '../components/DebugCapabilityModal.vue'
 import PackagePreview from '../components/PackagePreview.vue'
 import AdminTrialPanel from '../components/AdminTrialPanel.vue'
+import RegistryImportPanel from '../components/RegistryImportPanel.vue'
 import ConfirmActionModal from '../components/ConfirmActionModal.vue'
 
 const route = useRoute()
@@ -769,6 +770,9 @@ watch(
 
       <div v-if="notice" class="alert alert-success mb-12">{{ notice }}</div>
       <div v-if="error" class="alert alert-error mb-12">{{ error }}</div>
+
+      <!-- 官方 MCP Registry 导入(仅元数据, 汇入审核队列) -->
+      <RegistryImportPanel />
 
       <!-- 审核队列 -->
       <section v-if="section === 'review'" class="desk">

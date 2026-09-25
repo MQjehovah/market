@@ -47,6 +47,16 @@ const displayTags = computed(() =>
 
 const fromPlugin = computed(() => (props.cap.tags || []).includes('plugin-component'))
 
+/** 展示名: 中文 display_name 优先(name 为标准机器名/内部标识) */
+const displayName = computed(() => (props.cap.display_name || '').trim() || props.cap.name)
+/** 外部导入(官方 MCP Registry)标记与来源 */
+const isImported = computed(() => (props.cap.provenance?.origin || '') === 'mcp-registry')
+const provenanceTitle = computed(() => {
+  const p = props.cap.provenance || {}
+  return p.registry_name ? `外部导入 · 来源 ${p.registry_name}` : '外部导入'
+})
+const requiresBinary = computed(() => (props.cap.requires?.binary || '').trim())
+
 const iconFailed = ref(false)
 watch(
   () => props.cap.icon_url,
@@ -64,13 +74,13 @@ watch(
           v-if="cap.icon_url && !iconFailed"
           class="type-icon icon-img"
           :src="cap.icon_url"
-          :alt="cap.name"
+          :alt="displayName"
           @error="iconFailed = true"
         />
         <span v-else class="type-icon" :style="{ color, borderColor: color + '55', background: color + '14' }">{{ letter }}</span>
         <StatusBadge :status="cap.status" />
       </div>
-      <h3 class="cap-name">{{ cap.name }}</h3>
+      <h3 class="cap-name" :title="cap.slug ? `${displayName}（${cap.slug}）` : displayName">{{ displayName }}</h3>
       <p class="cap-desc">{{ cap.description || '暂无描述' }}</p>
       <div class="cap-tags">
         <span
@@ -87,6 +97,8 @@ watch(
         >{{ RISK_DEFAULT_LABELS[cap.risk_default] || cap.risk_default }}</span>
         <span v-if="displayCategory" class="badge">{{ displayCategory }}</span>
         <span v-if="fromPlugin" class="badge badge-primary">来自能力包</span>
+        <span v-if="isImported" class="badge badge-primary" :title="provenanceTitle">外部导入</span>
+        <span v-if="requiresBinary" class="badge" :title="`依赖本机 CLI：${requiresBinary}`">需 {{ requiresBinary }}</span>
         <span v-if="policy !== 'optional'" class="badge badge-warning">{{ INSTALL_POLICY_LABELS[policy] || policy }}</span>
         <span v-for="t in displayTags" :key="t" class="badge">{{ t }}</span>
       </div>
