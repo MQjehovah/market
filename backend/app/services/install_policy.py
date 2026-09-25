@@ -14,8 +14,10 @@ logger = logging.getLogger("market.install_policy")
 
 
 async def ensure_default_on_joins(db: AsyncSession, user: User) -> int:
-    """把已发布的 default_on 能力自动加入当前用户的「我的能力」。返回新增条数。
+    """把已发布的 default_on / required 能力自动加入当前用户的「我的能力」。返回新增条数。
 
+    - default_on：默认加入（用户可移除）；
+    - required：组织级必装（UI 不可移除），同样自动加入以保证可用；
     「已加入」按能力名判定（订阅跨版本：重发布后不重复加入新版本行）。
     """
     caps = (
@@ -25,7 +27,7 @@ async def ensure_default_on_joins(db: AsyncSession, user: User) -> int:
             .where(
                 and_(
                     Capability.status == "published",
-                    Capability.install_policy == "default_on",
+                    Capability.install_policy.in_(("default_on", "required")),
                 )
             )
         )
