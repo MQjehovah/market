@@ -13,14 +13,18 @@ from fastapi import HTTPException, status
 REQUIRED_FILES: dict[str, list[str]] = {
     "agent": ["agent.json", "PROMPT.md"],
     "tool": ["tool.json", "schema.json", "implementation/tool.py"],
-    "skill": ["skill.json", "SKILL.md"],
-    "mcp": ["mcp.json", "connection.json", "tools.json", "security.json"],
+    # 标准优先: skill 以 SKILL.md 为准(skill.json 可选); mcp 以 server.json 为准(旧 4 文件兼容)
+    "skill": ["SKILL.md"],
+    "mcp": ["server.json"],
     "workflow": ["workflow.json"],
     "plugin": [],
     "rule": ["rule.json", "RULE.mdc"],
     "command": ["command.json", "COMMAND.md"],
     "hook": ["hook.json", "hooks.json"],
 }
+
+# 旧格式 mcp 包(4 文件)兼容集合
+_MCP_LEGACY_FILES = {"mcp.json", "connection.json", "tools.json", "security.json"}
 
 OPTIONAL_FILES: dict[str, list[str]] = {
     "agent": ["TEAM.md", "tools.json", "knowledge/", "skills/", "examples/", "agents/", "dependencies.json"],
@@ -247,6 +251,93 @@ def validate_tool_schema(schema: Any, label: str = "schema.json") -> dict[str, A
     return schema
 
 
+# ---- 标准优先解析(server.json / SKILL.md) ----
+_STANDARD_SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")  # agentskills.io: 小写连字符, 无首尾/连续连字符
+_MCP_NAMESPACE_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)?$")  # MCP registry: 命名空间 name
+
+
+def _read_text_file(zf: zipfile.ZipFile, zip_name: str) -> str:
+    try:
+        return zf.read(zip_name).decode("utf-8-sig")
+    except Exception:
+        return ""
+
+
+def _parse_frontmatter(text: str) -> dict[str, str]:
+    """极简 frontmatter: 只取顶层 `key: value` 标量(与 agent/dashboard 加载器同构)。"""
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}
+    out: dict[str, str] = {}
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        m = re.match(r"^([A-Za-z_][\w-]*)\s*:\s*(.*)$", line)
+        if m:
+            out[m.group(1)] = m.group(2).strip().strip('"').strip("'")
+    return out
+
+
+def _skill_meta_from_md(zf: zipfile.ZipFile, files: dict[str, str]) -> dict[str, Any]:
+    """从标准 SKILL.md frontmatter 构造内部 meta(兼容 skill.json 缺失)。"""
+    fm = _parse_frontmatter(_read_text_file(zf, files["SKILL.md"]))
+    name = (fm.get("name") or "").strip()
+    if not name:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "SKILL.md 缺少 frontmatter name")
+    if not _STANDARD_SKILL_NAME_RE.match(name):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"SKILL.md name 须为小写字母/数字/连字符(agentskills 规范): {name}",
+        )
+    meta: dict[str, Any] = {
+        "name": name,
+        "slug": name,
+        "description": (fm.get("description") or "").strip(),
+        "version": (fm.get("version") or "0.1.0"),
+        "standard_name": name,
+    }
+    if fm.get("license"):
+        meta["license"] = fm["license"]
+    return meta
+
+
+def _server_json_meta(server: dict[str, Any], label: str) -> dict[str, Any]:
+    """标准 server.json → 内部 meta(name=命名空间 slug; title/description 作展示)。"""
+    name = str(server.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{label} 缺少 name")
+    if not _MCP_NAMESPACE_RE.match(name):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"{label} name 须为 MCP 命名空间(小写, 可含 '.'/'_'/'-' 与可选 '/'), 如 io.github.x/y",
+        )
+    return {
+        "name": name,
+        "slug": name,
+        "display_name": str(server.get("title") or server.get("display_name") or "").strip(),
+        "description": str(server.get("description") or ""),
+        "version": str(server.get("version") or "0.1.0"),
+        "standard_name": name,
+    }
+
+
+def _server_json_connection(server: dict[str, Any]) -> dict[str, Any]:
+    """标准 server.json → 内部 connection(优先 remotes; 否则记 packages 引用, 默认不本地执行)。"""
+    remotes = server.get("remotes")
+    if isinstance(remotes, list):
+        for r in remotes:
+            if isinstance(r, dict) and r.get("url"):
+                conn: dict[str, Any] = {"transport": str(r.get("type") or "streamable-http"), "url": r["url"]}
+                if isinstance(r.get("headers"), dict):
+                    conn["headers"] = r["headers"]
+                return conn
+    pkgs = server.get("packages")
+    if isinstance(pkgs, list) and pkgs and isinstance(pkgs[0], dict):
+        return {"transport": "package", "package": pkgs[0], "command": ""}
+    return {"transport": "stdio", "command": ""}
+
+
 def _validate_agent_embedded(zf: zipfile.ZipFile, files: dict[str, str], meta: dict[str, Any]) -> list[str]:
     """Extra checks for agent packages: skill dirs, mcp config, name uniqueness."""
     warnings: list[str] = []
@@ -335,8 +426,9 @@ def _validate_agent_embedded(zf: zipfile.ZipFile, files: dict[str, str], meta: d
     return warnings
 
 
-def _validate_skill_package(zf: zipfile.ZipFile, files: dict[str, str], meta: dict[str, Any]) -> None:
-    validate_skill_meta(meta, "skill.json", require_version=True)
+def _validate_skill_package(zf: zipfile.ZipFile, files: dict[str, str], meta: dict[str, Any],
+                            label: str = "skill.json") -> None:
+    validate_skill_meta(meta, label, require_version=True)
 
 
 def _validate_mcp_package(zf: zipfile.ZipFile, files: dict[str, str], meta: dict[str, Any], connection: dict[str, Any]) -> list[str]:
@@ -379,27 +471,58 @@ def validate_package(capability_type: str, content: bytes) -> dict[str, Any]:
             _check_name(str(comp["name"]), f"plugin {comp['type']}")
         return {"meta": meta, "files": files, "components": components}
 
-    for required in REQUIRED_FILES.get(capability_type, []):
-        if required not in names:
+    # 必填文件: mcp 标准(server.json) 或旧格式(4 文件)二选一; 其余类型按 REQUIRED_FILES
+    if capability_type == "mcp":
+        if "server.json" not in names and not _MCP_LEGACY_FILES <= names:
             preview = "\u3001".join(sorted(names)[:12]) or "\u7a7a"
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
-                f"{capability_type} \u5305\u7f3a\u5c11\u5fc5\u9700\u6587\u4ef6\uff1a{required}\uff08\u5305\u5185\uff1a{preview}\uff09",
+                "mcp \u5305\u7f3a\u5c11 server.json(\u6807\u51c6) \u6216 mcp.json/connection.json/tools.json/security.json(\u65e7\u683c\u5f0f)"
+                f"\uff08\u5305\u5185\uff1a{preview}\uff09",
             )
+    else:
+        for required in REQUIRED_FILES.get(capability_type, []):
+            if required not in names:
+                preview = "\u3001".join(sorted(names)[:12]) or "\u7a7a"
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    f"{capability_type} \u5305\u7f3a\u5c11\u5fc5\u9700\u6587\u4ef6\uff1a{required}\uff08\u5305\u5185\uff1a{preview}\uff09",
+                )
 
-    meta_file = {
-        "agent": "agent.json",
-        "tool": "tool.json",
-        "skill": "skill.json",
-        "mcp": "mcp.json",
-        "workflow": "workflow.json",
-        "rule": "rule.json",
-        "command": "command.json",
-        "hook": "hook.json",
-    }[capability_type]
-    meta = _read_json(zf, files[meta_file], meta_file)
-    _resolve_meta_name(meta, meta_file)
-    _check_name(str(meta["name"]), meta_file)
+    # 标准优先: skill 以 SKILL.md(skill.json 可选) / mcp 以 server.json(旧格式兼容)
+    _mcp_standard_connection: dict[str, Any] | None = None
+    if capability_type == "skill":
+        if "skill.json" in names:
+            meta_file = "skill.json"
+            meta = _read_json(zf, files[meta_file], meta_file)
+            _resolve_meta_name(meta, meta_file)
+            _check_name(str(meta["name"]), meta_file)
+        else:
+            meta_file = "SKILL.md"
+            meta = _skill_meta_from_md(zf, files)
+    elif capability_type == "mcp":
+        if "server.json" in names:
+            meta_file = "server.json"
+            _server = _read_json(zf, files[meta_file], meta_file)
+            meta = _server_json_meta(_server, meta_file)
+            _mcp_standard_connection = _server_json_connection(_server)
+        else:
+            meta_file = "mcp.json"
+            meta = _read_json(zf, files[meta_file], meta_file)
+            _resolve_meta_name(meta, meta_file)
+            _check_name(str(meta["name"]), meta_file)
+    else:
+        meta_file = {
+            "agent": "agent.json",
+            "tool": "tool.json",
+            "workflow": "workflow.json",
+            "rule": "rule.json",
+            "command": "command.json",
+            "hook": "hook.json",
+        }[capability_type]
+        meta = _read_json(zf, files[meta_file], meta_file)
+        _resolve_meta_name(meta, meta_file)
+        _check_name(str(meta["name"]), meta_file)
 
     details: dict[str, Any] = {"meta": meta, "files": files, "warnings": []}
     if capability_type == "workflow":
@@ -415,14 +538,18 @@ def validate_package(capability_type: str, content: bytes) -> dict[str, Any]:
                     "workflow.json \u6bcf\u4e2a\u8282\u70b9\u5fc5\u987b\u5305\u542b id \u4e0e type",
                 )
     if capability_type == "mcp":
-        details["connection"] = _read_json(zf, files["connection.json"], "connection.json")
-        details["warnings"] = _validate_mcp_package(zf, files, meta, details["connection"])
+        if _mcp_standard_connection is not None:
+            details["connection"] = _mcp_standard_connection
+            details["warnings"] = validate_mcp_connection(_mcp_standard_connection, "server.json")
+        else:
+            details["connection"] = _read_json(zf, files["connection.json"], "connection.json")
+            details["warnings"] = _validate_mcp_package(zf, files, meta, details["connection"])
     elif capability_type == "tool":
         details["schema"] = validate_tool_schema(
             _read_json(zf, files["schema.json"], "schema.json"), "schema.json"
         )
     elif capability_type == "skill":
-        _validate_skill_package(zf, files, meta)
+        _validate_skill_package(zf, files, meta, label=meta_file)
     elif capability_type == "agent":
         details["warnings"] = _validate_agent_embedded(zf, files, meta)
     elif capability_type in ("rule", "command"):

@@ -84,6 +84,12 @@ class Capability(Base):
     binding: Mapped[str] = mapped_column(String(16), default="service")
     # user | service —— 执行身份绑定: user=按提问者代授权(subject, 走 /api/runtime/* 逐请求),
     # service=服务身份(平台持久会话);平台 MCP 轨只挂载 service,user 由 agent 的 market_runtime 调用
+    display_name: Mapped[str] = mapped_column(String(255), default="")
+    # 用户展示名(可中文); name 保持内部身份键不变(M1), 展示一律用本字段
+    slug: Mapped[str] = mapped_column(String(255), default="", index=True)
+    # 标准机器名(MCP server.json.name 命名空间 / Skill SKILL.md.name 小写连字符); 空=未声明标准名
+    provenance: Mapped[dict] = mapped_column(JSON, default=dict)
+    # 来源与合规: {origin, registry_name, source_url, commit, checksum, license, imported_at}
     risk_default: Mapped[str] = mapped_column(String(20), default="read")
     # read | write | destructive
     data_domain: Mapped[str] = mapped_column(String(64), default="")

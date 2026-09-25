@@ -443,6 +443,8 @@ async def sync_capabilities(
         item = {
             "id": cap.id,
             "name": cap.name,
+            "display_name": getattr(cap, "display_name", None) or "",
+            "slug": getattr(cap, "slug", None) or "",
             "type": cap.type,
             "version": cap.version,
             "status": cap.status,

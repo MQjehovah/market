@@ -1,6 +1,6 @@
 """管理后台：审核队列 / 上架与下架 / 用户管理 / 统计。"""
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Body, HTTPException, status
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -102,6 +102,33 @@ async def archive(cap_id: str, db: DbSession, user: CurrentUser):
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
     cap = await change_status(db, cap, "archived")
+    return to_capability_out(cap)
+
+
+# ---- 官方 MCP Registry 导入(仅元数据; 导入为草稿, 待审核) ----
+
+@router.get("/registry/servers")
+async def registry_servers(db: DbSession, user: CurrentUser, search: str = "",
+                           limit: int = 20, cursor: str = ""):
+    """代理官方 MCP Registry 列表(管理员预览)。"""
+    require_admin(user)
+    from app.services.registry_import import fetch_registry_servers
+
+    return await fetch_registry_servers(search=search, limit=limit, cursor=cursor)
+
+
+@router.post("/registry/import", response_model=CapabilityOut)
+async def registry_import(db: DbSession, user: CurrentUser, payload: dict = Body(...)):
+    """导入标准 server.json 为内部能力草稿(仅元数据, 默认不可执行, 待审核)。"""
+    require_admin(user)
+    from app.services.registry_import import import_server
+
+    server = payload.get("server") if isinstance(payload, dict) else None
+    if not isinstance(server, dict) or not server.get("name"):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "缺少 server(标准 server.json)"
+        )
+    cap = await import_server(db, server, user)
     return to_capability_out(cap)
 
 

@@ -92,6 +92,18 @@ async def _auto_migrate(conn) -> None:
             sync_conn.exec_driver_sql(
                 "ALTER TABLE capabilities ADD COLUMN binding VARCHAR(16) DEFAULT 'service'"
             )
+        if "display_name" not in cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE capabilities ADD COLUMN display_name VARCHAR(255) DEFAULT ''"
+            )
+        if "slug" not in cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE capabilities ADD COLUMN slug VARCHAR(255) DEFAULT ''"
+            )
+        if "provenance" not in cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE capabilities ADD COLUMN provenance JSON DEFAULT '{}'"
+            )
         if "risk_default" not in cols:
             sync_conn.exec_driver_sql(
                 "ALTER TABLE capabilities ADD COLUMN risk_default VARCHAR(20) DEFAULT 'read'"

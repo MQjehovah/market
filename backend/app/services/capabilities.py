@@ -234,6 +234,8 @@ def to_capability_out(
         "id": cap.id,
         "name": cap.name,
         "description": cap.description or "",
+        "display_name": getattr(cap, "display_name", None) or "",
+        "slug": getattr(cap, "slug", None) or "",
         "type": cap.type,
         "version": cap.version,
         "status": cap.status,
@@ -255,6 +257,7 @@ def to_capability_out(
         "validation_report": getattr(cap, "validation_report", None) or {},
         "author_id": cap.author_id,
         "organization": cap.organization or "",
+        "provenance": getattr(cap, "provenance", None) or {},
         "input_schema": cap.input_schema or {},
         "usage_count": cap.usage_count,
         "rating_sum": cap.rating_sum,
@@ -349,6 +352,8 @@ async def create_capability(
         install_policy=data.install_policy or "optional",
         distribution=getattr(data, "distribution", None) or "both",
         binding=getattr(data, "binding", None) or "service",
+        display_name=(getattr(data, "display_name", None) or "").strip(),
+        slug=(getattr(data, "slug", None) or "").strip(),
         risk_default=getattr(data, "risk_default", None) or "read",
         data_domain=(getattr(data, "data_domain", None) or "").strip(),
         author_id=user.id,
@@ -458,6 +463,10 @@ async def update_capability(
         cap.distribution = data.distribution
     if getattr(data, "binding", None) is not None:
         cap.binding = data.binding
+    if getattr(data, "display_name", None) is not None:
+        cap.display_name = data.display_name.strip()
+    if getattr(data, "slug", None) is not None:
+        cap.slug = data.slug.strip()
     if data.risk_default is not None:
         cap.risk_default = data.risk_default
     if data.data_domain is not None:

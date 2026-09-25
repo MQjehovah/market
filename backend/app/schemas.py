@@ -1,9 +1,13 @@
 """Pydantic 请求/响应模型。"""
 
+import re
 from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+# 标准机器名(slug)允许字符: MCP 命名空间(io.github.user/server-name) 与 Skill 名(pdf-processing)
+_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9._/-]*$")
 
 CAPABILITY_TYPES = (
     "agent",
@@ -81,6 +85,8 @@ class TokenOut(BaseModel):
 class CapabilityBase(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str = Field(default="", max_length=20000)
+    display_name: str = Field(default="", max_length=255)
+    slug: str = Field(default="", max_length=255, description="标准机器名(MCP server.json.name / Skill name)")
     type: CapabilityType
     version: str = Field(default="0.1.0", max_length=50)
     category: str = Field(default="", max_length=100)
@@ -112,6 +118,19 @@ class CapabilityBase(BaseModel):
     def validate_data_domain(cls, v: str) -> str:
         return (v or "").strip()[:64]
 
+    @field_validator("slug")
+    @classmethod
+    def validate_slug(cls, v: str) -> str:
+        """标准机器名: 空允许; 否则须匹配行业命名(MCP 命名空间 / Skill 小写连字符)。"""
+        value = (v or "").strip()
+        if not value:
+            return ""
+        if len(value) > 255 or not _SLUG_RE.match(value) or value.endswith(("/", ".", "-")):
+            raise ValueError(
+                "slug 须为小写字母/数字/./_/- 且以字母或数字开头(MCP 命名空间或 Skill 名), 如 io.github.x/y 或 pdf-processing"
+            )
+        return value
+
 
 class CapabilityCreate(CapabilityBase):
     pass
@@ -121,6 +140,8 @@ class CapabilityUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     type: CapabilityType | None = None
     description: str | None = None
+    display_name: str | None = Field(default=None, max_length=255)
+    slug: str | None = Field(default=None, max_length=255)
     category: str | None = Field(default=None, max_length=100)
     tags: list[str] | None = None
     visibility: Literal["private", "team", "internal", "public"] | None = None
@@ -131,6 +152,13 @@ class CapabilityUpdate(BaseModel):
     binding: Literal["user", "service"] | None = None
     risk_default: Literal["read", "write", "destructive"] | None = None
     data_domain: str | None = Field(default=None, max_length=64)
+
+    @field_validator("slug")
+    @classmethod
+    def validate_slug_opt(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        return CapabilityBase.validate_slug(v)
 
 
 class InstallPolicyUpdate(BaseModel):
@@ -222,6 +250,7 @@ class CapabilityOut(CapabilityBase):
     organization: str
     changelog: str = ""
     readme_md: str = ""
+    provenance: dict[str, Any] = Field(default_factory=dict)
     icon_url: str = ""
     runtime: RuntimeSpecOut = Field(default_factory=RuntimeSpecOut)
     input_schema: dict[str, Any] = Field(default_factory=dict)
