@@ -308,12 +308,6 @@ const exampleList = computed(() => {
   if (isRemoteOnly.value) return items.filter((s) => !/cap install|--mode local/i.test(s))
   return items
 })
-const validationReport = computed(() => {
-  const raw = cap.value?.validation_report || (cap.value?.input_schema || {})._validation_report
-  if (!raw || typeof raw !== 'object') return null
-  return raw
-})
-
 const contentTab = ref('intro')
 const mcpConnection = ref(null)
 const mcpTools = ref([])
@@ -655,8 +649,8 @@ const contentTabs = computed(() => {
     tabs.push({ key: 'tools', label: `工具（${mcpToolRows.value.length}）` })
   }
   if (isPlugin.value) tabs.push({ key: 'components', label: '组件' })
-  // 配置参数：紧跟「工具/组件」之后，仅作者或管理员可设置
-  if (isMcp.value && (isOwner.value || isAdmin.value)) {
+  // 配置参数：紧跟「工具/组件」之后；参数说明所有人可见，编辑(平台密钥等)仅作者/管理员
+  if (isMcp.value) {
     tabs.push({ key: 'config', label: '配置参数' })
   }
   tabs.push({ key: 'guide', label: '使用指南' })
@@ -1607,19 +1601,6 @@ onMounted(() => {
                   <code v-else>{{ s }}</code>
                 </li>
               </ul>
-            </div>
-            <div v-if="validationReport" class="guide-block">
-              <h3 class="guide-title">校验报告</h3>
-              <div class="guide-body">
-                <div class="muted" style="font-size: 12px; margin-bottom: 8px">上传时结构校验结果（警告不阻断；错误需修复后重传）</div>
-                <div v-if="(validationReport.errors || []).length" style="color: var(--danger); margin-bottom: 8px">
-                  <div v-for="(e, i) in validationReport.errors" :key="'ve-'+i">{{ e }}</div>
-                </div>
-                <ul v-if="(validationReport.warnings || []).length" class="guide-list">
-                  <li v-for="(w, i) in validationReport.warnings" :key="'vw-'+i">{{ w }}</li>
-                </ul>
-                <div v-else-if="!(validationReport.errors || []).length" class="muted" style="font-size: 13px">结构校验通过，无警告。</div>
-              </div>
             </div>
             <div v-if="(cap.artifacts || []).length && canViewPackage" class="guide-block">
               <div class="flex-between flex-wrap" style="align-items: center">
