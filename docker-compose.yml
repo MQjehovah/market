@@ -50,6 +50,8 @@ services:
       # 多 worker 水平扩展(默认 1); 网关 MCP 流式会话无状态(默认 1=开, 多 worker 必需)
       - WORKERS=${WORKERS:-1}
       - MCP_GATEWAY_STATELESS=${MCP_GATEWAY_STATELESS:-1}
+      # 每账户默认开通的能力名(逗号分隔; 登录自动加入「我的能力」, 可自行移除)
+      - DEFAULT_CAPABILITIES=${DEFAULT_CAPABILITIES:-}
       # 安全灰度: 出网白名单(防 SSRF) 与 scope 收窄(默认关; 见 README/docs)
       - MCP_EGRESS_ENFORCE=${MCP_EGRESS_ENFORCE:-}
       - MCP_EGRESS_ALLOW_HOSTS=${MCP_EGRESS_ALLOW_HOSTS:-}

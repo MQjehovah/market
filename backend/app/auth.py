@@ -148,6 +148,8 @@ async def _resolve_sso_user(
         user = await db.scalar(select(User).where(User.username == username))
     if user is None:
         user = _new_sso_user(username, claims)
+        # 新开户标记：仅在账户创建时开通一次默认能力（登录不再重复开通，避免「移出后被加回」）
+        setattr(user, "_provision_defaults", True)
         db.add(user)
         try:
             await db.commit()

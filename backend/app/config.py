@@ -76,6 +76,10 @@ class Settings(BaseSettings):
     # 任意 worker 可服务任意请求，避免会话落单 worker 导致 404）；单 worker 可设 False 复用上游。
     mcp_gateway_stateless: bool = True
 
+    # 每账户默认开通的能力名（逗号分隔）：登录时自动加入「我的能力」（含连带依赖），
+    # 用户可自行移除。取代旧的 install_policy=default_on 机制。
+    default_capabilities: str = ""
+
     # SSO/OIDC 可选接入:配置 sso_issuer 后认证认 SSO token(D-ready)
     sso_issuer: str = ""
     sso_audience: str = ""

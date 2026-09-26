@@ -102,7 +102,7 @@ async def my_capabilities(
     include_components：默认 false，隐藏 plugin 拆出的子能力（仍可在 plugin 详情查看）。
     访问列表时会同步加入 install_policy=default_on 的已发布能力。
     """
-    await ensure_default_on_joins(db, user)
+    # 默认能力仅开户时开通一次（见 auth），列表不再自动补加，确保「移出」生效
     rows = (
         await db.scalars(
             select(UserCapability)
@@ -210,7 +210,7 @@ async def host_sync(db: DbSession, user: CurrentUser, include_components: bool =
     legacy：安装与启用改为各运行端本地各记，市场不再提供 UI 引用；
     保留本接口与 PATCH /my/capabilities 供未来宿主清单兼容，不改字段。
     """
-    await ensure_default_on_joins(db, user)
+    # 默认能力仅开户时开通一次（见 auth），列表不再自动补加，确保「移出」生效
     rows = (
         await db.scalars(
             select(UserCapability)

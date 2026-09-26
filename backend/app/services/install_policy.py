@@ -1,4 +1,4 @@
-"""安装策略：optional / default_on / required 在「我的能力」中的生效逻辑。"""
+"""每账户默认开通能力：登录时把配置指定的能力自动加入「我的能力」（含连带依赖）。"""
 
 import logging
 
@@ -6,6 +6,7 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
+from app.config import get_settings
 from app.models import Capability, User, UserCapability
 from app.services.access import accessible_connected_ids, capability_access_ok
 from app.services.visibility import is_capability_visible
@@ -13,13 +14,22 @@ from app.services.visibility import is_capability_visible
 logger = logging.getLogger("market.install_policy")
 
 
-async def ensure_default_on_joins(db: AsyncSession, user: User) -> int:
-    """把已发布的 default_on / required 能力自动加入当前用户的「我的能力」。返回新增条数。
+def default_capability_names() -> list[str]:
+    """配置的每账户默认开通能力名（DEFAULT_CAPABILITIES，逗号分隔）。"""
+    raw = get_settings().default_capabilities or ""
+    return [n.strip() for n in raw.split(",") if n.strip()]
 
-    - default_on：默认加入（用户可移除）；
-    - required：组织级必装（UI 不可移除），同样自动加入以保证可用；
-    「已加入」按能力名判定（订阅跨版本：重发布后不重复加入新版本行）。
+
+async def ensure_default_on_joins(db: AsyncSession, user: User) -> int:
+    """把配置指定的能力（default_capabilities）自动加入当前用户的「我的能力」。返回新增条数。
+
+    - 取代旧的 install_policy=default_on/required 机制：默认开通是**按账户配置**的，不是能力属性；
+    - 含连带依赖（plugin 组件 / agent 依赖），无可见性/访问权限的项跳过；
+    - 「已加入」按能力名判定（订阅跨版本：重发布后不重复加入新版本行）。
     """
+    names = default_capability_names()
+    if not names:
+        return 0
     caps = (
         await db.scalars(
             select(Capability)
@@ -27,7 +37,7 @@ async def ensure_default_on_joins(db: AsyncSession, user: User) -> int:
             .where(
                 and_(
                     Capability.status == "published",
-                    Capability.install_policy.in_(("default_on", "required")),
+                    Capability.name.in_(names),
                 )
             )
         )

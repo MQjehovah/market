@@ -270,6 +270,13 @@ async def create_user(data: UserAdminCreate, db: DbSession, user: CurrentUser):
     db.add(new_user)
     await db.commit()
     await db.refresh(new_user)
+    # 新开户：按配置开通一次默认能力（可自行移除）
+    try:
+        from app.services.install_policy import ensure_default_on_joins
+
+        await ensure_default_on_joins(db, new_user)
+    except Exception:  # noqa: BLE001
+        pass
     return UserOut.model_validate(new_user)
 
 

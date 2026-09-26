@@ -40,7 +40,6 @@ async def login(data: UserLogin, request: Request, db: DbSession):
     if not user.is_active:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "账号已被禁用")
     _login_failures.pop(key, None)
-    await ensure_default_on_joins(db, user)
     return TokenOut(access_token=create_access_token(user), user=UserOut.model_validate(user))
 
 
@@ -108,7 +107,9 @@ async def oidc_callback(db: DbSession, code: str = "", state: str = ""):
         )
     except HTTPException as e:
         return _sso_login_redirect(str(e.detail), next_path)
-    await ensure_default_on_joins(db, user)
+    # 仅新开户时开通一次默认能力（可自行移除且不会被重新加回）
+    if getattr(user, "_provision_defaults", False):
+        await ensure_default_on_joins(db, user)
     token = create_access_token(user)
     target = (get_settings().sso_redirect_target or "/login").strip() or "/login"
     target = _with_query(target, sso_token=token, redirect=next_path)
