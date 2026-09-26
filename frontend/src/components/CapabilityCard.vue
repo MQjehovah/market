@@ -5,8 +5,6 @@ import {
   INSTALL_POLICY_LABELS,
   TYPE_COLORS,
   TYPE_LABELS,
-  TYPE_LETTER,
-  shelfLabel,
   stars
 } from '../utils/format'
 import StatusBadge from './StatusBadge.vue'
@@ -18,9 +16,11 @@ const props = defineProps({
 })
 const emit = defineEmits(['add'])
 
-const letter = computed(() => TYPE_LETTER[props.cap.type] || '?')
+const letter = computed(() => {
+  const n = (displayName.value || '').trim()
+  return n ? n.slice(0, 1).toUpperCase() : '?'
+})
 const color = computed(() => TYPE_COLORS[props.cap.type] || 'var(--primary)')
-const shelf = computed(() => shelfLabel(props.cap.type))
 const policy = computed(() => props.cap.install_policy || 'optional')
 const canRemove = computed(() => props.cap.removable !== false && policy.value !== 'required')
 /** 已上架是浏览页常态，不必每卡都标；非上架状态才提示 */
@@ -79,7 +79,10 @@ const dateStr = computed(() => fmtDate(props.cap.updated_at || props.cap.created
 const usage = computed(() => Number(props.cap.usage_count || 0))
 const ratingCount = computed(() => Number(props.cap.rating_count || 0))
 const subline = computed(() => {
-  const parts = [TYPE_LABELS[props.cap.type] || props.cap.type]
+  const parts = []
+  const n = (props.cap.name || '').trim()
+  // 标题为显示名时，第二行给出能力名(通常英文标识)便于区分
+  if (n && n !== displayName.value) parts.push(n)
   if (props.cap.version) parts.push(`v${props.cap.version}`)
   return parts.join(' · ')
 })
@@ -108,8 +111,9 @@ watch(
         <span v-else class="type-icon" :style="{ color, borderColor: color + '55', background: color + '14' }">{{ letter }}</span>
         <div class="head-text">
           <h3 class="cap-name" :title="cap.slug ? `${displayName}（${cap.slug}）` : displayName">{{ displayName }}</h3>
-          <div class="head-sub">{{ subline }}<span v-if="shelf"> · {{ shelf }}</span></div>
+          <div class="head-sub">{{ subline }}</div>
         </div>
+        <span class="type-pill">{{ TYPE_LABELS[cap.type] || cap.type }}</span>
         <StatusBadge v-if="showStatus" :status="cap.status" />
       </div>
       <p class="cap-desc">{{ cap.description || '暂无描述' }}</p>
@@ -181,6 +185,11 @@ watch(
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .head-sub { margin-top: 3px; font-size: 12px; color: var(--muted); }
+.type-pill {
+  flex: none; align-self: flex-start;
+  padding: 1px 8px; border-radius: 999px; font-size: 11px; white-space: nowrap;
+  color: var(--muted); background: var(--panel-2); border: 1px solid var(--border);
+}
 .cap-desc {
   color: var(--muted); font-size: 13px; margin: 12px 0;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;

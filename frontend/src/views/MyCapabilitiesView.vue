@@ -115,6 +115,11 @@ function typeColor(type) {
 function typeInitial(type) {
   return (TYPE_LABELS[type] || type || '?').slice(0, 1)
 }
+/** 默认头像用「名称/显示名」首字符（不是类型） */
+function nameInitial(cap) {
+  const n = String(cap?.display_name || cap?.name || '?').trim()
+  return n ? n.slice(0, 1).toUpperCase() : '?'
+}
 
 const iconErrors = ref(new Set())
 function markIconError(id) {
@@ -395,7 +400,7 @@ onMounted(() => {
                   :alt="cap.name"
                   @error="markIconError(cap.id)"
                 />
-                <div v-else class="skill-icon" :style="{ background: typeColor(cap.type) }">{{ typeInitial(cap.type) }}</div>
+                <div v-else class="skill-icon" :style="{ background: typeColor(cap.type) }">{{ nameInitial(cap) }}</div>
                 <div class="skill-meta">
                   <div class="skill-name-row">
                     <router-link class="skill-name" :to="`/capabilities/${cap.id}`">{{ cap.name }}</router-link>
@@ -453,7 +458,7 @@ onMounted(() => {
                   :alt="cap.name"
                   @error="markIconError(cap.id)"
                 />
-                <div v-else class="skill-icon" :style="{ background: typeColor(cap.type) }">{{ typeInitial(cap.type) }}</div>
+                <div v-else class="skill-icon" :style="{ background: typeColor(cap.type) }">{{ nameInitial(cap) }}</div>
                 <div class="skill-meta">
                   <div class="skill-name-row">
                     <router-link class="skill-name" :to="`/capabilities/${cap.id}`">{{ cap.name }}</router-link>

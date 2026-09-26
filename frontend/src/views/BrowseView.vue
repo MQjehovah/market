@@ -56,6 +56,7 @@ const noticeHref = ref('')
 
 const browseTabs = [
   { key: '', label: '推荐', hint: '专家与依赖（技能 / 连接器）的精选与热门' },
+  { key: 'all', label: '全部', hint: '全部能力：专家 / 技能 / 连接器 / 更多' },
   { key: 'agent', label: '专家', hint: '场景级问答专家；依赖随专家生效' },
   { key: 'skill', label: '技能', hint: '问答 SOP；装进专家后提问即可按该流程回答' },
   { key: 'mcp', label: '连接器', hint: '给专家接外部系统' },
@@ -123,7 +124,7 @@ const pageContext = computed(() => {
     return { eyebrow: '分类', title: s.label, desc: s.description }
   }
   if (filters.shelf === 'all') {
-    return { eyebrow: '能力总览', title: '搜索结果', desc: '含专家、技能、连接器与更多类型。' }
+    return { eyebrow: '目录', title: '全部能力', desc: '含专家、技能、连接器与更多类型。' }
   }
   if (filters.sort === 'usage') {
     return { eyebrow: '目录', title: '近期热门', desc: '按使用次数排列。范围仍是当前目录。' }
@@ -172,7 +173,7 @@ const activeBrowseTab = computed(() => {
   if (filters.type === 'agent') return 'agent'
   if (filters.type === 'mcp') return 'mcp'
   if (MORE_BROWSE_KINDS.includes(filters.type)) return 'more'
-  if (filters.shelf === 'all') return ''
+  if (filters.shelf === 'all' && !filters.q) return 'all'
   return ''
 })
 
@@ -325,7 +326,8 @@ async function addToMy(cap) {
 
 function selectBrowseTab(key) {
   const query = {}
-  if (key === 'skill') query.type = 'skill'
+  if (key === 'all') query.shelf = 'all'
+  else if (key === 'skill') query.type = 'skill'
   else if (key === 'mcp') query.type = 'mcp'
   else if (key === 'agent') query.type = 'agent'
   else if (key === 'more') {

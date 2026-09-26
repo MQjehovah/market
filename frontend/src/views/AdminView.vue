@@ -194,6 +194,12 @@ function typeInitial(type) {
   return (TYPE_LABELS[type] || type || '?').slice(0, 1)
 }
 
+/** 默认头像用「名称/显示名」首字符（不是类型） */
+function nameInitial(cap) {
+  const n = String(cap?.display_name || cap?.name || '?').trim()
+  return n ? n.slice(0, 1).toUpperCase() : '?'
+}
+
 const iconErrors = ref(new Set())
 function markIconError(id) {
   iconErrors.value = new Set([...iconErrors.value, id])
@@ -771,7 +777,7 @@ watch(
                     :alt="cap.name"
                     @error="markIconError(cap.id)"
                   />
-                  <div v-else class="skill-icon" :style="{ background: typeColor(cap.type) }">{{ typeInitial(cap.type) }}</div>
+                  <div v-else class="skill-icon" :style="{ background: typeColor(cap.type) }">{{ nameInitial(cap) }}</div>
                   <div class="skill-meta">
                     <div class="skill-name-row">
                       <span class="skill-name">{{ cap.name }}</span>
@@ -796,7 +802,7 @@ watch(
                       :alt="selectedCap.name"
                       @error="markIconError(selectedCap.id)"
                     />
-                    <div v-else class="skill-icon lg" :style="{ background: typeColor(selectedCap.type) }">{{ typeInitial(selectedCap.type) }}</div>
+                    <div v-else class="skill-icon lg" :style="{ background: typeColor(selectedCap.type) }">{{ nameInitial(selectedCap) }}</div>
                     <div>
                       <div class="detail-name-row">
                         <h3 class="detail-name">{{ selectedCap.name }}</h3>
@@ -927,7 +933,7 @@ watch(
                       :alt="cap.name"
                       @error="markIconError(cap.id)"
                     />
-                    <div v-else class="skill-icon" :style="{ background: typeColor(cap.type) }">{{ typeInitial(cap.type) }}</div>
+                    <div v-else class="skill-icon" :style="{ background: typeColor(cap.type) }">{{ nameInitial(cap) }}</div>
                     <div class="skill-meta">
                       <div class="skill-name-row">
                         <router-link class="skill-name link" :to="`/capabilities/${cap.id}`">{{ cap.display_name || cap.name }}</router-link>
