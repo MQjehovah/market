@@ -23,7 +23,7 @@ import ConfirmActionModal from '../components/ConfirmActionModal.vue'
 
 const route = useRoute()
 const router = useRouter()
-/** mainTab: owned | added — 「我发布的 / 自定义」 */
+/** mainTab: owned | added — 「我发布的 / 已加入」 */
 const mainTab = ref('owned')
 const caps = ref([])
 const loading = ref(false)
@@ -314,7 +314,7 @@ onMounted(() => {
       <div>
         <h1 class="page-title">我的能力</h1>
         <p class="page-desc muted">
-          「自定义」是已加入的能力；安装与启用由零号员工 / 桌面各自本地记录。
+          「已加入」是你从能力市场加入的能力；安装与启用由零号员工 / 桌面各自本地记录。
           「我发布的」走草稿与审核。{{ JOIN_VS_INSTALL_HINT }}
         </p>
       </div>
@@ -330,7 +330,7 @@ onMounted(() => {
         <span class="count">{{ tabCounts.owned }}</span>
       </button>
       <button type="button" class="main-tab" :class="{ active: mainTab === 'added' }" @click="switchTab('added')">
-        自定义
+        已加入
         <span class="count">{{ tabCounts.added }}</span>
       </button>
     </div>
