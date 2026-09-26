@@ -8,6 +8,8 @@
 """
 
 import base64
+import hashlib
+import hmac
 import json
 import secrets
 import threading
@@ -225,10 +227,6 @@ def exchange_code(code: str) -> str:
     return id_token
 
 
-_states: dict[str, tuple[float, str] | float] = {}
-_states_lock = threading.Lock()
-
-
 def safe_next_path(raw: str | None) -> str:
     """只保留站内相对路径。外链、协议相对地址和登录页本身都丢掉。"""
     if not raw:
@@ -246,29 +244,52 @@ def safe_next_path(raw: str | None) -> str:
     return value
 
 
+def _state_secret() -> bytes:
+    """state 签名密钥：复用 JWT_SECRET（多 worker 同值 → 无进程内状态）。"""
+    from app.config import get_settings
+
+    secret = getattr(get_settings(), "jwt_secret", "") or ""
+    return (secret or "market-sso-state-fallback").encode("utf-8")
+
+
 def new_state(next_path: str = "") -> str:
-    """生成一次性 state，并记下登录成功后要回到的站内路径。"""
-    st = secrets.token_urlsafe(16)
-    with _states_lock:
-        _states[st] = (time.time(), safe_next_path(next_path))
-    return st
+    """生成**无状态**签名 state（含回跳路径+时间戳+HMAC）。
+
+    多 worker 部署下不再依赖进程内字典：任意 worker 都能校验，杜绝
+    「SSO 登录状态已失效」的随机失败。
+    """
+    nxt = safe_next_path(next_path)
+    b64 = base64.urlsafe_b64encode(nxt.encode("utf-8")).decode("ascii").rstrip("=")
+    body = f"{int(time.time())}.{secrets.token_urlsafe(8)}.{b64}"
+    sig = hmac.new(_state_secret(), body.encode("ascii"), hashlib.sha256).hexdigest()[:32]
+    return f"{body}.{sig}"
 
 
 def consume_state(state: str) -> str | None:
-    """校验并消费 state。失效返回 None；成功返回站内回跳路径（可为空串）。"""
-    with _states_lock:
-        found = _states.pop(state, None)
-    if found is None:
+    """校验无状态签名 state。失效返回 None；成功返回站内回跳路径（可为空串）。"""
+    if not state or not isinstance(state, str):
         return None
-    if isinstance(found, tuple):
-        ts, nxt = found
-    else:
-        ts, nxt = found, ""
+    parts = state.split(".")
+    if len(parts) != 4:
+        return None
+    ts_s, nonce, b64, sig = parts
+    body = f"{ts_s}.{nonce}.{b64}"
+    expected = hmac.new(_state_secret(), body.encode("ascii"), hashlib.sha256).hexdigest()[:32]
+    if not hmac.compare_digest(sig, expected):
+        return None
+    try:
+        ts = int(ts_s)
+    except ValueError:
+        return None
     if (time.time() - ts) > STATE_TTL_SECONDS:
         return None
-    return nxt if isinstance(nxt, str) else ""
+    try:
+        pad = "=" * (-len(b64) % 4)
+        return base64.urlsafe_b64decode(b64 + pad).decode("utf-8")
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def validate_state(state: str) -> bool:
-    """校验并消费 state:过期/不存在返回 False。"""
+    """校验 state:签名非法/过期返回 False。"""
     return consume_state(state) is not None
