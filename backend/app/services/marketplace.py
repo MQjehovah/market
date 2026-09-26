@@ -332,20 +332,38 @@ def read_agent_prompt(cap: Capability, *, max_chars: int = 50000) -> str:
     return text[:max_chars] if max_chars > 0 else text
 
 
+async def _dep_distribution(db: AsyncSession, name: str, dep_type: str) -> str:
+    """查依赖能力（最新 published）的 distribution，供调用方判定"本地 vs 平台"。"""
+    stmt = (
+        select(Capability)
+        .where(
+            Capability.name == name,
+            Capability.type == dep_type,
+            Capability.status == "published",
+        )
+        .order_by(Capability.created_at.desc())
+    )
+    row = (await db.scalars(stmt)).first()
+    return str(getattr(row, "distribution", "") or "") if row else ""
+
+
 async def fetch_agent_persona(db: AsyncSession, user: User, cap: Capability) -> dict[str, Any]:
-    """线上拉取助手人设：返回 PROMPT.md + 可加入的依赖清单（不下载 zip、不跑任务）。"""
+    """线上拉取助手人设：返回 PROMPT.md + 可加入的依赖清单（含 type/distribution；不下载 zip、不跑任务）。"""
     if cap.type != "agent":
         raise ValueError(f"{cap.name} 不是 agent 能力")
     prompt = read_agent_prompt(cap)
-    deps = [
-        {
-            "name": str(d.get("name") or ""),
-            "type": str(d.get("type") or ""),
+    deps: list[dict[str, str]] = []
+    for d in _read_agent_join_manifest(cap):
+        name = str(d.get("name") or "")
+        dep_type = str(d.get("type") or "")
+        if not (name and dep_type):
+            continue
+        deps.append({
+            "name": name,
+            "type": dep_type,
             "version": str(d.get("version") or ""),
-        }
-        for d in _read_agent_join_manifest(cap)
-        if d.get("name") and d.get("type")
-    ]
+            "distribution": await _dep_distribution(db, name, dep_type),
+        })
     await record_usage(
         db,
         user,
