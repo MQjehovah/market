@@ -185,7 +185,8 @@ async def mcp_connect(name: str, db: DbSession, user: CurrentUser, subject: Runt
         info = await bridge.connect_capability(name, cap)
         await record_usage(db, subject, cap, "mcp_connect", {"tools": len(bridge.tool_defs)})
         await db.commit()
-        return {
+        await db.refresh(cap)
+        return _result(cap, "mcp_connect", f"连接器「{cap.name}」连接{'成功' if info.get('connected') else '失败'}", {
             "mcp": cap.name,
             "version": cap.version,
             "connected": info.get("connected"),
@@ -199,7 +200,7 @@ async def mcp_connect(name: str, db: DbSession, user: CurrentUser, subject: Runt
                   for t in bridge.tool_defs
               ],
             "secrets_injected": sorted(platform_env.keys()),
-        }
+        })
     finally:
         await bridge.close()
 
@@ -254,13 +255,14 @@ async def mcp_call(
             conversation_id=conversation_id,
         )
         await db.commit()
-        return {
+        await db.refresh(cap)
+        return _result(cap, "mcp_call", f"连接器「{cap.name}」工具 {data.tool} 调用成功", {
             "mcp": cap.name,
             "version": cap.version,
             "tool": data.tool,
             "result": result,
             "duration_ms": duration_ms,
-        }
+        })
     except HTTPException:
         raise
     except Exception:
@@ -284,10 +286,13 @@ async def mcp_call(
         await bridge.close()
 
 
-@router.get("/mcp/discover")
+@router.get("/mcp/discover", response_model=RuntimeResult)
 async def discover(db: DbSession, user: CurrentUser, subject: RuntimeSubject):
     tools = await discover_mcp(db, subject)
-    return {"discovered": tools}
+    return RuntimeResult(
+        ok=True, capability=None, action="mcp_discover",
+        message=f"发现 {len(tools)} 个连接器工具", result={"discovered": tools},
+    )
 
 
 @router.get("/health")
@@ -295,7 +300,7 @@ async def health():
     return {"status": "ok", "service": "marketplace-core"}
 
 
-@router.post("/agents/{name}/tasks", response_model=RuntimeTaskOut)
+@router.post("/agents/{name}/tasks", response_model=RuntimeResult)
 async def run_agent_task(name: str, data: RuntimeTaskRequest, db: DbSession, user: CurrentUser, subject: RuntimeSubject):
     """直接向 Agent 发送任务：LLM 已配置时真实执行（工具沙箱 + 工具调用循环），否则模拟。"""
     from app.services.agent_runner import run_agent
@@ -314,7 +319,8 @@ async def run_agent_task(name: str, data: RuntimeTaskRequest, db: DbSession, use
     if cap.type != "agent":
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{name} 不是 Agent 能力")
     result = await run_agent(db, subject, cap, data.task)
-    return RuntimeTaskOut(
+    await db.refresh(cap)
+    payload = RuntimeTaskOut(
         task_id=str(uuid.uuid4()),
         agent=cap.name,
         version=cap.version,
@@ -324,3 +330,4 @@ async def run_agent_task(name: str, data: RuntimeTaskRequest, db: DbSession, use
         runtime=result.get("runtime", {}),
         steps=result.get("steps", []),
     )
+    return _result(cap, "agent_task", f"Agent「{cap.name}」任务完成（{payload.mode}）", payload.model_dump())

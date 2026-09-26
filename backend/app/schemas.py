@@ -473,7 +473,7 @@ class AccessPolicyUpdate(BaseModel):
 
 class RuntimeResult(BaseModel):
     ok: bool = True
-    capability: CapabilityOut
+    capability: CapabilityOut | None = None
     action: str
     message: str
     result: dict[str, Any] = Field(default_factory=dict)

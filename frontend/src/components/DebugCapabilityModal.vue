@@ -263,9 +263,10 @@ async function connectMcp() {
   mcpConnecting.value = true
   try {
     const res = await api.post(`/runtime/mcp/${encodeURIComponent(cap.name)}/connect`)
-    mcpConnected.value = !!res.connected
-    mcpTools.value = res.tools || []
-    if (!res.connected) mcpError.value = res.error || '连接失败'
+    const r = res && res.result ? res.result : res || {}
+    mcpConnected.value = !!r.connected
+    mcpTools.value = r.tools || []
+    if (!r.connected) mcpError.value = r.error || '连接失败'
     else if (mcpTools.value.length && !mcpSelected.value) {
       mcpSelected.value = mcpTools.value[0].name
     }
@@ -283,10 +284,11 @@ async function callMcp() {
   error.value = ''
   busy.value = true
   try {
-    result.value = await api.post(`/runtime/mcp/${encodeURIComponent(cap.name)}/call`, {
+    const res = await api.post(`/runtime/mcp/${encodeURIComponent(cap.name)}/call`, {
       tool: mcpSelected.value,
       params: collectMcpParams()
     })
+    result.value = res && res.result ? res.result : res
   } catch (e) {
     error.value = e.message
   } finally {
@@ -297,30 +299,31 @@ async function callMcp() {
 const resultState = computed(() => {
   const r = result.value
   if (!r) return null
+  // 兼容统一信封 {ok,action,capability,result} 与旧顶层字段
+  const pick = (k) => (r[k] !== undefined ? r[k] : r.result ? r.result[k] : undefined)
   if (isTool.value) {
+    const st = pick('status')
     return {
-      ok: r.result?.status === 'ok',
-      label: r.result?.status === 'ok' ? '调用成功' : '调用失败',
-      extra: r.result?.execution ? `执行方式：${r.result.execution}` : ''
+      ok: st === 'ok',
+      label: st === 'ok' ? '调用成功' : '调用失败',
+      extra: pick('execution') ? `执行方式：${pick('execution')}` : ''
     }
   }
   if (isAgentLike.value) {
+    const mode = pick('mode')
     return {
-      ok: r.mode === 'llm',
-      label: r.mode === 'llm' ? '真实执行（LLM）' : '模拟执行',
-      extra: `工具调用 ${r.tool_calls ?? 0} 次`
+      ok: mode === 'llm',
+      label: mode === 'llm' ? '真实执行（LLM）' : '模拟执行',
+      extra: `工具调用 ${pick('tool_calls') ?? 0} 次`
     }
   }
   if (isWorkflow.value) {
-    return {
-      ok: r.state === 'succeeded',
-      label: `状态：${r.state}`,
-      extra: r.error || ''
-    }
+    const st = pick('state')
+    return { ok: st === 'succeeded', label: `状态：${st}`, extra: pick('error') || '' }
   }
-  if (isSkill.value) return { ok: !!r.activated, label: r.activated ? '已激活' : '激活失败', extra: '' }
-  if (isMcp.value && r.tool) return { ok: true, label: `连接器工具：${r.tool}`, extra: '' }
-  return { ok: !!r.installed, label: r.installed ? '已安装' : '安装失败', extra: '' }
+  if (isSkill.value) return { ok: !!pick('activated'), label: pick('activated') ? '已激活' : '激活失败', extra: '' }
+  if (isMcp.value && pick('tool')) return { ok: true, label: `连接器工具：${pick('tool')}`, extra: '' }
+  return { ok: !!pick('installed'), label: pick('installed') ? '已安装' : '安装失败', extra: '' }
 })
 
 function stepBadge(name) {
