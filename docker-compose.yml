@@ -47,6 +47,9 @@ services:
       - LLM_MODEL=${LLM_MODEL:-}
       - AGENT_MAX_ITERATIONS=${AGENT_MAX_ITERATIONS:-10}
       - RUNTIME_ACCESS_ROLES=${RUNTIME_ACCESS_ROLES:-admin}
+      # 多 worker 水平扩展(默认 1); 网关 MCP 流式会话无状态(默认 1=开, 多 worker 必需)
+      - WORKERS=${WORKERS:-1}
+      - MCP_GATEWAY_STATELESS=${MCP_GATEWAY_STATELESS:-1}
       # 安全灰度: 出网白名单(防 SSRF) 与 scope 收窄(默认关; 见 README/docs)
       - MCP_EGRESS_ENFORCE=${MCP_EGRESS_ENFORCE:-}
       - MCP_EGRESS_ALLOW_HOSTS=${MCP_EGRESS_ALLOW_HOSTS:-}
@@ -59,7 +62,7 @@ services:
       - SSO_CLIENT_SECRET=${SSO_CLIENT_SECRET:-}
       - SSO_REDIRECT_URI=${SSO_REDIRECT_URI:-http://192.168.31.34:8093/api/auth/oidc/callback}
       - SSO_REDIRECT_TARGET=${SSO_REDIRECT_TARGET:-/login}
-    command: ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port 8093 --root-path /market --proxy-headers --forwarded-allow-ips=* --workers 1"]
+    command: ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port 8093 --root-path /market --proxy-headers --forwarded-allow-ips=* --workers ${WORKERS:-1}"]
     restart: unless-stopped
 
 volumes:

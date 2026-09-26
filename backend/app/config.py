@@ -72,6 +72,10 @@ class Settings(BaseSettings):
     # MCP 安装、工作流执行、A2A 委派）。默认仅管理员，可配成 "admin,publisher" 等。
     runtime_access_roles: str = "admin"
 
+    # MCP 网关 Streamable HTTP 是否无状态：多 worker 部署必须为 True（服务器不分配会话，
+    # 任意 worker 可服务任意请求，避免会话落单 worker 导致 404）；单 worker 可设 False 复用上游。
+    mcp_gateway_stateless: bool = True
+
     # SSO/OIDC 可选接入:配置 sso_issuer 后认证认 SSO token(D-ready)
     sso_issuer: str = ""
     sso_audience: str = ""

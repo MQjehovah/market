@@ -791,7 +791,13 @@ class GatewayEndpoints:
         await self._stream_ready.wait()
 
     async def _run_stream_manager(self) -> None:
-        manager = StreamableHTTPSessionManager(self._server, json_response=True)
+        from app.config import get_settings
+
+        manager = StreamableHTTPSessionManager(
+            self._server,
+            json_response=True,
+            stateless=bool(get_settings().mcp_gateway_stateless),
+        )
         self._stream_manager = manager
         try:
             async with manager.run():
