@@ -534,7 +534,10 @@ async def categories(db: DbSession, user: OptionalUser):
     visibility_where = _visibility_where(user)
     stmt = (
         select(Capability.type, Capability.category)
-        .where(Capability.category != "")
+        .where(
+            Capability.category != "",
+            Capability.status == "published",
+        )
         .distinct()
     )
     if visibility_where is not None:
@@ -543,6 +546,8 @@ async def categories(db: DbSession, user: OptionalUser):
     result: dict[str, list[str]] = {}
     for cap_type, cat in rows:
         result.setdefault(cap_type, []).append(cat)
+    for values in result.values():
+        values.sort()
     return result
 
 
