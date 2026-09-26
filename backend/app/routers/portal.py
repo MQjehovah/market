@@ -804,7 +804,7 @@ async def upload_capability_icon(
     _require_icon_owner(cap, user)
     declared = (file.content_type or "").lower()
     if not declared.startswith("image/"):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "仅支持 png/jpg/webp 图片")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "仅支持 png/jpg/webp/svg 图片")
     data = await file.read()
     if not data:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "图片内容为空")
@@ -813,8 +813,10 @@ async def upload_capability_icon(
     ext = sniff_icon_ext(data)
     if ext is None:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, "图片格式无效（仅支持 png/jpg/webp）"
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "图片格式无效（仅支持 png/jpg/webp/svg）"
         )
+    if ext == ".svg" and b"<script" in data.lower():
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "SVG 不允许包含脚本")
     old = cap.icon_path or ""
     cap.icon_path = save_icon_file(cap.id, ext, data)
     await db.commit()

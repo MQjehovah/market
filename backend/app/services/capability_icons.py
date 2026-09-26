@@ -10,17 +10,20 @@ from app.config import get_settings
 
 MAX_ICON_BYTES = 256 * 1024
 
-_MEDIA_BY_EXT = {".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp"}
+_MEDIA_BY_EXT = {".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp", ".svg": "image/svg+xml"}
 
 
 def sniff_icon_ext(data: bytes) -> str | None:
-    """按 magic bytes 识别图片类型（不信任客户端声明）。"""
+    """按 magic bytes 识别图片类型（供上传校验）。支持 PNG / JPEG / WebP / SVG。"""
     if data.startswith(b"\x89PNG\r\n\x1a\n"):
         return ".png"
     if data.startswith(b"\xff\xd8\xff"):
         return ".jpg"
     if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return ".webp"
+    head = data[:2048].lstrip()
+    if head.startswith(b"<svg") or (head.startswith(b"<?xml") and b"<svg" in head):
+        return ".svg"
     return None
 
 
