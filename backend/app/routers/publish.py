@@ -4,7 +4,7 @@ import io
 import json
 import zipfile
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload, selectinload
@@ -16,6 +16,7 @@ from app.schemas import (
     CapabilityOut,
     CapabilityUpdate,
     MessageOut,
+    PackageEditSave,
     VersionCreate,
 )
 from app.services.capabilities import (
@@ -28,11 +29,13 @@ from app.services.capabilities import (
     get_visible_capabilities,
     highest_version,
     next_version,
+    read_capability_files,
     submit_for_review,
     to_capability_out,
     update_capability,
     withdraw_capability,
 )
+from app.services.capability_package import apply_package
 from app.services.packages import prepare_package
 from app.storage import get_storage
 
@@ -320,3 +323,82 @@ async def remove_capability(cap_id: str, db: DbSession, user: CurrentUser):
         raise HTTPException(status.HTTP_409_CONFLICT, "仅草稿、待审、驳回或打回状态的能力可以删除")
     await delete_capability(db, cap)
     return MessageOut(message="已删除")
+
+
+def _norm_pkg_path(raw: str) -> str:
+    path = str(raw or "").strip().replace("\\", "/").lstrip("/")
+    if not path or path.endswith("/"):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "请提供包内文件路径")
+    if ".." in path.split("/"):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"非法路径：{raw}")
+    return path
+
+
+def _zip_files(files: dict[str, bytes]) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for path, content in files.items():
+            zf.writestr(path, content)
+    return buf.getvalue()
+
+
+def _require_package_editable(cap: Capability, user) -> None:
+    _require_owner(cap, user)
+    if cap.status not in UPLOADABLE_STATUSES:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "仅草稿、打回、驳回或待审状态可编辑文件；已发布请先创建新版本",
+        )
+
+
+@router.put("/capabilities/{cap_id}/package", response_model=CapabilityOut)
+async def edit_package(cap_id: str, data: PackageEditSave, db: DbSession, user: CurrentUser):
+    """在线编辑：按文件树覆盖文本文件 / 删除文件，重建能力包。"""
+    _require_creator(user)
+    cap = await db.scalar(
+        select(Capability)
+        .options(selectinload(Capability.artifacts))
+        .where(Capability.id == cap_id)
+    )
+    if cap is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
+    _require_package_editable(cap, user)
+
+    files = read_capability_files(cap)
+    for raw in data.deleted or []:
+        files.pop(_norm_pkg_path(raw), None)
+    for item in data.files or []:
+        path = _norm_pkg_path(item.path)
+        files[path] = (item.content or "").encode("utf-8")
+    if not files:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "能力包为空，请至少保留一个文件")
+
+    cap = await apply_package(db, user, cap, _zip_files(files))
+    return to_capability_out(cap, author_name=user.username)
+
+
+@router.post("/capabilities/{cap_id}/package/file", response_model=CapabilityOut)
+async def upload_package_file(
+    cap_id: str,
+    db: DbSession,
+    user: CurrentUser,
+    file: UploadFile = File(...),
+    path: str = Form(""),
+):
+    """直接上传单个文件到能力包（文本或二进制均可）。"""
+    _require_creator(user)
+    cap = await db.scalar(
+        select(Capability)
+        .options(selectinload(Capability.artifacts))
+        .where(Capability.id == cap_id)
+    )
+    if cap is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
+    _require_package_editable(cap, user)
+
+    target = _norm_pkg_path(path or file.filename or "file.bin")
+    files = read_capability_files(cap)
+    files[target] = await file.read()
+
+    cap = await apply_package(db, user, cap, _zip_files(files))
+    return to_capability_out(cap, author_name=user.username)

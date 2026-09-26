@@ -63,8 +63,8 @@ const kindHint = computed(() => kindHintFor({ type: form.type, distribution: for
 const footHint = computed(() => {
   if (form.type === 'workflow') return '创建后进入编排画布；无需上传 zip'
   if (canOnlineEdit(form.type)) return '创建后进入在线编辑；保存会生成能力包，也可稍后手动上传 zip'
-  if (form.type === 'plugin') return '创建后请在详情页上传能力包 zip；审核通过后可一键加入'
-  if (needsZipUpload(form.type)) return '创建后为草稿，详情页上传能力包并提交审核'
+  if (form.type === 'plugin') return '创建后在详情页「文件预览」Tab 直接编辑/上传包内文件，审核通过后可一键加入'
+  if (needsZipUpload(form.type)) return '创建后在详情页「文件预览」Tab 编辑或上传能力包，再提交审核'
   return '创建后为草稿，完善内容后提交审核'
 })
 

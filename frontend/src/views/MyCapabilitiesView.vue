@@ -142,6 +142,14 @@ function visibilityLabel(cap) {
   return VISIBILITY_LABELS[cap.visibility] || cap.visibility || '—'
 }
 
+function packageTargetId(cap) {
+  return cap.has_draft && cap.draft_id ? cap.draft_id : cap.id
+}
+
+function goEditPackage(cap) {
+  router.push({ path: `/capabilities/${packageTargetId(cap)}`, query: { focus: 'package' } })
+}
+
 function editPath(cap) {
   return editRouteFor(cap)
 }
@@ -491,9 +499,8 @@ onMounted(() => {
                     v-if="ownedTodoBucket(cap) === 'missing_package'"
                     class="op-link"
                     type="button"
-                    disabled
-                    title="请先在编辑页完善内容"
-                  >待完善内容</button>
+                    @click="goEditPackage(cap)"
+                  >上传/编辑文件</button>
                   <button
                     v-else
                     class="op-link success"
@@ -507,9 +514,8 @@ onMounted(() => {
                     v-if="ownedTodoBucket(cap) === 'missing_package'"
                     class="op-link"
                     type="button"
-                    disabled
-                    title="请先在编辑页完善内容"
-                  >待完善内容</button>
+                    @click="goEditPackage(cap)"
+                  >上传/编辑文件</button>
                   <button
                     v-else
                     class="op-link success"

@@ -520,7 +520,7 @@ export function nextRouteAfterCreate(cap) {
   }
   const edit = editRouteFor(cap)
   if (edit) return edit
-  return `/capabilities/${cap.id}`
+  return { path: `/capabilities/${cap.id}`, query: { focus: 'package' } }
 }
 
 export function shelfOf(kind) {

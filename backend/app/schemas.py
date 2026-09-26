@@ -704,6 +704,16 @@ class McpEditSave(BaseModel):
     new_version: str = Field(default="", max_length=50, description="留空则基于最新版本 patch+1")
 
 
+class PackageEditFile(BaseModel):
+    path: str = Field(min_length=1, max_length=500, description="包内相对路径，如 skills/demo/SKILL.md")
+    content: str = Field(default="", max_length=500000)
+
+
+class PackageEditSave(BaseModel):
+    files: list[PackageEditFile] = Field(default_factory=list, description="可编辑文本文件（覆盖同路径）")
+    deleted: list[str] = Field(default_factory=list, description="从能力包中删除的相对路径")
+
+
 class WorkflowExecutionOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

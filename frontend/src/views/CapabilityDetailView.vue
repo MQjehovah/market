@@ -36,6 +36,7 @@ import {
 } from '../utils/format'
 import StatusBadge from '../components/StatusBadge.vue'
 import PackagePreview from '../components/PackagePreview.vue'
+import PackageEditor from '../components/PackageEditor.vue'
 import DebugCapabilityModal from '../components/DebugCapabilityModal.vue'
 import ConfirmActionModal from '../components/ConfirmActionModal.vue'
 import AskTrialPanel from '../components/AskTrialPanel.vue'
@@ -124,6 +125,12 @@ const isOwner = computed(() => cap.value && authState.user && cap.value.author_i
 const isAdmin = computed(() => authState.user?.role === 'admin')
 
 const canEdit = computed(() => isOwner.value && ['draft', 'returned', 'rejected'].includes(cap.value?.status))
+/** 可在「文件预览」Tab 直接编辑/上传包内文件：作者或管理员，且处于可上传状态 */
+const canEditPackage = computed(
+  () =>
+    (isOwner.value || isAdmin.value) &&
+    ['draft', 'returned', 'rejected', 'reviewing'].includes(cap.value?.status)
+)
 const hasPackage = computed(() => Boolean((cap.value?.artifacts || []).length))
 const canSubmit = computed(() => {
   if (!isOwner.value || !['draft', 'returned', 'rejected'].includes(cap.value?.status)) return false
@@ -654,7 +661,7 @@ const contentTabs = computed(() => {
     tabs.push({ key: 'config', label: '配置参数' })
   }
   tabs.push({ key: 'guide', label: '使用指南' })
-  if ((cap.value.artifacts || []).length && canViewPackage.value) {
+  if (((cap.value.artifacts || []).length && canViewPackage.value) || canEditPackage.value) {
     tabs.push({ key: 'files', label: '文件预览' })
   }
   if (isAgent.value && (embeddedSkills.value.length || embeddedMcp.value.length)) {
@@ -1257,7 +1264,7 @@ async function removeCap() {
 }
 
 function focusPackagePanel() {
-  contentTab.value = 'manage'
+  contentTab.value = 'files'
 }
 
 async function bootstrapDetail({ keepNotice = false } = {}) {
@@ -1738,8 +1745,19 @@ onMounted(() => {
         <div v-if="contentTab === 'files'">
           <section class="panel">
             <h2 class="detail-section-title">文件预览</h2>
-            <p class="muted" style="font-size: 13px; margin: 0 0 12px">浏览能力包内文件；Markdown 渲染预览，其它文本以源码显示。</p>
-            <PackagePreview v-if="(cap.artifacts || []).length" :capability-id="cap.id" />
+            <p class="muted" style="font-size: 13px; margin: 0 0 12px">
+              <template v-if="canEditPackage">
+                浏览能力包内文件，可直接在线编辑文本、上传/替换文件、新增或删除文件；保存后写入能力包。
+              </template>
+              <template v-else>浏览能力包内文件；Markdown 渲染预览，其它文本以源码显示。</template>
+            </p>
+            <PackageEditor
+              v-if="canEditPackage"
+              :capability-id="cap.id"
+              :can-edit="true"
+              @saved="load"
+            />
+            <PackagePreview v-else-if="(cap.artifacts || []).length" :capability-id="cap.id" />
             <div v-else class="muted">尚未上传能力包</div>
           </section>
         </div>
