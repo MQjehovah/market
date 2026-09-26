@@ -19,8 +19,6 @@ import {
   INSTALL_POLICY_LABELS,
   DISTRIBUTION_LABELS,
   RISK_DEFAULT_LABELS,
-  DISTRIBUTION_BADGE,
-  RISK_DEFAULT_BADGE,
   ROLE_LABELS,
   shelfLabel,
   formatDate,
@@ -670,8 +668,23 @@ const contentTabs = computed(() => {
   return tabs
 })
 const typeInitial = computed(() => {
-  const t = TYPE_LABELS[cap.value?.type] || cap.value?.type || '?'
-  return String(t).slice(0, 1)
+  // 默认头像用「名称/显示名」首字符（不是类型）
+  const n = (displayName.value || '').trim()
+  return n ? n.slice(0, 1).toUpperCase() : '?'
+})
+/** 技术信息（从徽章行下沉，避免头部拥挤） */
+const metaBits = computed(() => {
+  const bits: string[] = []
+  const d = DISTRIBUTION_LABELS[cap.value?.distribution]
+  if (d) bits.push(`分发：${d}`)
+  const r = RISK_DEFAULT_LABELS[cap.value?.risk_default]
+  if (r) bits.push(`风险：${r}`)
+  if (isMcp.value) bits.push(`传输：${mcpTransport.value}`)
+  if (isMcp.value && mcpToolRows.value.length) bits.push(`工具 ${mcpToolRows.value.length}`)
+  if (isMcp.value && isPublished.value) bits.push(mcpTrial.value.label)
+  if (provenance.value.origin === 'mcp-registry') bits.push('外部导入')
+  if (requiresBinary.value) bits.push(`需 ${requiresBinary.value}`)
+  return bits
 })
 const readmeHtml = computed(() => {
   const md = (cap.value?.readme_md || '').trim()
@@ -1326,21 +1339,8 @@ onMounted(() => {
       <div class="detail-hero-main">
         <div class="detail-hero-badges">
           <StatusBadge :status="cap.status" />
-          <span v-if="cap.latest" class="badge badge-primary">最新版</span>
           <span class="badge">{{ TYPE_LABELS[cap.type] }}</span>
-          <span v-if="shelfName" class="badge badge-primary">{{ shelfName }}</span>
-          <span class="badge" :class="DISTRIBUTION_BADGE[cap.distribution]">{{ DISTRIBUTION_LABELS[cap.distribution] || cap.distribution }}</span>
-          <span class="badge" :class="RISK_DEFAULT_BADGE[cap.risk_default]">{{ RISK_DEFAULT_LABELS[cap.risk_default] || cap.risk_default }}</span>
-          <span v-if="isMcp" class="badge">{{ mcpTransport }}</span>
-          <span
-            v-if="isMcp && isPublished"
-            class="badge"
-            :class="mcpTrial.canOneClick ? 'badge-success' : 'badge-warning'"
-          >{{ mcpTrial.label }}</span>
-          <span v-if="isMcp && mcpToolRows.length" class="badge badge-primary">{{ mcpToolRows.length }} 工具</span>
-          <span v-if="provenance.origin === 'mcp-registry'" class="badge badge-primary" :title="provenance.registry_name || '外部导入'">外部导入</span>
           <span v-if="cap.verified" class="badge badge-success" title="管理员认证">认证</span>
-          <span v-if="requiresBinary" class="badge" :title="`依赖本机 CLI：${requiresBinary}`">需 {{ requiresBinary }}</span>
         </div>
         <h1 class="detail-title">
           {{ displayName }}
@@ -1353,6 +1353,7 @@ onMounted(() => {
           <span>·</span>
           <span>更新于 {{ formatDate(cap.updated_at) }}</span>
         </div>
+        <p v-if="metaBits.length" class="detail-tagline muted">技术信息：{{ metaBits.join(' · ') }}</p>
         <div class="detail-kpis">
           <div class="kpi"><strong>{{ formatStat(cap.usage_count) }}</strong><span>使用</span></div>
           <div class="kpi"><strong>{{ stars(cap.avg_rating) }}</strong><span>{{ formatStat(cap.rating_count) }} 评价</span></div>
