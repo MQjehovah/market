@@ -1,6 +1,24 @@
 version: '3.8'
 
 services:
+  db:
+    image: postgres:15-alpine
+    container_name: market-db
+    environment:
+      - POSTGRES_USER=${MARKET_PG_USER:-market}
+      - POSTGRES_PASSWORD=${MARKET_PG_PASSWORD:?MARKET_PG_PASSWORD is required}
+      - POSTGRES_DB=${MARKET_PG_DB:-marketplace}
+    ports:
+      - "5434:5432"
+    volumes:
+      - market_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${MARKET_PG_USER:-market} -d ${MARKET_PG_DB:-marketplace}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
   market:
     build:
       context: .
@@ -10,6 +28,9 @@ services:
       - "8093:8093"
     volumes:
       - ./data:/app/backend/data
+    depends_on:
+      db:
+        condition: service_healthy
     environment:
       - APP_ENV=${APP_ENV:-production}
       - ROOT_PATH=/market
@@ -40,3 +61,6 @@ services:
       - SSO_REDIRECT_TARGET=${SSO_REDIRECT_TARGET:-/login}
     command: ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port 8093 --root-path /market --proxy-headers --forwarded-allow-ips=* --workers 1"]
     restart: unless-stopped
+
+volumes:
+  market_pgdata:
