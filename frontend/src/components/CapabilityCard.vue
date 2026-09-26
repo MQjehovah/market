@@ -81,8 +81,7 @@ const ratingCount = computed(() => Number(props.cap.rating_count || 0))
 const subline = computed(() => {
   const parts = []
   const n = (props.cap.name || '').trim()
-  // 标题为显示名时，第二行给出能力名(通常英文标识)便于区分
-  if (n && n !== displayName.value) parts.push(n)
+  if (n) parts.push(n)
   if (props.cap.version) parts.push(`v${props.cap.version}`)
   return parts.join(' · ')
 })
@@ -99,7 +98,7 @@ watch(
 <template>
   <div class="cap-card">
     <span v-if="cap.latest" class="cap-ribbon" title="最新正式版本">最新</span>
-    <router-link :to="`/capabilities/${cap.id}`" class="cap-body">
+    <router-link :to="`/capabilities/${cap.id}`" class="cap-body" :class="{ 'has-ribbon': cap.latest }">
       <div class="card-head">
         <img
           v-if="cap.icon_url && !iconFailed"
@@ -171,6 +170,8 @@ watch(
   color: #fff; background: linear-gradient(135deg, #2f6bff, #7c3aed);
 }
 .cap-body { color: var(--text); padding: 16px 16px 0; }
+/* 有「最新」角标时右移内容，避免类型徽章/标题被角标压住 */
+.cap-body.has-ribbon { padding-right: 56px; }
 /* 图标 + 标题并排（对齐参考卡片，标题在右、不再压到下方） */
 .card-head { display: flex; align-items: center; gap: 12px; }
 .head-text { min-width: 0; flex: 1; }
