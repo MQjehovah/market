@@ -5,7 +5,8 @@ import {
   INSTALL_POLICY_LABELS,
   TYPE_COLORS,
   TYPE_LABELS,
-  stars
+  stars,
+  assetUrl
 } from '../utils/format'
 import StatusBadge from './StatusBadge.vue'
 
@@ -103,7 +104,7 @@ watch(
         <img
           v-if="cap.icon_url && !iconFailed"
           class="type-icon icon-img"
-          :src="cap.icon_url"
+          :src="assetUrl(cap.icon_url)"
           :alt="displayName"
           @error="iconFailed = true"
         />

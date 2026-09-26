@@ -31,7 +31,8 @@ import {
   ownerProgressIndex,
   editRouteFor,
   canOnlineEdit,
-  mcpTrialMode
+  mcpTrialMode,
+  assetUrl
 } from '../utils/format'
 import StatusBadge from '../components/StatusBadge.vue'
 import PackagePreview from '../components/PackagePreview.vue'
@@ -1330,7 +1331,7 @@ onMounted(() => {
       <img
         v-if="cap.icon_url && !iconFailed"
         class="detail-hero-icon icon-img"
-        :src="cap.icon_url"
+        :src="assetUrl(cap.icon_url)"
         :alt="cap.name"
         @error="iconFailed = true"
       />
@@ -1904,7 +1905,7 @@ onMounted(() => {
               <img
                 v-if="cap.icon_url && !iconFailed"
                 class="icon-preview icon-img"
-                :src="cap.icon_url"
+                :src="assetUrl(cap.icon_url)"
                 :alt="cap.name"
                 @error="iconFailed = true"
               />

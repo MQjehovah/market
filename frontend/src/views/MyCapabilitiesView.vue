@@ -14,7 +14,8 @@ import {
   editRouteFor,
   canOnlineEdit,
   canLocalInstallCapability,
-  installCommandFor
+  installCommandFor,
+  assetUrl
 } from '../utils/format'
 import StatusBadge from '../components/StatusBadge.vue'
 import CreateCapabilityModal from '../components/CreateCapabilityModal.vue'
@@ -396,7 +397,7 @@ onMounted(() => {
                 <img
                   v-if="cap.icon_url && !iconErrors.has(cap.id)"
                   class="skill-icon icon-img"
-                  :src="cap.icon_url"
+                  :src="assetUrl(cap.icon_url)"
                   :alt="cap.name"
                   @error="markIconError(cap.id)"
                 />
@@ -454,7 +455,7 @@ onMounted(() => {
                 <img
                   v-if="cap.icon_url && !iconErrors.has(cap.id)"
                   class="skill-icon icon-img"
-                  :src="cap.icon_url"
+                  :src="assetUrl(cap.icon_url)"
                   :alt="cap.name"
                   @error="markIconError(cap.id)"
                 />

@@ -577,3 +577,11 @@ export function formatSize(bytes) {
 export function stars(score) {
   return '★'.repeat(Math.round(score || 0)) + '☆'.repeat(5 - Math.round(score || 0))
 }
+
+/** 静态/接口资源路径补部署子路径(如 icon_url 形如 /api/... 而站点在 /market/) */
+export function assetUrl(path) {
+  if (!path) return ''
+  if (/^https?:\/\//i.test(path) || path.startsWith('data:')) return path
+  const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '')
+  return path.startsWith('/') ? base + path : path
+}

@@ -11,7 +11,8 @@ import {
   VISIBILITY_LABELS,
   INSTALL_POLICY_LABELS,
   shelfLabel,
-  formatDate
+  formatDate,
+  assetUrl
 } from '../utils/format'
 import StatusBadge from '../components/StatusBadge.vue'
 import DebugCapabilityModal from '../components/DebugCapabilityModal.vue'
@@ -773,7 +774,7 @@ watch(
                   <img
                     v-if="cap.icon_url && !iconErrors.has(cap.id)"
                     class="skill-icon icon-img"
-                    :src="cap.icon_url"
+                    :src="assetUrl(cap.icon_url)"
                     :alt="cap.name"
                     @error="markIconError(cap.id)"
                   />
@@ -798,7 +799,7 @@ watch(
                     <img
                       v-if="selectedCap.icon_url && !iconErrors.has(selectedCap.id)"
                       class="skill-icon lg icon-img"
-                      :src="selectedCap.icon_url"
+                      :src="assetUrl(selectedCap.icon_url)"
                       :alt="selectedCap.name"
                       @error="markIconError(selectedCap.id)"
                     />
@@ -929,7 +930,7 @@ watch(
                     <img
                       v-if="cap.icon_url && !iconErrors.has(cap.id)"
                       class="skill-icon icon-img"
-                      :src="cap.icon_url"
+                      :src="assetUrl(cap.icon_url)"
                       :alt="cap.name"
                       @error="markIconError(cap.id)"
                     />
