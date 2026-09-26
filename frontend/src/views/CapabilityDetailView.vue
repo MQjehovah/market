@@ -654,10 +654,15 @@ const contentTabs = computed(() => {
   if (isMcp.value && mcpToolRows.value.length) {
     tabs.push({ key: 'tools', label: `工具（${mcpToolRows.value.length}）` })
   }
+  if (isPlugin.value) tabs.push({ key: 'components', label: '组件' })
+  // 配置参数：紧跟「工具/组件」之后，仅作者或管理员可设置
+  if (isMcp.value && (isOwner.value || isAdmin.value)) {
+    tabs.push({ key: 'config', label: '配置参数' })
+  }
+  tabs.push({ key: 'guide', label: '使用指南' })
   if ((cap.value.artifacts || []).length && canViewPackage.value) {
     tabs.push({ key: 'files', label: '文件预览' })
   }
-  if (isPlugin.value) tabs.push({ key: 'components', label: '组件' })
   if (isAgent.value && (embeddedSkills.value.length || embeddedMcp.value.length)) {
     tabs.push({ key: 'bundle', label: '内含能力' })
   }
@@ -1389,47 +1394,20 @@ onMounted(() => {
           </button>
         </div>
 
-        <div v-show="contentTab === 'intro'">
-          <section class="panel">
+        <div v-show="['intro', 'config', 'guide'].includes(contentTab)">
+          <section v-show="contentTab === 'intro'" class="panel">
             <h2 class="detail-section-title">介绍</h2>
-            <div v-if="readmeHtml" class="guide-block">
-              <h3 class="guide-title">README</h3>
-              <div class="readme-body" v-html="readmeHtml"></div>
-            </div>
-            <div v-else-if="cap.description" class="guide-block">
-              <h3 class="guide-title">简介</h3>
-              <div class="guide-body prose">{{ cap.description }}</div>
-            </div>
+            <div v-if="readmeHtml" class="readme-body" v-html="readmeHtml"></div>
+            <div v-else-if="cap.description" class="guide-body prose">{{ cap.description }}</div>
             <div v-if="cap.changelog" class="guide-block">
               <h3 class="guide-title">本版说明</h3>
               <div class="guide-body prose">{{ cap.changelog }}</div>
             </div>
-
-            <div v-if="isMcp && dashboardConsume" class="guide-block">
-              <h3 class="guide-title">桌面工作台</h3>
-              <p class="muted" style="font-size: 13px">
-                本机无法直接拉起时，可连市场能力网关（Authorization: Bearer 员工 SSO）。
-              </p>
-              <table class="table">
-                <tbody>
-                  <tr>
-                    <td>模式</td>
-                    <td><code>{{ dashboardConsume.mode }}</code></td>
-                  </tr>
-                  <tr>
-                    <td>SSE</td>
-                    <td><code>{{ dashboardConsume.sse_url }}</code></td>
-                  </tr>
-                  <tr>
-                    <td>Streamable HTTP</td>
-                    <td><code>{{ dashboardConsume.stream_url }}</code></td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
+          </section>
+          <section v-show="contentTab === 'config'" class="panel">
+            <h2 class="detail-section-title">配置参数</h2>
 
             <div v-if="isMcp" class="guide-block">
-              <h3 class="guide-title">配置参数</h3>
               <table class="table">
                 <thead><tr><th>参数</th><th>必填</th><th>说明 / 默认</th></tr></thead>
                 <tbody>
@@ -1571,6 +1549,9 @@ onMounted(() => {
                 </template>
               </div>
             </div>
+          </section>
+          <section v-show="contentTab === 'guide'" class="panel">
+            <h2 class="detail-section-title">使用指南</h2>
 
             <AskTrialPanel
               v-if="showAskTrial && askAgentName"
@@ -1693,13 +1674,13 @@ onMounted(() => {
             </div>
           </section>
 
-          <div v-if="parentPluginId" class="panel">
+          <div v-if="contentTab === 'intro' && parentPluginId" class="panel">
             <h3>来自能力包</h3>
             <div class="muted" style="font-size: 13px">本能力由能力包拆分生成。</div>
             <div class="mt-16"><router-link :to="`/capabilities/${parentPluginId}`">查看父能力包</router-link></div>
           </div>
 
-          <div v-if="usedBy.length" class="panel">
+          <div v-if="contentTab === 'intro' && usedBy.length" class="panel">
             <h3>{{ usedByAgents.length && usedByAgents.length === usedBy.length ? '被以下专家使用' : '被以下能力使用' }}</h3>
             <div class="muted" style="font-size: 13px">
               {{ isMcp ? '挂到这些专家后，对话里才会动手。' : '来自专家内嵌声明或能力包组件引用。' }}
@@ -1726,7 +1707,7 @@ onMounted(() => {
             </table>
           </div>
 
-          <div v-if="cap.type === 'tool' && Object.keys(cap.input_schema || {}).length && !(cap.input_schema || {}).kind" class="panel">
+          <div v-if="contentTab === 'intro' && cap.type === 'tool' && Object.keys(cap.input_schema || {}).length && !(cap.input_schema || {}).kind" class="panel">
             <h3>参数定义（schema.json）</h3>
             <table class="table">
               <thead><tr><th>参数</th><th>类型</th><th>必填</th><th>说明</th></tr></thead>
@@ -1744,7 +1725,7 @@ onMounted(() => {
             </table>
           </div>
 
-          <div v-if="isAgent && cap.status === 'published'" class="a2a-panel panel">
+          <div v-if="contentTab === 'intro' && isAgent && cap.status === 'published'" class="a2a-panel panel">
             <div class="flex-between flex-wrap">
               <h3>A2A 互调信息</h3>
               <span class="badge badge-primary">protocolVersion 1.0</span>
