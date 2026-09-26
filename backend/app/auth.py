@@ -138,14 +138,14 @@ async def _resolve_sso_user(
     raw_email = (claims.get("email") or "").strip() or None
     claim_email = raw_email.lower() if raw_email else None
 
-    # 身份识别顺序: 邮箱 -> 工号 -> 新建。
-    # 邮箱优先可与系统自建账号(本地注册/按邮箱登录的)对齐, 避免同一人两份账号;
-    # 邮箱缺失时退回按工号匹配(SSO 侧未取到 LDAP mail 的极少数情况)。
+    # 身份识别顺序: 工号 -> 邮箱 -> 新建。
+    # 以「工号(username=sub)」为主键：与 agent 侧一致(agent 恒以工号为 name/act-as)，
+    # 避免一人多账号时 SSO 被邮箱优先映射到旧账号导致 web/桌面 订阅集不一致；
+    # 工号未命中再退回邮箱(兼容历史自建/邮箱注册账号)，最后才新建。
     user = None
-    if claim_email:
+    user = await db.scalar(select(User).where(User.username == username))
+    if user is None and claim_email:
         user = await db.scalar(select(User).where(func.lower(User.email) == claim_email))
-    if user is None:
-        user = await db.scalar(select(User).where(User.username == username))
     if user is None:
         user = _new_sso_user(username, claims)
         # 新开户标记：仅在账户创建时开通一次默认能力（登录不再重复开通，避免「移出后被加回」）
