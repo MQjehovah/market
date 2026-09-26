@@ -1,5 +1,6 @@
 """JWT 认证与密码哈希（HS256 老轨 + SSO/OIDC 新轨双轨鉴权）。"""
 
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
@@ -18,6 +19,7 @@ from app.database import get_db
 from app.models import User
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+logger = logging.getLogger("market.auth")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
 
 
@@ -171,11 +173,19 @@ async def _resolve_sso_user(
             await db.refresh(user)
 
     # 命中已有账号时以 SSO 为权威源回写邮箱与姓名。
-    # 邮箱在前面已查过同值账号, 因此这里改写不会撞唯一约束。
     changed = False
     if raw_email and raw_email != (user.email or ""):
-        user.email = raw_email
-        changed = True
+        # 邮箱唯一：若该邮箱已属于其它账号（一人多账号场景），跳过回写，避免唯一约束 500。
+        owner = await db.scalar(
+            select(User.id).where(func.lower(User.email) == claim_email, User.id != user.id)
+        )
+        if owner is None:
+            user.email = raw_email
+            changed = True
+        else:
+            logger.warning(
+                "跳过邮箱回写：%s 已属于账号 %s（当前账号 %s）", raw_email, owner, user.username
+            )
     claim_name = (claims.get("name") or "").strip()
     if claim_name and user.display_name != claim_name:
         user.display_name = claim_name
