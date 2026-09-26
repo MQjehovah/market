@@ -636,9 +636,9 @@ onMounted(() => {
 .skill-cell { display: flex; gap: 12px; align-items: flex-start; min-width: 0; }
 .skill-icon {
   width: 40px; height: 40px; border-radius: 10px; flex: none;
-  color: #fff; font-weight: 700; font-size: 16px;
+  color: #fff; font-weight: 700; font-size: 16px; line-height: 1; white-space: nowrap;
   display: flex; align-items: center; justify-content: center;
-}
+  }
 .icon-img { object-fit: cover; background: var(--panel-2); }
 .tag-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .skill-meta { min-width: 0; }
@@ -654,9 +654,9 @@ onMounted(() => {
   display: -webkit-box; -webkit-line-clamp: 1; line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden;
 }
 .vis-pill {
-  display: inline-flex; padding: 2px 8px; border-radius: 999px;
+  display: inline-flex; padding: 2px 8px; border-radius: 999px; white-space: nowrap;
   background: var(--panel-2); border: 1px solid var(--border); font-size: 12px; color: var(--text);
-}
+  }
 .src-text { color: var(--text); }
 .time { white-space: nowrap; font-size: 12px; }
 .ops { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }

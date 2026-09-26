@@ -102,9 +102,9 @@ a:hover { color: var(--primary-2); }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 
 .badge {
-  display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px;
+  display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; white-space: nowrap;
   border: 1px solid var(--border); color: var(--muted); background: var(--panel-2);
-}
+  }
 .badge-primary { color: var(--primary); border-color: #c9d8ff; background: var(--primary-soft); }
 .badge-success { color: #0e9f5c; border-color: #b6ebd2; background: rgba(18, 183, 106, 0.1); }
 .badge-warning { color: #b7791f; border-color: #f5dfb0; background: rgba(245, 165, 36, 0.12); }
