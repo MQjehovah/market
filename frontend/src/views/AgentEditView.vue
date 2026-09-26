@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import { api } from '../api'
 import StatusBadge from '../components/StatusBadge.vue'
 import MarkdownEditor from '../components/MarkdownEditor.vue'
+import AiDraftPanel from '../components/AiDraftPanel.vue'
 import { bindUnsavedGuard } from '../utils/unsaved'
 
 const route = useRoute()
@@ -142,6 +143,12 @@ async function exportSnapshot() {
   }
 }
 
+function onAi(fields) {
+  if (fields.prompt) form.prompt = fields.prompt
+  if (fields.description) form.description = fields.description
+  if (Array.isArray(fields.tags) && fields.tags.length) form.tagsText = fields.tags.join(',')
+}
+
 onMounted(() => {
   loadCatalog()
   load()
@@ -169,6 +176,13 @@ onMounted(() => {
 
       <div v-if="error" class="alert alert-error">{{ error }}</div>
       <div v-if="notice" class="alert alert-success">{{ notice }}</div>
+
+      <AiDraftPanel
+        kind="agent"
+        :name="agentName"
+        hint="例如：一个处理售后退换货的专家，能查工单、判定责任、写回工单评论并通知负责人"
+        @apply="onAi"
+      />
 
       <div class="field mt-16">
         <label>提示词（PROMPT.md）</label>

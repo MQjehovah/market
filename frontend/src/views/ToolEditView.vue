@@ -6,6 +6,7 @@ import { formatSize } from '../utils/format'
 import { bindUnsavedGuard } from '../utils/unsaved'
 import StatusBadge from '../components/StatusBadge.vue'
 import CodeEditor from '../components/CodeEditor.vue'
+import AiDraftPanel from '../components/AiDraftPanel.vue'
 
 const route = useRoute()
 const name = route.params.name
@@ -99,6 +100,13 @@ async function submitReview() {
   }
 }
 
+function onAi(fields) {
+  if (fields.tool_schema) schemaText.value = JSON.stringify(fields.tool_schema, null, 2)
+  if (fields.implementation) implementation.value = fields.implementation
+  if (fields.description) description.value = fields.description
+  if (Array.isArray(fields.tags) && fields.tags.length) tags.value = fields.tags.join(', ')
+}
+
 onMounted(load)
 </script>
 
@@ -125,6 +133,13 @@ onMounted(load)
 
     <div v-if="error" class="alert alert-error mb-16">{{ error }}</div>
     <div v-if="notice" class="alert alert-success mb-16">{{ notice }}</div>
+
+    <AiDraftPanel
+      kind="tool"
+      :name="name"
+      hint="例如：一个把 Excel 明细按月份汇总的工具，入参文件路径与月份，返回汇总 JSON"
+      @apply="onAi"
+    />
 
     <div class="grid" style="grid-template-columns: 1fr 320px; align-items: start">
       <div>

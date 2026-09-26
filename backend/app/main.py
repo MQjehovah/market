@@ -16,6 +16,7 @@ from app.routers import (
     agent_edit,
     assemble,
     auth,
+    authoring,
     bindings,
     customize_edit,
     mcp_edit,
@@ -95,6 +96,7 @@ app.include_router(agent_edit.router)
 app.include_router(skill_edit.router)
 app.include_router(tool_edit.router)
 app.include_router(mcp_edit.router)
+app.include_router(authoring.router)
 app.include_router(customize_edit.rule_router)
 app.include_router(customize_edit.command_router)
 app.include_router(customize_edit.hook_router)

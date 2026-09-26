@@ -810,3 +810,19 @@ class HostSyncOut(BaseModel):
         "只含已加入且启用的项。宿主安装后应尊重 enabled："
         "停用后下次同步请忽略或卸载，不必再复制 cap install。"
     )
+
+
+class AuthoringRequest(BaseModel):
+    """AI 创作助手请求：按类型生成/润色能力内容草稿。"""
+
+    kind: str = Field(description="agent | skill | tool | mcp")
+    name: str = Field(default="", max_length=200)
+    description: str = Field(default="", max_length=8000, description="需求描述/目标")
+    instruction: str = Field(default="", max_length=8000, description="补充创作或修改要求")
+    current: dict[str, Any] = Field(default_factory=dict, description="现有内容(可选，用于修改)")
+
+
+class AuthoringOut(BaseModel):
+    kind: str
+    fields: dict[str, Any] = Field(default_factory=dict)
+    raw: str = ""

@@ -6,6 +6,7 @@ import { formatSize } from '../utils/format'
 import { bindUnsavedGuard } from '../utils/unsaved'
 import StatusBadge from '../components/StatusBadge.vue'
 import MarkdownEditor from '../components/MarkdownEditor.vue'
+import AiDraftPanel from '../components/AiDraftPanel.vue'
 
 const route = useRoute()
 const name = route.params.name
@@ -80,6 +81,12 @@ async function submitReview() {
   }
 }
 
+function onAi(fields) {
+  if (fields.skill_md) skillMd.value = fields.skill_md
+  if (fields.description) description.value = fields.description
+  if (Array.isArray(fields.tags) && fields.tags.length) tags.value = fields.tags.join(', ')
+}
+
 onMounted(load)
 </script>
 
@@ -104,6 +111,13 @@ onMounted(load)
 
     <div v-if="error" class="alert alert-error mb-16">{{ error }}</div>
     <div v-if="notice" class="alert alert-success mb-16">{{ notice }}</div>
+
+    <AiDraftPanel
+      kind="skill"
+      :name="name"
+      hint="例如：一份标准化的月经营复盘技能，含数据口径、分析步骤、检查清单与输出模板"
+      @apply="onAi"
+    />
 
     <div class="grid" style="grid-template-columns: 1fr 320px; align-items: start">
       <div>
