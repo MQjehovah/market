@@ -656,18 +656,16 @@ const contentTabs = computed(() => {
     tabs.push({ key: 'tools', label: `工具（${mcpToolRows.value.length}）` })
   }
   if (isPlugin.value) tabs.push({ key: 'components', label: '组件' })
-  // 配置参数：紧跟「工具/组件」之后；参数说明所有人可见，编辑(平台密钥等)仅作者/管理员
-  if (isMcp.value) {
-    tabs.push({ key: 'config', label: '配置参数' })
-  }
-  tabs.push({ key: 'guide', label: '使用指南' })
-  if (((cap.value.artifacts || []).length && canViewPackage.value) || canEditPackage.value) {
-    tabs.push({ key: 'files', label: '文件预览' })
-  }
   if (isAgent.value && (embeddedSkills.value.length || embeddedMcp.value.length)) {
     tabs.push({ key: 'bundle', label: '内含能力' })
   }
   tabs.push({ key: 'versions', label: '版本' })
+  if (isMcp.value) {
+    tabs.push({ key: 'config', label: '配置' })
+  }
+  if (((cap.value.artifacts || []).length && canViewPackage.value) || canEditPackage.value) {
+    tabs.push({ key: 'files', label: '文件' })
+  }
   if (canEdit.value || canReview.value || isOwner.value || isAdmin.value) {
     tabs.push({ key: 'manage', label: '管理' })
   }
@@ -1263,6 +1261,24 @@ async function removeCap() {
   }
 }
 
+async function deleteVersion(v) {
+  if (!confirm(`确认删除版本 v${v.version}（${v.status}）？删除后可使用该版本号重新创建。`)) return
+  error.value = ''
+  notice.value = ''
+  try {
+    await api.delete(`/publish/capabilities/${v.id}`)
+    if (v.id === props.id) {
+      router.push('/my')
+      return
+    }
+    notice.value = `版本 v${v.version} 已删除`
+    await load()
+    await loadVersionSuggestions()
+  } catch (e) {
+    error.value = e.message
+  }
+}
+
 function focusPackagePanel() {
   contentTab.value = 'files'
 }
@@ -1386,7 +1402,7 @@ onMounted(() => {
           </button>
         </div>
 
-        <div v-show="['intro', 'config', 'guide'].includes(contentTab)">
+        <div v-show="['intro', 'config'].includes(contentTab)">
           <section v-show="contentTab === 'intro'" class="panel">
             <h2 class="detail-section-title">介绍</h2>
             <div v-if="readmeHtml" class="readme-body" v-html="readmeHtml"></div>
@@ -1397,7 +1413,7 @@ onMounted(() => {
             </div>
           </section>
           <section v-show="contentTab === 'config'" class="panel">
-            <h2 class="detail-section-title">配置参数</h2>
+            <h2 class="detail-section-title">配置</h2>
 
             <div v-if="isMcp" class="guide-block">
               <table class="table">
@@ -1542,7 +1558,7 @@ onMounted(() => {
               </div>
             </div>
           </section>
-          <section v-show="contentTab === 'guide'" class="panel">
+          <section v-show="contentTab === 'intro'" class="panel">
             <h2 class="detail-section-title">使用指南</h2>
 
             <AskTrialPanel
@@ -1744,7 +1760,7 @@ onMounted(() => {
 
         <div v-if="contentTab === 'files'">
           <section class="panel">
-            <h2 class="detail-section-title">文件预览</h2>
+            <h2 class="detail-section-title">文件</h2>
             <p class="muted" style="font-size: 13px; margin: 0 0 12px">
               <template v-if="canEditPackage">
                 浏览能力包内文件，可直接在线编辑文本、上传/替换文件、新增或删除文件；保存后写入能力包。
@@ -1854,6 +1870,12 @@ onMounted(() => {
                       type="button"
                       @click="downloadVersion(v)"
                     >下载</button>
+                    <button
+                      v-if="(isOwner || isAdmin) && ['draft', 'returned', 'rejected', 'reviewing'].includes(v.status)"
+                      class="btn btn-sm btn-danger"
+                      type="button"
+                      @click="deleteVersion(v)"
+                    >删除</button>
                   </td>
                 </tr>
               </tbody>
