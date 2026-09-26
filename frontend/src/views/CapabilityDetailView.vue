@@ -996,14 +996,6 @@ async function removeIcon() {
   }
 }
 
-function focusPackage() {
-  contentTab.value = 'manage'
-  router.replace({ query: { ...route.query, focus: 'package' } })
-  setTimeout(() => {
-    document.getElementById('package-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }, 50)
-}
-
 async function saveAccess() {
   accessSaved.value = ''
   try {
@@ -1266,7 +1258,6 @@ async function removeCap() {
 
 function focusPackagePanel() {
   contentTab.value = 'manage'
-  setTimeout(() => document.getElementById('package-panel')?.scrollIntoView({ behavior: 'smooth' }), 300)
 }
 
 async function bootstrapDetail({ keepNotice = false } = {}) {
@@ -1853,12 +1844,12 @@ onMounted(() => {
               <h3>版本管理</h3>
               <div class="muted" style="font-size: 12px; margin-bottom: 8px">
                 <template v-if="['published', 'deprecated'].includes(cap.status)">
-                  已发布内容请先创建新版本草稿；可用在线编辑完善，或上传能力包后提交审核。
+                  已发布内容请先创建新版本草稿；可在在线编辑完善后提交审核。
                 </template>
                 <template v-else-if="preferOnlineEdit">
-                  草稿可用在线编辑完善（保存会生成能力包），或手动上传 zip 后提交审核。
+                  草稿可在在线编辑完善（保存会生成能力包）后提交审核。
                 </template>
-                <template v-else>草稿需上传能力包后再提交审核。</template>
+                <template v-else>草稿需在编辑页完善内容后再提交审核。</template>
               </div>
               <div class="flex" style="gap: 8px; flex-wrap: wrap; align-items: center">
                 <button type="button" class="btn btn-sm" @click="applySuggestedVersion('major')">major {{ versionSuggestions.major || '' }}</button>
@@ -2020,13 +2011,6 @@ onMounted(() => {
                 type="button"
                 @click="doAction(`/publish/capabilities/${props.id}/submit`)"
               >提交审核</button>
-              <button
-                v-else-if="needsPackageFirst"
-                class="btn"
-                :class="preferOnlineEdit ? '' : 'btn-primary'"
-                type="button"
-                @click="focusPackage"
-              >{{ preferOnlineEdit ? '上传 zip' : '去上传能力包' }}</button>
               <button v-if="canWithdraw" class="btn" type="button" @click="withdrawReview">撤回审核</button>
               <button v-if="canDelete" class="btn btn-danger" type="button" @click="removeCap">删除</button>
               <button v-if="isAdmin && cap.status === 'published'" class="btn btn-danger" type="button" @click="doAction(`/admin/capabilities/${props.id}/deprecate`)">下架（弃用）</button>
@@ -2087,48 +2071,6 @@ onMounted(() => {
               <p class="muted" style="font-size: 12px; margin: 0">
                 多门同时配置时需全部命中（AND）；留空的门不限制。非空名单在「开放」策略下同样生效。
               </p>
-            </div>
-          </div>
-
-          <div id="package-panel" class="panel">
-            <h3>{{ cap.name }} 内容</h3>
-            <div v-if="isWorkflow" class="muted" style="font-size: 13px; margin-bottom: 10px">Workflow 内容在画布中维护，无需上传 zip。</div>
-            <div v-else-if="preferOnlineEdit" class="muted" style="font-size: 13px; margin-bottom: 10px">
-              推荐在线编辑；保存会生成/更新能力包。也可手动上传 zip。
-            </div>
-            <div v-if="(cap.artifacts || []).length === 0" class="muted">尚未上传能力包</div>
-            <template v-else>
-              <ul class="package-tree">
-                <li v-for="a in (cap.artifacts || [])" :key="a.id" class="package-row">
-                  <span class="package-name">{{ a.filename }}</span>
-                  <span class="package-size muted">{{ formatSize(a.size_bytes) }}</span>
-                </li>
-              </ul>
-              <button class="btn btn-sm mt-12" type="button" @click="contentTab = 'files'">预览包内文件</button>
-            </template>
-            <div v-if="latestArtifact" class="package-checksum muted">
-              checksum {{ (latestArtifact.checksum || '').slice(0, 16) }}…
-            </div>
-            <div v-if="showPackageUpload" class="mt-16">
-              <div class="flex" style="gap: 8px; flex-wrap: wrap">
-                <label class="btn btn-primary">
-                  {{ uploading ? '上传中…' : '上传能力包 (zip)' }}
-                  <input type="file" accept=".zip" style="display: none" @change="uploadArtifact" />
-                </label>
-                <button
-                  v-if="showTemplateDownload"
-                  class="btn"
-                  type="button"
-                  @click="downloadTemplate"
-                >下载空模板 zip</button>
-              </div>
-              <div class="muted mt-8" style="font-size: 12px">
-                包内需包含 {{ TYPE_LABELS[cap.type] || cap.type }} 规范文件（{{ PACKAGE_HINTS[cap.type] }}）
-              </div>
-              <div v-if="cap.type === 'mcp'" class="alert mt-8" style="font-size: 12px">
-                市场连接器需 <code>mcp.json</code>、<code>connection.json</code>、<code>tools.json</code>、<code>security.json</code>。
-                不能直接上传 agent 仓的 <code>mcp-server.json</code>。
-              </div>
             </div>
           </div>
         </div>
@@ -2211,9 +2153,9 @@ onMounted(() => {
           <template v-else>
             <p class="aside-hint muted" style="margin-top: 0">
               <template v-if="preferOnlineEdit && needsPackageFirst">
-                先在线编辑完善内容（保存会生成能力包），再提交审核；也可手动上传 zip。
+                先在线编辑完善内容（保存会生成能力包），再提交审核。
               </template>
-              <template v-else-if="needsPackageFirst">先上传能力包，再提交审核。可先下载空模板。</template>
+              <template v-else-if="needsPackageFirst">请先在编辑页完善内容，再提交审核。</template>
               <template v-else-if="cap.status === 'reviewing'">已提交，等待管理员审核。</template>
               <template v-else>完善内容后提交审核；上架后才能加入与本地安装。</template>
             </p>
@@ -2223,13 +2165,6 @@ onMounted(() => {
                 :to="onlineEditPath"
                 class="btn btn-block btn-primary btn-lg"
               >在线编辑</router-link>
-              <button
-                v-if="needsPackageFirst"
-                class="btn btn-block"
-                :class="preferOnlineEdit ? '' : 'btn-primary btn-lg'"
-                type="button"
-                @click="focusPackage"
-              >{{ preferOnlineEdit ? '上传 zip' : '去上传能力包' }}</button>
               <button
                 v-else-if="canSubmit"
                 class="btn btn-block btn-success btn-lg"

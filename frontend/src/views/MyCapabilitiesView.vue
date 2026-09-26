@@ -142,14 +142,6 @@ function visibilityLabel(cap) {
   return VISIBILITY_LABELS[cap.visibility] || cap.visibility || '—'
 }
 
-function packageTargetId(cap) {
-  return cap.has_draft && cap.draft_id ? cap.draft_id : cap.id
-}
-
-function goUploadPackage(cap) {
-  router.push({ path: `/capabilities/${packageTargetId(cap)}`, query: { focus: 'package' } })
-}
-
 function editPath(cap) {
   return editRouteFor(cap)
 }
@@ -191,7 +183,7 @@ function onCreated(cap, meta = {}) {
   } else if (canOnlineEdit(cap.type)) {
     notice.value = `「${cap.name}」草稿已创建，正在打开在线编辑`
   } else {
-    notice.value = `「${cap.name}」草稿已创建，请上传能力包并提交审核`
+    notice.value = `「${cap.name}」草稿已创建，请完善内容并提交审核`
   }
   mainTab.value = 'owned'
   load()
@@ -499,8 +491,9 @@ onMounted(() => {
                     v-if="ownedTodoBucket(cap) === 'missing_package'"
                     class="op-link"
                     type="button"
-                    @click="goUploadPackage(cap)"
-                  >{{ canOnlineEdit(cap.type) ? '上传 zip' : '去上传能力包' }}</button>
+                    disabled
+                    title="请先在编辑页完善内容"
+                  >待完善内容</button>
                   <button
                     v-else
                     class="op-link success"
@@ -514,8 +507,9 @@ onMounted(() => {
                     v-if="ownedTodoBucket(cap) === 'missing_package'"
                     class="op-link"
                     type="button"
-                    @click="goUploadPackage(cap)"
-                  >{{ canOnlineEdit(cap.type) ? '上传 zip' : '去上传能力包' }}</button>
+                    disabled
+                    title="请先在编辑页完善内容"
+                  >待完善内容</button>
                   <button
                     v-else
                     class="op-link success"

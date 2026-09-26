@@ -512,7 +512,7 @@ export function editRouteFor(cap) {
   }
 }
 
-/** 创建草稿后的最佳下一步：有在线编辑则进编辑页，否则去上传包 */
+/** 创建草稿后的最佳下一步：有在线编辑则进编辑页，否则进详情页 */
 export function nextRouteAfterCreate(cap) {
   if (!cap?.id) return '/my'
   if (cap.type === 'workflow') {
@@ -520,7 +520,7 @@ export function nextRouteAfterCreate(cap) {
   }
   const edit = editRouteFor(cap)
   if (edit) return edit
-  return { path: `/capabilities/${cap.id}`, query: { focus: 'package' } }
+  return `/capabilities/${cap.id}`
 }
 
 export function shelfOf(kind) {
