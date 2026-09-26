@@ -12,9 +12,9 @@ const user = authState.user
 
 async function load() {
   notifications.value = await api.get('/notifications')
-  if (['admin', 'publisher'].includes(user?.role)) {
+  if (user?.role === 'admin') {
     try {
-      stats.value = await api.get(user?.role === 'admin' ? '/admin/stats' : '/admin/stats/own')
+      stats.value = await api.get('/admin/stats')
     } catch {
       stats.value = null
     }
@@ -45,7 +45,7 @@ onMounted(load)
               <tr><td class="muted">显示名</td><td>{{ user?.display_name }}</td></tr>
               <tr><td class="muted">邮箱</td><td>{{ user?.email }}</td></tr>
               <tr><td class="muted">角色</td><td>{{ roleLabel(user?.role) }}</td></tr>
-              <tr><td class="muted">组织</td><td>{{ user?.organization || user?.team || '-' }}</td></tr>
+              <tr><td class="muted">部门</td><td>{{ user?.department || '-' }}</td></tr>
               <tr><td class="muted">注册时间</td><td>{{ formatDate(user?.created_at) }}</td></tr>
             </tbody>
           </table>

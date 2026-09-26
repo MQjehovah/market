@@ -1,14 +1,14 @@
 """README 4.4 权限矩阵：
 
-操作             Admin   Publisher   User
-浏览能力          ✓        ✓          ✓
-搜索能力          ✓        ✓          ✓
-使用能力（调用/执行） ✓      ✗          ✗    （外部调用需管理员授权，见 runtime_access_roles）
-发布能力          ✓        ✓          ✗
-审核能力          ✓        ✗          ✗
-下架能力          ✓        ✗          ✗
-管理用户          ✓        ✗          ✗
-查看统计          ✓        ✓(自有)     ✗
+操作                  Admin   User
+浏览能力               ✓        ✓
+搜索能力               ✓        ✓
+使用能力（调用/执行）  ✓        ✗    （外部调用需管理员授权，见 runtime_access_roles）
+发布能力               ✓        ✓
+审核能力               ✓        ✗
+下架能力               ✓        ✗
+管理用户               ✓        ✗
+查看统计               ✓        ✗
 """
 
 from functools import wraps
@@ -25,13 +25,12 @@ from app.services.access import access_deny_reason, capability_access_ok
 from app.services.visibility import is_capability_visible
 
 # 统一 RBAC: 角色 → 权限键(与 agent/market 共享同一词汇)。``*`` 为通配。
-# - capability.publish: 发布/编辑能力(Publisher 及以上)
+# - capability.publish: 发布/编辑能力(所有登录用户均可)
 # - capability.invoke:  执行能力(默认 Admin; 可由 runtime_access_roles 追加角色)
 # - admin.*:            管理面(沿用 role=admin)
 ROLE_PERMISSIONS: dict[str, set[str]] = {
     "admin": {"*"},
-    "publisher": {"capability.publish"},
-    "user": set(),
+    "user": {"capability.publish"},
 }
 
 

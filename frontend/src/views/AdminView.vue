@@ -27,10 +27,9 @@ const router = useRouter()
 
 const __API_BASE__ = (import.meta.env.BASE_URL || '/').replace(/\/$/, '') + '/api'
 
-const SECTIONS = ['review', 'listed', 'users', 'gateway', 'tokens']
+const SECTIONS = ['caps', 'users', 'gateway', 'tokens']
 const SECTION_META = {
-  review: { label: '审核', hint: '处理待审、拒绝与打回；通过后到「上架治理」做下架归档' },
-  listed: { label: '上架治理', hint: '已发布与已下架资产的下架、归档' },
+  caps: { label: '能力管理', hint: '审核上架、下架归档统一管理' },
   users: { label: '用户管理', hint: '账号、角色与启停；权限边界见下方角色说明' },
   gateway: { label: 'MCP 网关', hint: '把 stdio / HTTP / SSE 统一暴露为 HTTP 端点，供 Dify / Agent 接入' },
   tokens: {
@@ -41,15 +40,32 @@ const SECTION_META = {
 
 const section = computed(() => {
   const s = String(route.params.section || '')
-  return SECTIONS.includes(s) ? s : 'review'
+  return SECTIONS.includes(s) ? s : 'caps'
 })
 const sectionTitle = computed(() => SECTION_META[section.value].label)
 const sectionHint = computed(() => SECTION_META[section.value].hint)
 
+/** 能力管理内部子页：审核队列 / 上架治理 */
+const capsTab = ref('review')
+
 watch(
   () => route.params.section,
   (s) => {
-    if (!SECTIONS.includes(String(s))) router.replace('/admin/review')
+    const v = String(s)
+    if (v === 'review' || v === 'listed') {
+      capsTab.value = v === 'listed' ? 'listed' : 'review'
+      router.replace(`/admin/caps${v === 'listed' ? '?ctab=listed' : ''}`)
+      return
+    }
+    if (!SECTIONS.includes(v)) router.replace('/admin/caps')
+  },
+  { immediate: true }
+)
+
+watch(
+  () => route.query.ctab,
+  (v) => {
+    if (v === 'listed' || v === 'review') capsTab.value = String(v)
   },
   { immediate: true }
 )
@@ -97,7 +113,6 @@ const userForm = ref({
   email: '',
   password: '',
   display_name: '',
-  organization: '',
   department: '',
   role: 'user'
 })
@@ -105,7 +120,6 @@ const editForm = ref({
   username: '',
   display_name: '',
   email: '',
-  organization: '',
   department: '',
   password: ''
 })
@@ -239,8 +253,7 @@ watch(auditList, (list) => {
 
 const roleDefs = [
   { key: 'admin', label: '管理员', desc: '审核上架、下架归档、用户管理、试用全部资产、MCP 网关、服务令牌' },
-  { key: 'publisher', label: '发布者', desc: '发布与在线编辑；提交审核；试用自己创建或已加入的资产' },
-  { key: 'user', label: '普通用户', desc: '登录可发布草稿并在线编辑技能/专家等；可试用自己创建或已加入的资产；生产消费走 cap install / MCP' }
+  { key: 'user', label: '普通用户', desc: '登录即可发布与在线编辑能力、提交审核；试用自己创建或已加入的资产；生产消费走 cap install / MCP' }
 ]
 
 const filteredUsers = computed(() => {
@@ -309,7 +322,7 @@ function askReject(cap) {
   confirmReview.value = {
     action: 'reject',
     title: '确定拒绝？',
-    body: `拒绝后，「${cap.name}」将退回发布者，需修改后重新提交。`,
+    body: `拒绝后，「${cap.name}」将退回作者，需修改后重新提交。`,
     okText: '拒绝',
     danger: true,
     cap
@@ -320,7 +333,7 @@ function askReturn(cap) {
   confirmReview.value = {
     action: 'return',
     title: '确定打回？',
-    body: `打回后，「${cap.name}」将回到草稿态，发布者可继续修改。`,
+    body: `打回后，「${cap.name}」将回到草稿态，作者可继续修改。`,
     okText: '打回',
     danger: false,
     cap
@@ -389,13 +402,12 @@ async function createUser() {
       email: f.email,
       password: f.password,
       display_name: f.display_name,
-      organization: f.organization,
       department: f.department,
       role: f.role
     })
     userNotice.value = `已创建用户 ${u.username}（${roleDefs.find((r) => r.key === u.role)?.label}）`
     showCreateUser.value = false
-    userForm.value = { username: '', email: '', password: '', display_name: '', organization: '', department: '', role: 'user' }
+    userForm.value = { username: '', email: '', password: '', display_name: '', department: '', role: 'user' }
     await load()
   } catch (e) {
     error.value = e.message
@@ -412,7 +424,6 @@ function openEditUser(u) {
     username: u.username,
     display_name: u.display_name || '',
     email: u.email || '',
-    organization: u.organization || '',
     department: u.department || '',
     password: ''
   }
@@ -427,7 +438,6 @@ async function saveEditUser() {
   if (f.username && f.username !== editUser.value.username) patch.username = f.username
   if (f.display_name !== (editUser.value.display_name || '')) patch.display_name = f.display_name
   if (f.email !== (editUser.value.email || '')) patch.email = f.email
-  if (f.organization !== (editUser.value.organization || '')) patch.organization = f.organization
   if (f.department !== (editUser.value.department || '')) patch.department = f.department
   if (f.password) patch.password = f.password
   if (Object.keys(patch).length === 0) {
@@ -677,14 +687,14 @@ watch(
           <div class="muted" style="font-size: 13px">{{ sectionHint }}</div>
         </div>
         <div class="header-right">
-          <div v-if="stats && (section === 'review' || section === 'listed')" class="header-chips">
+          <div v-if="stats && section === 'caps'" class="header-chips">
             <div class="chip"><span class="chip-num">{{ stats.total_capabilities }}</span>能力总数</div>
             <div class="chip"><span class="chip-num success">{{ stats.published_count }}</span>已上架</div>
             <div class="chip"><span class="chip-num warning">{{ stats.reviewing_count }}</span>待审核</div>
             <div class="chip"><span class="chip-num primary">{{ stats.total_usage }}</span>总用量</div>
           </div>
           <button
-            v-if="section === 'review' && stats"
+            v-if="section === 'caps' && capsTab === 'review' && stats"
             class="btn"
             type="button"
             @click="showStatsDetail = !showStatsDetail"
@@ -707,8 +717,28 @@ watch(
       <!-- 官方 MCP Registry 导入(仅元数据, 汇入审核队列) -->
       <RegistryImportPanel />
 
-      <!-- 审核队列 -->
-      <section v-if="section === 'review'" class="desk">
+      <!-- 能力管理：审核队列 / 上架治理 -->
+      <section v-if="section === 'caps'" class="desk">
+        <div class="seg mb-12" style="max-width: 360px">
+          <button
+            type="button"
+            class="seg-item"
+            :class="{ active: capsTab === 'review' }"
+            @click="capsTab = 'review'"
+          >
+            审核队列 <span>{{ auditCounts.pending }}</span>
+          </button>
+          <button
+            type="button"
+            class="seg-item"
+            :class="{ active: capsTab === 'listed' }"
+            @click="capsTab = 'listed'"
+          >
+            上架治理 <span>{{ listedCounts.all }}</span>
+          </button>
+        </div>
+
+        <template v-if="capsTab === 'review'">
         <div v-if="showStatsDetail && stats" class="stats-band">
           <div class="panel">
             <h3>类型分布</h3>
@@ -829,7 +859,7 @@ watch(
 
                 <div class="meta-row">
                   <div><span class="meta-k">开发者</span>{{ selectedCap.author_name || '—' }}</div>
-                  <div><span class="meta-k">来源</span>{{ selectedCap.organization || '个人' }}</div>
+                  <div><span class="meta-k">部门</span>{{ selectedCap.organization || '个人' }}</div>
                   <div><span class="meta-k">加入次数</span>{{ selectedCap.usage_count || 0 }}</div>
                   <div><span class="meta-k">提交时间</span>{{ formatDate(selectedCap.updated_at) }}</div>
                   <div><span class="meta-k">版本</span>v{{ selectedCap.version }}</div>
@@ -891,13 +921,13 @@ watch(
                   </template>
                   <div v-else class="muted" style="font-size: 13px">暂无校验报告</div>
                 </div>
-              </template>
-            </div>
-          </div>
-      </section>
+               </template>
+             </div>
+           </div>
+        </template>
 
-      <section v-else-if="section === 'listed'">
-        <div class="desk-toolbar">
+        <template v-else>
+         <div class="desk-toolbar">
           <div class="seg">
             <button type="button" class="seg-item" :class="{ active: listedFilter === 'published' }" @click="listedFilter = 'published'">
               已上架 <span>{{ listedCounts.published }}</span>
@@ -973,9 +1003,10 @@ watch(
                   </div>
                 </td>
               </tr>
-            </tbody>
-          </table>
-        </div>
+             </tbody>
+           </table>
+         </div>
+        </template>
       </section>
 
       <section v-else-if="section === 'users'" class="panel">
@@ -997,21 +1028,19 @@ watch(
         <div v-if="userNotice" class="alert alert-success">{{ userNotice }}</div>
         <table class="table mt-16">
           <thead>
-            <tr><th>用户</th><th>邮箱</th><th>部门</th><th>组织</th><th>角色</th><th>状态</th><th>操作</th></tr>
+            <tr><th>用户</th><th>邮箱</th><th>部门</th><th>角色</th><th>状态</th><th>操作</th></tr>
           </thead>
           <tbody>
             <tr v-if="filteredUsers.length === 0">
-              <td colspan="7" class="muted">{{ userQuery ? '无匹配用户' : '暂无用户' }}</td>
+              <td colspan="6" class="muted">{{ userQuery ? '无匹配用户' : '暂无用户' }}</td>
             </tr>
             <tr v-for="u in filteredUsers" :key="u.id">
               <td>{{ u.display_name || u.username }} <span class="muted">@{{ u.username }}</span></td>
               <td>{{ u.email }}</td>
               <td>{{ u.department || '-' }}</td>
-              <td>{{ u.organization || u.team || '-' }}</td>
               <td>
                 <select :value="u.role" class="select" style="width: auto; padding: 4px 8px" :disabled="isSelf(u)" @change="updateUser(u, { role: $event.target.value })">
                   <option value="admin">管理员</option>
-                  <option value="publisher">发布者</option>
                   <option value="user">普通用户</option>
                 </select>
               </td>
@@ -1135,7 +1164,6 @@ watch(
           <div class="field"><label>邮箱 *</label><input v-model="userForm.email" class="input" placeholder="user@example.com" /></div>
           <div class="field"><label>初始密码 *</label><input v-model="userForm.password" type="password" class="input" placeholder="至少 6 位" /></div>
           <div class="field"><label>显示名</label><input v-model="userForm.display_name" class="input" /></div>
-          <div class="field"><label>组织</label><input v-model="userForm.organization" class="input" /></div>
           <div class="field"><label>部门</label><input v-model="userForm.department" class="input" list="dept-suggest" placeholder="如：研发部" /></div>
         </div>
         <div class="field mt-12">
@@ -1165,7 +1193,6 @@ watch(
           <div class="field"><label>用户名</label><input v-model="editForm.username" class="input" /></div>
           <div class="field"><label>邮箱</label><input v-model="editForm.email" class="input" /></div>
           <div class="field"><label>显示名</label><input v-model="editForm.display_name" class="input" /></div>
-          <div class="field"><label>组织</label><input v-model="editForm.organization" class="input" /></div>
           <div class="field"><label>部门</label><input v-model="editForm.department" class="input" list="dept-suggest" placeholder="如：研发部" /></div>
           <div class="field"><label>重置密码（留空不改）</label><input v-model="editForm.password" type="password" class="input" placeholder="至少 6 位" /></div>
         </div>

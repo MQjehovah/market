@@ -73,7 +73,7 @@ async def create_workflow(data: WorkflowCreate, db: DbSession, user: CurrentUser
         allowed_users=data.allowed_users,
         status="draft",
         author_id=user.id,
-        organization=user.organization,
+        organization=user.department,
         readme_md=extract_readme_text(pkg),
     )
     db.add(cap)

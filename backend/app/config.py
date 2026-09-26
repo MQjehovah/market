@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     seed_admin_username: str = "admin"
     seed_admin_password: str = "admin123"
     seed_admin_email: str = "admin@example.com"
+    # 第三个演示账号的口令(账号名为 publisher, 角色已并入 user)
     seed_publisher_password: str = "change-me"
     seed_user_password: str = "change-me"
 
@@ -69,7 +70,7 @@ class Settings(BaseSettings):
     agent_max_iterations: int = 10
 
     # runtime 调用授权：只有这些角色可以调用/执行能力（工具调用、Agent 任务、技能激活、
-    # MCP 安装、工作流执行、A2A 委派）。默认仅管理员，可配成 "admin,publisher" 等。
+    # MCP 安装、工作流执行、A2A 委派）。默认仅管理员，可配成 "admin,user" 等。
     runtime_access_roles: str = "admin"
 
     # MCP 网关 Streamable HTTP 是否无状态：多 worker 部署必须为 True（服务器不分配会话，

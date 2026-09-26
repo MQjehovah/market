@@ -22,7 +22,7 @@ router = APIRouter(prefix="/api/authoring", tags=["authoring"])
 
 def _require_publish(user) -> None:
     if not role_has_permission(user.role, "capability.publish"):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "需要发布权限（Publisher/Admin）")
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "需要发布权限（Admin）")
 
 
 def _job_out(job: AuthoringJob) -> AuthoringJobOut:

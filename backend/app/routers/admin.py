@@ -203,8 +203,6 @@ async def update_user(user_id: str, data: UserAdminUpdate, db: DbSession, user: 
         target.is_active = data.is_active
     if data.display_name is not None:
         target.display_name = data.display_name
-    if data.organization is not None:
-        target.organization = data.organization
     if data.team is not None:
         target.team = data.team
     if data.department is not None:
@@ -262,7 +260,6 @@ async def create_user(data: UserAdminCreate, db: DbSession, user: CurrentUser):
         email=data.email,
         password_hash=hash_password(data.password),
         display_name=data.display_name or data.username,
-        organization=data.organization,
         team=data.team,
         department=data.department,
         role=data.role,

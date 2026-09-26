@@ -2,9 +2,9 @@
 
 import re
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator
 
 # 标准机器名(slug)允许字符: MCP 命名空间(io.github.user/server-name) 与 Skill 名(pdf-processing)
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9._/-]*$")
@@ -44,7 +44,19 @@ CapabilityType = Literal[
 ]
 VISIBILITY_LEVELS = ("private", "team", "internal", "public")
 STATUS_LEVELS = ("draft", "reviewing", "published", "deprecated", "archived", "rejected", "returned")
-ROLES = ("admin", "publisher", "user")
+ROLES = ("admin", "user")
+
+
+def _normalize_role(value: Any) -> Any:
+    """历史 ``publisher`` 角色并入 ``user``（发布者角色已取消，所有登录用户均可发布）。"""
+    if value is None:
+        return value
+    if str(value).strip().lower() == "publisher":
+        return "user"
+    return value
+
+
+AdminRole = Annotated[Literal["admin", "user"], BeforeValidator(_normalize_role)]
 
 
 class UserLogin(BaseModel):
@@ -60,7 +72,6 @@ class UserOut(BaseModel):
     email: str
     display_name: str
     role: str
-    organization: str
     team: str
     department: str = ""
     is_active: bool = True
@@ -72,10 +83,9 @@ class UserAdminCreate(BaseModel):
     email: str = Field(max_length=255)
     password: str = Field(min_length=6, max_length=128)
     display_name: str = Field(default="", max_length=64)
-    organization: str = Field(default="", max_length=100)
     team: str = Field(default="", max_length=100)
     department: str = Field(default="", max_length=100)
-    role: Literal["admin", "publisher", "user"] = "user"
+    role: AdminRole = "user"
 
 
 class UserAdminUpdate(BaseModel):
@@ -83,10 +93,9 @@ class UserAdminUpdate(BaseModel):
     email: str | None = Field(default=None, max_length=255)
     password: str | None = Field(default=None, min_length=6, max_length=128, description="留空不修改")
     display_name: str | None = Field(default=None, max_length=64)
-    organization: str | None = Field(default=None, max_length=100)
     team: str | None = Field(default=None, max_length=100)
     department: str | None = Field(default=None, max_length=100)
-    role: Literal["admin", "publisher", "user"] | None = None
+    role: AdminRole | None = None
     is_active: bool | None = None
 
 

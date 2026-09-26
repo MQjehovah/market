@@ -371,7 +371,7 @@ async def save_version(
             visibility=base.visibility,
             status="draft",
             author_id=user.id,
-            organization=user.organization,
+            organization=user.department,
             **draft_policy_kwargs(base),
         )
         db.add(cap)

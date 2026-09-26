@@ -167,5 +167,13 @@ async def _auto_migrate(conn) -> None:
                 sync_conn.exec_driver_sql(
                     "ALTER TABLE users ADD COLUMN department VARCHAR(100) DEFAULT ''"
                 )
+            # 发布者角色已取消：历史 publisher 统一并入 user
+            sync_conn.exec_driver_sql("UPDATE users SET role = 'user' WHERE role = 'publisher'")
+            # 组织并入部门：部门为空时用历史 organization 回填
+            sync_conn.exec_driver_sql(
+                "UPDATE users SET department = organization "
+                "WHERE (department IS NULL OR department = '') "
+                "AND organization IS NOT NULL AND organization != ''"
+            )
 
     await conn.run_sync(_do)

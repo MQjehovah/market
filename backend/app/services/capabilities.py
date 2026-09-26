@@ -362,7 +362,7 @@ async def create_capability(
         risk_default=getattr(data, "risk_default", None) or "read",
         data_domain=(getattr(data, "data_domain", None) or "").strip(),
         author_id=user.id,
-        organization=user.organization,
+        organization=user.department,
         status="draft",
     )
     db.add(cap)

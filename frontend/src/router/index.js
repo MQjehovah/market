@@ -17,30 +17,20 @@ import AdminView from '../views/AdminView.vue'
 import { authState, clearAuth, isTokenExpired } from '../stores/auth'
 
 const ADMIN_TITLES = {
-  review: '审核',
-  listed: '上架治理',
+  caps: '能力管理',
   users: '用户管理',
   gateway: 'MCP 网关',
   tokens: '服务令牌'
 }
 
 function adminLanding(to) {
-  const map = {
-    desk: 'review',
-    review: 'review',
-    caps: 'listed',
-    listed: 'listed',
-    users: 'users',
-    gateway: 'gateway',
-    tokens: 'tokens',
-    stats: 'review',
-    debug: 'review',
-    roles: 'users'
-  }
-  const section = map[String(to.query.tab || '')] || 'review'
+  const raw = String(to.query.tab || '')
   const query = { ...to.query }
   delete query.tab
-  if (String(to.query.tab) === 'debug') query.trial = '1'
+  if (raw === 'debug') query.trial = '1'
+  if (raw === 'listed') query.ctab = 'listed'
+  const sectionMap = { users: 'users', gateway: 'gateway', tokens: 'tokens', roles: 'users' }
+  const section = sectionMap[raw] || 'caps'
   return { path: `/admin/${section}`, query }
 }
 

@@ -75,7 +75,7 @@ const allowedUsers = ref('')
 const allowedDepartments = ref('')
 const allowedRoles = ref([])
 const accessSaved = ref('')
-const ACCESS_ROLE_KEYS = ['admin', 'publisher', 'user']
+const ACCESS_ROLE_KEYS = ['admin', 'user']
 
 function normList(values) {
   if (!Array.isArray(values)) return []
@@ -122,7 +122,6 @@ const editForm = reactive({
 
 const isOwner = computed(() => cap.value && authState.user && cap.value.author_id === authState.user.id)
 const isAdmin = computed(() => authState.user?.role === 'admin')
-const isPublisher = computed(() => ['admin', 'publisher'].includes(authState.user?.role))
 
 const canEdit = computed(() => isOwner.value && ['draft', 'returned', 'rejected'].includes(cap.value?.status))
 const hasPackage = computed(() => Boolean((cap.value?.artifacts || []).length))
@@ -141,9 +140,9 @@ const needsPackageFirst = computed(
 const canDelete = computed(() => isOwner.value && ['draft', 'returned', 'rejected', 'reviewing'].includes(cap.value?.status))
 const canWithdraw = computed(() => isOwner.value && cap.value?.status === 'reviewing')
 const canReview = computed(() => isAdmin.value && cap.value?.status === 'reviewing')
-/** 可查看/管理能力包与产物（作者/管理员/发布者）：文件预览等作者面仅对其可见 */
+/** 可查看/管理能力包与产物（作者/管理员）：文件预览等作者面仅对其可见 */
 const canViewPackage = computed(
-  () => isOwner.value || isAdmin.value || isPublisher.value || canEdit.value || canReview.value
+  () => isOwner.value || isAdmin.value || canEdit.value || canReview.value
 )
 const isAgent = computed(() => cap.value?.type === 'agent')
 const isPlugin = computed(() => cap.value?.type === 'plugin')
@@ -2006,7 +2005,7 @@ onMounted(() => {
           </div>
 
           <h3 class="manage-group">发布操作</h3>
-          <div v-if="canSubmit || canWithdraw || canDelete || preferOnlineEdit || isAdmin || isPublisher" class="panel">
+            <div v-if="canSubmit || canWithdraw || canDelete || preferOnlineEdit || isAdmin" class="panel">
             <h3>操作</h3>
             <div class="flex flex-wrap" style="gap: 8px">
               <router-link

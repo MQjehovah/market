@@ -211,14 +211,15 @@ async def _resolve_sso_user(
     return user
 
 
-# market 角色优先级(仅升权): user < publisher < admin
-_ROLE_RANK = {"user": 0, "publisher": 1, "admin": 2}
+# market 角色优先级(仅升权): user < admin
+_ROLE_RANK = {"user": 0, "admin": 1}
 
 
 def _sso_role(claims: dict) -> str:
-    """把 SSO ``roles`` claim 映射为 market 角色(user/publisher/admin)。
+    """把 SSO ``roles`` claim 映射为 market 角色(user/admin)。
 
     支持 list[str] 或逗号分隔字符串; 取最高优先级角色; 无匹配回退 user。
+    历史 ``publisher`` 角色已取消, 统一并入 user(所有登录用户均可发布)。
     """
     raw = claims.get("roles")
     if isinstance(raw, str):
@@ -229,13 +230,11 @@ def _sso_role(claims: dict) -> str:
         roles = []
     if "admin" in roles:
         return "admin"
-    if "publisher" in roles:
-        return "publisher"
     return "user"
 
 
 def _new_sso_user(username: str, claims: dict) -> User:
-    """按 SSO claims 建本地用户：role 由 SSO roles 映射(user/publisher/admin)。
+    """按 SSO claims 建本地用户：role 由 SSO roles 映射(user/admin)。
 
     email 为 NOT NULL UNIQUE，claims 缺省时用派生自唯一 username 的占位邮箱，
     避免空串撞唯一索引；password_hash 置随机不可登录占位值（SSO 用户走免密）。

@@ -5,7 +5,7 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_admin_create_user_role_and_toggle(client, admin_headers, user_headers):
-    # 管理员新增发布者
+    # 管理员新增普通用户（发布者角色已取消，普通用户即可发布）
     r = await client.post(
         "/api/admin/users",
         headers=admin_headers,
@@ -13,18 +13,18 @@ async def test_admin_create_user_role_and_toggle(client, admin_headers, user_hea
             "username": "newpublisher",
             "email": "newpublisher@example.com",
             "password": "secret123",
-            "display_name": "新发布者",
-            "organization": "平台部",
-            "role": "publisher",
+            "display_name": "新用户",
+            "department": "平台部",
+            "role": "user",
         },
     )
     assert r.status_code == 201, r.text
     body = r.json()
-    assert body["role"] == "publisher"
+    assert body["role"] == "user"
     assert body["is_active"] is True
     uid = body["id"]
 
-    # 新用户可登录（role=publisher）
+    # 新用户可登录
     r = await client.post(
         "/api/auth/login", json={"username": "newpublisher", "password": "secret123"}
     )

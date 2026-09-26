@@ -103,7 +103,7 @@ watch(isAdmin, loadAdminBadge)
 <template>
   <aside class="side-nav">
     <div class="side-top">
-      <router-link to="/" class="brand" title="发现 · 安装 · 发布 · 审核 · 治理">
+      <router-link to="/" class="brand" title="发现 · 安装 · 发布 · 治理">
         <img class="brand-logo" :src="logoUrl" alt="Rosiwit" />
         <span class="brand-text">
           <strong>企业AI能力平台</strong>
@@ -142,26 +142,19 @@ watch(isAdmin, loadAdminBadge)
       <div v-if="isAdmin" class="nav-group">
         <div class="nav-label">治理</div>
         <router-link
-          to="/admin/review"
+          to="/admin/caps"
           class="nav-item"
-          :class="{ active: adminSection === 'review' }"
+          :class="{ active: adminSection === 'caps' }"
         >
-          审核
+          能力管理
           <span v-if="reviewingCount" class="nav-count">{{ reviewingCount }}</span>
-        </router-link>
-        <router-link
-          to="/admin/listed"
-          class="nav-item"
-          :class="{ active: adminSection === 'listed' }"
-        >
-          上架治理
         </router-link>
         <router-link
           to="/admin/users"
           class="nav-item"
           :class="{ active: adminSection === 'users' }"
         >
-          用户
+          用户管理
         </router-link>
         <router-link
           to="/admin/gateway"

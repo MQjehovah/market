@@ -34,10 +34,10 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     display_name: Mapped[str] = mapped_column(String(64), default="")
-    role: Mapped[str] = mapped_column(String(16), default="user")  # admin | publisher | user
-    organization: Mapped[str] = mapped_column(String(100), default="")
+    role: Mapped[str] = mapped_column(String(16), default="user")  # admin | user
+    organization: Mapped[str] = mapped_column(String(100), default="")  # 历史字段, 已并入 department
     team: Mapped[str] = mapped_column(String(100), default="")
-    department: Mapped[str] = mapped_column(String(100), default="")
+    department: Mapped[str] = mapped_column(String(100), default="")  # 部门(唯一来源)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
@@ -68,7 +68,7 @@ class Capability(Base):
     # 头像文件相对路径（存于 data/icons/{cap_id}.{ext}）；空 = 无图
     input_schema: Mapped[dict] = mapped_column(JSON, default=dict)  # 工具参数定义（来自 schema.json）
     author_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
-    organization: Mapped[str] = mapped_column(String(100), default="")
+    organization: Mapped[str] = mapped_column(String(100), default="")  # 提供方/来源部门(取自作者 department)
     visibility: Mapped[str] = mapped_column(String(16), default="internal")
     # private | team | internal | public
     access_policy: Mapped[str] = mapped_column(String(20), default="open")

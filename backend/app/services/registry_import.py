@@ -139,7 +139,7 @@ async def import_server(db: AsyncSession, server: dict[str, Any], user: User) ->
         risk_default=fields["risk_default"],
         provenance=fields["provenance"],
         author_id=user.id,
-        organization=user.organization,
+        organization=user.department,
         status="draft",
     )
     db.add(cap)

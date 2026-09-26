@@ -57,8 +57,8 @@ async def create_service_token(
                 email=f"{username}@service.local",
                 password_hash=hash_password(secrets.token_urlsafe(32)),
                 display_name=name,
-                role="publisher",
-                organization=admin.organization or "",
+                role="user",
+                department=admin.department or "",
                 is_active=True,
             )
             db.add(svc_user)

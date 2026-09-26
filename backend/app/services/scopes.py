@@ -28,7 +28,6 @@ SCOPE_CATALOG: dict[str, str] = {
 _ROLE_BASE_SCOPES: dict[str, set[str]] = {
     "admin": set(SCOPE_CATALOG),
     "service": set(SCOPE_CATALOG),
-    "publisher": {"capability:read"},
     "user": {"capability:read"},
 }
 

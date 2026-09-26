@@ -325,7 +325,6 @@ export const PACKAGE_HINTS = {
 /** 角色展示 */
 export const ROLE_LABELS = {
   admin: '管理员',
-  publisher: '发布者',
   user: '普通用户'
 }
 

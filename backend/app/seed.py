@@ -42,9 +42,9 @@ def resolve_seed_admin_password() -> str:
 
 
 def resolve_seed_publisher_password() -> str:
-    """解析种子发布者口令(规则见 _resolve_seed_password)。"""
+    """解析第三个演示账号的口令(账号名 publisher, 角色已并入 user)。"""
     return _resolve_seed_password(
-        get_settings().seed_publisher_password, "SEED_PUBLISHER_PASSWORD", "发布者"
+        get_settings().seed_publisher_password, "SEED_PUBLISHER_PASSWORD", "演示账号"
     )
 
 
@@ -67,16 +67,7 @@ async def seed_if_empty(db: AsyncSession) -> None:
         password_hash=hash_password(resolve_seed_admin_password()),
         display_name="市场管理员",
         role="admin",
-        organization="平台部",
-    )
-    publisher = User(
-        username="publisher",
-        email="publisher@example.com",
-        password_hash=hash_password(resolve_seed_publisher_password()),
-        display_name="能力发布者",
-        role="publisher",
-        organization="数字中台部",
-        team="中台团队",
+        department="平台部",
     )
     user = User(
         username="user",
@@ -84,10 +75,19 @@ async def seed_if_empty(db: AsyncSession) -> None:
         password_hash=hash_password(resolve_seed_user_password()),
         display_name="普通用户",
         role="user",
-        organization="业务部",
+        department="业务部",
         team="业务团队",
     )
-    db.add_all([admin, publisher, user])
+    contributor = User(
+        username="publisher",
+        email="publisher@example.com",
+        password_hash=hash_password(resolve_seed_publisher_password()),
+        display_name="内容贡献者",
+        role="user",
+        department="数字中台部",
+        team="中台团队",
+    )
+    db.add_all([admin, user, contributor])
     await db.flush()
 
     demo = [
@@ -100,8 +100,8 @@ async def seed_if_empty(db: AsyncSession) -> None:
             category="业务分析类",
             tags=["数据分析", "报表", "中台"],
             visibility="internal",
-            author_id=publisher.id,
-            organization=publisher.organization,
+            author_id=user.id,
+            organization=user.department,
             usage_count=18,
         ),
         Capability(
@@ -113,8 +113,8 @@ async def seed_if_empty(db: AsyncSession) -> None:
             category="文件操作",
             tags=["只读", "无状态", "低风险"],
             visibility="internal",
-            author_id=publisher.id,
-            organization=publisher.organization,
+            author_id=user.id,
+            organization=user.department,
             usage_count=42,
         ),
         Capability(
@@ -126,8 +126,8 @@ async def seed_if_empty(db: AsyncSession) -> None:
             category="开发流程",
             tags=["TDD", "测试", "工程实践"],
             visibility="internal",
-            author_id=publisher.id,
-            organization=publisher.organization,
+            author_id=user.id,
+            organization=user.department,
             usage_count=9,
         ),
         Capability(
@@ -140,7 +140,7 @@ async def seed_if_empty(db: AsyncSession) -> None:
             tags=["数据库", "SQL"],
             visibility="internal",
             author_id=admin.id,
-            organization=admin.organization,
+            organization=admin.department,
             usage_count=27,
         ),
         Capability(
@@ -152,8 +152,8 @@ async def seed_if_empty(db: AsyncSession) -> None:
             category="开发专家类",
             tags=["代码审查", "质量"],
             visibility="team",
-            author_id=publisher.id,
-            organization=publisher.organization,
+            author_id=user.id,
+            organization=user.department,
         ),
         Capability(
             name="会议纪要模板",
@@ -164,8 +164,8 @@ async def seed_if_empty(db: AsyncSession) -> None:
             category="通用专家类",
             tags=["会议", "效率"],
             visibility="private",
-            author_id=publisher.id,
-            organization=publisher.organization,
+            author_id=user.id,
+            organization=user.department,
         ),
     ]
     db.add_all(demo)

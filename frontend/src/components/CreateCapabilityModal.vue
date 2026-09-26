@@ -47,7 +47,7 @@ const form = reactive({
   data_domain: '',
   workflowJson: '{\n  "nodes": [],\n  "edges": []\n}'
 })
-const ACCESS_ROLE_KEYS = ['admin', 'publisher', 'user']
+const ACCESS_ROLE_KEYS = ['admin', 'user']
 const error = ref('')
 const busy = ref(false)
 

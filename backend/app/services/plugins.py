@@ -815,7 +815,7 @@ async def _upsert_component(
         cap.type = type_
         cap.description = comp.get("description") or cap.description
         cap.visibility = plugin_cap.visibility
-        cap.organization = user.organization
+        cap.organization = user.department
         tags = list(cap.tags or [])
         if "plugin-component" not in tags:
             tags.append("plugin-component")
@@ -842,7 +842,7 @@ async def _upsert_component(
             allowed_departments=list(plugin_cap.allowed_departments or []),
             allowed_roles=list(plugin_cap.allowed_roles or []),
             author_id=user.id,
-            organization=user.organization,
+            organization=user.department,
             status="draft",
             input_schema=parent_schema,
         )
