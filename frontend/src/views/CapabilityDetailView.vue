@@ -674,7 +674,7 @@ const typeInitial = computed(() => {
 })
 /** 技术信息（从徽章行下沉，避免头部拥挤） */
 const metaBits = computed(() => {
-  const bits: string[] = []
+  const bits = []
   const d = DISTRIBUTION_LABELS[cap.value?.distribution]
   if (d) bits.push(`分发：${d}`)
   const r = RISK_DEFAULT_LABELS[cap.value?.risk_default]
