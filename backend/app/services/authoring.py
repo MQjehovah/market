@@ -93,19 +93,22 @@ implementations：stdio 时给出 MCP server 的 Python 源码骨架（可运行
 
 
 def _extract_json(text: str) -> dict[str, Any] | None:
-    """从模型输出里提取第一个 JSON 对象（容忍 ```json 围栏与前后噪声）。"""
+    """从模型输出里提取第一个 JSON 对象。
+
+    仅在整段被 ``` 围栏**整体包裹**时才剥离（避免误删字符串内容里的 ``` 代码块，
+    如 SKILL.md 模板中常见的代码围栏）；再用 raw_decode 容忍尾随文字。
+    """
     if not text:
         return None
     raw = text.strip()
-    m = re.search(r"```(?:json)?\s*(.*?)```", raw, re.S | re.I)
+    m = re.match(r"^```(?:json)?\s*(.*?)\s*```$", raw, re.S | re.I)
     if m:
         raw = m.group(1).strip()
     start = raw.find("{")
-    end = raw.rfind("}")
-    if start == -1 or end == -1 or end <= start:
+    if start == -1:
         return None
     try:
-        data = json.loads(raw[start : end + 1])
+        data, _ = json.JSONDecoder().raw_decode(raw[start:])
     except Exception:  # noqa: BLE001
         return None
     return data if isinstance(data, dict) else None
@@ -163,3 +166,40 @@ async def generate(
         logger.warning("AI 创作返回无法解析为 JSON: %s", content[:300])
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "AI 返回无法解析为 JSON，请重试或换种描述")
     return {"kind": kind, "fields": data, "raw": content[:8000]}
+
+
+async def run_job(job_id: str) -> None:
+    """后台执行创作任务并回写状态(独立 DB 会话；由路由 asyncio.create_task 触发)。"""
+    from datetime import datetime
+
+    from app.database import SessionLocal
+    from app.models import AuthoringJob
+
+    async with SessionLocal() as db:
+        job = await db.get(AuthoringJob, job_id)
+        if job is None:
+            return
+        job.status = "running"
+        await db.commit()
+
+        req = job.request or {}
+        try:
+            res = await generate(
+                kind=str(req.get("kind") or ""),
+                name=str(req.get("name") or ""),
+                description=str(req.get("description") or ""),
+                instruction=str(req.get("instruction") or ""),
+                current=req.get("current") or {},
+            )
+            job.fields = res.get("fields") or {}
+            job.raw = res.get("raw") or ""
+            job.status = "done"
+        except HTTPException as exc:
+            job.status = "error"
+            job.error = str(exc.detail)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("创作任务失败 job=%s", job_id)
+            job.status = "error"
+            job.error = f"{type(exc).__name__}: {exc}"
+        job.updated_at = datetime.utcnow()
+        await db.commit()

@@ -424,3 +424,22 @@ class CapabilitySecret(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
     )
+
+
+class AuthoringJob(Base):
+    """AI 创作助手后台任务：长耗时 LLM 生成异步化，不阻塞请求。"""
+
+    __tablename__ = "authoring_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), default="")
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)  # pending|running|done|error
+    request: Mapped[dict] = mapped_column(JSON, default=dict)
+    fields: Mapped[dict] = mapped_column(JSON, default=dict)
+    raw: Mapped[str] = mapped_column(Text, default="")
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )

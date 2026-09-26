@@ -826,3 +826,12 @@ class AuthoringOut(BaseModel):
     kind: str
     fields: dict[str, Any] = Field(default_factory=dict)
     raw: str = ""
+
+
+class AuthoringJobOut(BaseModel):
+    job_id: str
+    status: str
+    kind: str = ""
+    fields: dict[str, Any] = Field(default_factory=dict)
+    raw: str = ""
+    error: str = ""

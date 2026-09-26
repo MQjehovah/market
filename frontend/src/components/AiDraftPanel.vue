@@ -18,6 +18,7 @@ const notice = ref('')
 
 const KIND_LABEL = { agent: '专家', skill: '技能', tool: '工具', mcp: '连接器' }
 const label = KIND_LABEL[props.kind] || '能力'
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 async function run() {
   error.value = ''
@@ -30,14 +31,28 @@ async function run() {
   }
   busy.value = true
   try {
-    const body = await api.post('/authoring/generate', {
+    // 长任务后台执行：创建任务后轮询（不阻塞服务端主进程）
+    const job = await api.post('/authoring/jobs', {
       kind: props.kind,
       name: props.name,
       description: desc,
       instruction: ins
     })
-    emit('apply', body.fields || {}, body)
-    notice.value = '已生成，请核对后保存（保存即新版本草稿）'
+    const id = job.job_id
+    for (let i = 0; i < 150; i++) {
+      await sleep(2000)
+      const j = await api.get(`/authoring/jobs/${encodeURIComponent(id)}`)
+      if (j.status === 'done') {
+        emit('apply', j.fields || {}, j)
+        notice.value = '已生成，请核对后保存（保存即新版本草稿）'
+        return
+      }
+      if (j.status === 'error') {
+        error.value = j.error || '生成失败'
+        return
+      }
+    }
+    error.value = '生成超时，请稍后重试'
   } catch (e) {
     error.value = e.message
   } finally {
