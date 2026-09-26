@@ -659,10 +659,10 @@ const contentTabs = computed(() => {
   if (isAgent.value && (embeddedSkills.value.length || embeddedMcp.value.length)) {
     tabs.push({ key: 'bundle', label: '内含能力' })
   }
-  tabs.push({ key: 'versions', label: '版本' })
   if (isMcp.value) {
     tabs.push({ key: 'config', label: '配置' })
   }
+  tabs.push({ key: 'versions', label: '版本' })
   if (((cap.value.artifacts || []).length && canViewPackage.value) || canEditPackage.value) {
     tabs.push({ key: 'files', label: '文件' })
   }
