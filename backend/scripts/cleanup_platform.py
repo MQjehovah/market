@@ -13,10 +13,12 @@ from app.database import SessionLocal
 from app.models import Capability
 from app.services.capabilities import parse_semver
 
-# 插件组件按名称重定向（旧名 -> 现名）
+# 插件组件按名称重定向（旧名 -> 现名）；优先于同名解析
 NAME_ALIAS = {
     ("mcp", "erp_api"): ("mcp", "erp"),
     ("agent", "device-ops"): ("agent", "设备运维"),
+    ("mcp", "remote_operation"): ("mcp", "rosiwit-cloud-remote"),
+    ("mcp", "ticket_ops"): ("mcp", "rosiwit-cloud-ticket"),
 }
 
 # 已发布能力补显示名
@@ -91,9 +93,11 @@ async def main() -> None:
                 if not isinstance(comp, dict):
                     continue
                 t, n = comp.get("type"), comp.get("name")
-                tgt = current(t, n)
-                if tgt is None and (t, n) in NAME_ALIAS:
+                # 旧名重定向优先（避免解析回同名但已弃用的旧能力）
+                if (t, n) in NAME_ALIAS:
                     tgt = current(*NAME_ALIAS[(t, n)])
+                else:
+                    tgt = current(t, n)
                 if tgt is not None and comp.get("capability_id") != tgt.id:
                     comp["capability_id"] = tgt.id
                     comp["version"] = tgt.version
