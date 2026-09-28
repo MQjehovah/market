@@ -335,6 +335,8 @@ class TaskSearchHitOut(CapabilityOut):
 
     match_score: float = 0.0
     matched_terms: list[str] = Field(default_factory=list)
+    # 当前 viewer(subject)是否可直接调用: 已加入「我的能力」(按名跨版本) 或作者/管理员
+    joined: bool = False
 
 
 class TaskSearchOut(BaseModel):

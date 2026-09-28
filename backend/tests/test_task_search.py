@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import select
 
 from app.database import SessionLocal
-from app.models import Capability, User
+from app.models import Capability, User, UserCapability
 from app.services.task_search import score_capability, tokenize_query
 
 
@@ -150,3 +150,30 @@ async def test_task_search_empty_q(client):
     assert body["agents"] == []
     assert body["skills"] == []
     assert body["mcps"] == []
+
+
+@pytest.mark.asyncio
+async def test_task_search_marks_joined_for_subscription(client, user_headers):
+    """joined 标记: 未加入=false; 加入「我的能力」后对应命中=true(按名跨版本)。"""
+    names = await _seed_task_caps()
+
+    r = await client.get("/api/capabilities/task-search",
+                         params={"q": "处理工单"}, headers=user_headers)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    hits = [*body["agents"], *body["skills"], *body["mcps"]]
+    assert hits and all(h["joined"] is False for h in hits)
+
+    async with SessionLocal() as db:
+        user = await db.scalar(select(User).where(User.username == "user"))
+        cap = await db.scalar(select(Capability).where(Capability.name == names["skill"]))
+        db.add(UserCapability(user_id=user.id, capability_id=cap.id))
+        await db.commit()
+
+    r = await client.get("/api/capabilities/task-search",
+                         params={"q": "处理工单"}, headers=user_headers)
+    body = r.json()
+    by_name = {x["name"]: x for grp in ("agents", "skills", "mcps", "others", "plugins")
+               for x in body[grp]}
+    assert by_name[names["skill"]]["joined"] is True
+    assert by_name[names["agent"]]["joined"] is False

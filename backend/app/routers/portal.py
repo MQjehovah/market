@@ -7,8 +7,8 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse, StreamingResponse
-from sqlalchemy import String, and_, case, cast, func, or_, select
-from sqlalchemy.orm import joinedload, selectinload
+from sqlalchemy import String, and_, cast, or_, select
+from sqlalchemy.orm import joinedload
 
 from app.auth import CurrentUser, DbSession, OptionalUser
 from app.config import get_settings
@@ -21,6 +21,7 @@ from app.models import (
     User,
     UserCapability,
 )
+from app.permissions import role_has_permission
 from app.schemas import (
     AccessPolicyUpdate,
     BindingUpdate,
@@ -342,10 +343,41 @@ async def task_search_capabilities(
         for c in (await db.scalars(stmt)).all()
         if "plugin-component" not in (c.tags or [])
     ]
+
+    # 可直接调用标记: 已加入「我的能力」(按能力名跨版本) / 作者本人 / 角色含 capability.invoke
+    joined_names: set[str] = set()
+    can_invoke_any = False
+    if viewer is not None:
+        rows = await db.scalars(
+            select(Capability.name)
+            .join(UserCapability, UserCapability.capability_id == Capability.id)
+            .where(UserCapability.user_id == viewer.id)
+        )
+        joined_names = {n for n in rows.all() if n}
+        runtime_roles = {
+            r.strip()
+            for r in get_settings().runtime_access_roles.split(",")
+            if r.strip()
+        }
+        can_invoke_any = role_has_permission(
+            viewer.role, "capability.invoke", granted_roles=runtime_roles
+        )
+    by_name = {c.name: c for c in caps}
+
     raw = await run_task_search(db, caps, query)
 
     def _hits(rows: list[dict]) -> list[TaskSearchHitOut]:
-        return [TaskSearchHitOut(**row) for row in rows]
+        out: list[TaskSearchHitOut] = []
+        for row in rows:
+            name = str(row.get("name") or "")
+            cap = by_name.get(name)
+            direct = can_invoke_any or (
+                viewer is not None and cap is not None and cap.author_id == viewer.id
+            )
+            data = dict(row)
+            data["joined"] = bool(direct or name in joined_names)
+            out.append(TaskSearchHitOut(**data))
+        return out
 
     return TaskSearchOut(
         q=raw["q"],
