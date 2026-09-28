@@ -149,6 +149,16 @@ def test_verify_sso_token_rejects_wrong_audience(sso_env):
         verify_sso_token(token)
 
 
+def test_verify_sso_token_rejects_missing_aud_claim(sso_env):
+    """无 aud claim 的 token fail-closed 拒绝(不静默跳过受众校验)。"""
+    key, _ = sso_env
+    payload = valid_claims()
+    payload.pop("aud")
+    token = sign_token(payload, key)
+    with pytest.raises(SsoAuthError, match="audience"):
+        verify_sso_token(token)
+
+
 def test_sso_audience_multi_value_accepts_each(sso_env, monkeypatch):
     """sso_audience 逗号多值: gateway 与 dashboard-gateway 均通过, 其它拒绝。"""
     key, _ = sso_env

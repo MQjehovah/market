@@ -158,14 +158,14 @@ def _expected_audiences(settings, explicit: str | None = None) -> list[str]:
 
 
 def _audience_matches(claims: dict, expected: list[str]) -> bool:
-    """token aud 是否命中期望受众之一。
+    """token aud 是否命中期望受众之一(fail-closed)。
 
-    python-jose 的 audience 参数只接受字符串(传 list 报错),而 token 里的 aud
-    claim 本身可以是字符串或列表,故在此自行校验(命中任一期望值即通过);
-    无 aud claim 时不校验,与 python-jose 原行为保持一致。
+    无 aud claim 直接拒绝(不接受未面向任何受众的 token);python-jose 的
+    audience 参数只接受字符串(传 list 报错),而 token 里的 aud claim 本身
+    可以是字符串或列表,故在此自行校验(命中任一期望值即通过)。
     """
     if "aud" not in claims:
-        return True
+        return False
     aud = claims["aud"]
     token_auds = [aud] if isinstance(aud, str) else aud
     if not isinstance(token_auds, list) or any(not isinstance(item, str) for item in token_auds):
