@@ -149,6 +149,47 @@ def test_verify_sso_token_rejects_wrong_audience(sso_env):
         verify_sso_token(token)
 
 
+def test_sso_audience_multi_value_accepts_each(sso_env, monkeypatch):
+    """sso_audience 逗号多值: gateway 与 dashboard-gateway 均通过, 其它拒绝。"""
+    key, _ = sso_env
+    monkeypatch.setattr(get_settings(), "sso_audience", "gateway,dashboard-gateway")
+
+    for aud in ("gateway", "dashboard-gateway"):
+        token = sign_token(valid_claims(aud=aud), key)
+        assert verify_sso_token(token)["aud"] == aud
+
+    with pytest.raises(SsoAuthError):
+        verify_sso_token(sign_token(valid_claims(aud="other"), key))
+
+
+def test_sso_audience_multi_value_strips_whitespace(sso_env, monkeypatch):
+    """逗号分隔项两侧空白被忽略: ' gateway , dashboard-gateway ' 同样通过。"""
+    key, _ = sso_env
+    monkeypatch.setattr(get_settings(), "sso_audience", " gateway , dashboard-gateway ")
+    token = sign_token(valid_claims(aud="gateway"), key)
+    assert verify_sso_token(token)["sub"] == "10086"
+
+
+def test_sso_audience_only_separators_rejected(monkeypatch):
+    """sso_audience 只有逗号/空白 -> 视为未配置, 拒绝(fail-closed)。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "sso_issuer", ISSUER)
+    monkeypatch.setattr(settings, "sso_audience", " , ")
+    with pytest.raises(SsoAuthError, match="未配置"):
+        verify_sso_token("x.y.z")
+
+
+def test_explicit_audience_still_single_value(sso_env, monkeypatch):
+    """显式 audience 优先且仍单值校验: 配置多值也不放行显式值之外的 aud。"""
+    key, _ = sso_env
+    monkeypatch.setattr(get_settings(), "sso_audience", "gateway,dashboard-gateway")
+    token = sign_token(valid_claims(aud="gateway"), key)
+
+    assert verify_sso_token(token, audience="gateway")["aud"] == "gateway"
+    with pytest.raises(SsoAuthError):
+        verify_sso_token(token, audience="dashboard-gateway")
+
+
 def test_verify_sso_token_rejects_expired_token(sso_env):
     key, _ = sso_env
     token = sign_token(valid_claims(exp=int(time.time()) - 60), key)

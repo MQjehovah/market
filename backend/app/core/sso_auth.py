@@ -141,19 +141,50 @@ def _public_key(kid: str | None):
     return jose_jwk.construct(jwk_dict, algorithm=ALGORITHM)
 
 
+def _expected_audiences(settings, explicit: str | None = None) -> list[str]:
+    """期望受众列表:显式 audience 优先(单值),否则 sso_audience 逗号拆分去空白。
+
+    两者均缺失(或只剩空白)时 fail-closed 拒绝。多值用于 gateway/dashboard-gateway
+    过渡期——token 的 aud 命中任一期望值即通过。
+    """
+    if explicit:
+        candidates = [explicit]
+    else:
+        candidates = (settings.sso_audience or "").split(",")
+    audiences = [item.strip() for item in candidates if item.strip()]
+    if not audiences:
+        raise SsoAuthError("SSO audience 未配置, 拒绝校验(需设置 sso_audience 或显式 audience)")
+    return audiences
+
+
+def _audience_matches(claims: dict, expected: list[str]) -> bool:
+    """token aud 是否命中期望受众之一。
+
+    python-jose 3.x 只接受字符串 audience(传 list 直接报错),故多值在此自行校验;
+    无 aud claim 时不校验,与 python-jose 原行为保持一致。
+    """
+    if "aud" not in claims:
+        return True
+    aud = claims["aud"]
+    token_auds = [aud] if isinstance(aud, str) else aud
+    if not isinstance(token_auds, list) or any(not isinstance(item, str) for item in token_auds):
+        return False
+    return any(item in token_auds for item in expected)
+
+
 def verify_sso_token(token: str, audience: str | None = None) -> dict:
     """校验 SSO 签发的 RS256 token,通过则返回 claims(含 sub 工号)。
 
     未配置 sso_issuer 视为 SSO 禁用;**audience 强制**:显式 audience 或 sso_audience
     二者必有一,否则一律拒绝(fail-closed,避免接受未面向本资源的 token)。
+    sso_audience 支持逗号多值(如 gateway,dashboard-gateway),aud 命中任一即通过;
+    显式 audience 参数仍为单值(登录回调按 client_id 校验)。
     iss/aud 不匹配、签名无效、过期、缺少 sub(工号)等一律抛 SsoAuthError。
     """
     settings = get_settings()
     if not settings.sso_issuer:
         raise SsoAuthError("SSO not configured")
-    expected_aud = (audience or settings.sso_audience or "").strip()
-    if not expected_aud:
-        raise SsoAuthError("SSO audience 未配置, 拒绝校验(需设置 sso_audience 或显式 audience)")
+    expected_audiences = _expected_audiences(settings, audience)
     try:
         header = jose_jwt.get_unverified_header(token)
     except jose_exceptions.JWTError as e:
@@ -166,7 +197,7 @@ def verify_sso_token(token: str, audience: str | None = None) -> dict:
             key,
             algorithms=[ALGORITHM],
             issuer=settings.sso_issuer,
-            audience=expected_aud,
+            options={"verify_aud": False},
         )
     except SsoAuthError:
         raise
@@ -174,6 +205,8 @@ def verify_sso_token(token: str, audience: str | None = None) -> dict:
         # JOSEError 覆盖 JWTError 及其兄弟类 JWKError(公钥构造失败),
         # 单捕 JWTError 会让 JWKError 裸抛 500
         raise SsoAuthError(f"SSO token 无效: {e}") from e
+    if not _audience_matches(claims, expected_audiences):
+        raise SsoAuthError("SSO token audience 不匹配")
     if not claims.get("sub"):
         raise SsoAuthError("SSO token 缺少 sub(工号)")
     return claims
