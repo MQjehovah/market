@@ -149,7 +149,7 @@ MCP 注意：市场包必须是 `mcp.json` + `connection.json` + `tools.json` + 
 - **能力权限**：`allowed_departments` / `allowed_roles` / `allowed_users` 三门，**每个非空维度必须全部命中（AND）**；`open` 全空放行、`restricted` 全空仅管理员/作者。作者或管理员在能力详情页「调用权限」配置（`POST /api/capabilities/{id}/access`，字段三态：未传=保持、`[]`=清空）。
 - **加入门禁**：`POST /api/my/capabilities` 需「可见 + 权限谓词通过」，否则 403（文案含原因）；`default_on` 自动加入同样尊重权限；连带组件（plugin 组件 / agent 依赖）逐条过滤。
 - **运行时门禁**：`require_runtime_access` 对已加入调用方应用同一谓词（调岗即时生效），网关 `/relay` 同样。
-- **身份语义**：所有端点一律按 Bearer 用户本人鉴权（服务令牌按绑定用户身份，无「代表用户」旁路）；**`/api/runtime/*` 仅接受用户令牌**（市场 JWT / SSO），服务令牌调用返回 403，无 token 返回 401。
+- **身份语义**：所有端点一律按 Bearer 用户本人鉴权（服务令牌按绑定用户身份，无「代表用户」旁路）；**`/api/runtime/*` 仅接受用户令牌**（市场 JWT / SSO），服务令牌调用返回 403，无 token 返回 401。A2A 例外：`POST /api/a2a/agents/{id}/a2a` 暂保留服务令牌可用（M2M 待决策，见 Phase 6 记录）。
 - **分发语义**：`distribution=remote` 云端加入即用（不提供本地安装）；`local/both` 才提供安装。
 
 ## 生命周期与审核
