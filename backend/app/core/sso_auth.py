@@ -160,7 +160,8 @@ def _expected_audiences(settings, explicit: str | None = None) -> list[str]:
 def _audience_matches(claims: dict, expected: list[str]) -> bool:
     """token aud 是否命中期望受众之一。
 
-    python-jose 3.x 只接受字符串 audience(传 list 直接报错),故多值在此自行校验;
+    python-jose 的 audience 参数只接受字符串(传 list 报错),而 token 里的 aud
+    claim 本身可以是字符串或列表,故在此自行校验(命中任一期望值即通过);
     无 aud claim 时不校验,与 python-jose 原行为保持一致。
     """
     if "aud" not in claims:

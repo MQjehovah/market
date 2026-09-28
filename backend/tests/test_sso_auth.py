@@ -170,6 +170,38 @@ def test_sso_audience_multi_value_strips_whitespace(sso_env, monkeypatch):
     assert verify_sso_token(token)["sub"] == "10086"
 
 
+def test_sso_audience_token_aud_list_hits_any(sso_env, monkeypatch):
+    """token 的 aud 是列表时: 命中配置中任一值即通过。"""
+    key, _ = sso_env
+    monkeypatch.setattr(get_settings(), "sso_audience", "gateway,dashboard-gateway")
+    token = sign_token(valid_claims(aud=["dashboard-gateway", "other"]), key)
+
+    claims = verify_sso_token(token)
+
+    assert claims["aud"] == ["dashboard-gateway", "other"]
+
+
+def test_sso_audience_token_aud_list_without_hit_rejected(sso_env, monkeypatch):
+    """token 的 aud 列表全不命中 -> 拒绝。"""
+    key, _ = sso_env
+    monkeypatch.setattr(get_settings(), "sso_audience", "gateway,dashboard-gateway")
+    token = sign_token(valid_claims(aud=["other"]), key)
+
+    with pytest.raises(SsoAuthError):
+        verify_sso_token(token)
+
+
+def test_sso_audience_malformed_token_aud_rejected(sso_env, monkeypatch):
+    """token aud 为混合类型列表 / 空列表 / 非字符串 -> 拒绝(claim 格式非法)。"""
+    key, _ = sso_env
+    monkeypatch.setattr(get_settings(), "sso_audience", "gateway,dashboard-gateway")
+
+    for bad_aud in (["gateway", 123], [], 123):
+        token = sign_token(valid_claims(aud=bad_aud), key)
+        with pytest.raises(SsoAuthError):
+            verify_sso_token(token)
+
+
 def test_sso_audience_only_separators_rejected(monkeypatch):
     """sso_audience 只有逗号/空白 -> 视为未配置, 拒绝(fail-closed)。"""
     settings = get_settings()
