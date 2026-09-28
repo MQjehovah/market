@@ -1,11 +1,10 @@
 """门户：浏览 / 搜索 / 详情 / 评分 / 订阅 / 通知 / 版本列表。"""
 
 import io
-import logging
 from collections import Counter
 from urllib.parse import quote
 
-from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import String, and_, cast, or_, select
 from sqlalchemy.orm import joinedload
@@ -42,8 +41,6 @@ from app.schemas import (
     TaskSearchHitOut,
     TaskSearchOut,
 )
-from app.services.access import capability_access_ok
-from app.services.act_as import resolve_act_as
 from app.services.capability_icons import (
     MAX_ICON_BYTES,
     delete_icon_file,
@@ -74,7 +71,6 @@ from app.services.taxonomy import (
 from app.storage import get_storage
 
 router = APIRouter(prefix="/api", tags=["portal"])
-logger = logging.getLogger("market.portal")
 
 
 def _to_out(cap: Capability, versions: list[Capability] | None = None) -> CapabilityOut:
@@ -84,28 +80,6 @@ def _to_out(cap: Capability, versions: list[Capability] | None = None) -> Capabi
 def _visibility_where(user: User | None):
     """可见性过滤（SQL 层）：单一判定来源见 ``app.services.visibility``。"""
     return visibility_condition(user)
-
-
-async def _viewer_identity(request: Request, db: DbSession, user: User | None) -> User | None:
-    """浏览视角身份：服务令牌 + X-Act-As-Sub 时代理目标用户（仅用于可见性过滤）。
-
-    非服务令牌带该头忽略（全局约定）；目标不存在/禁用由 resolve_act_as 抛 403。
-    """
-    if user is None or not is_service_token(user):
-        return user
-    sub = (request.headers.get("x-act-as-sub") or "").strip()
-    if not sub:
-        return user
-    target = await resolve_act_as(db, user, sub)
-    if target is not None:
-        logger.info(
-            "市场浏览代表用户访问：actor=%s act_as=%s path=%s",
-            user.id,
-            target.username,
-            request.url.path,
-        )
-        return target
-    return user
 
 
 def _gateway_payload(
@@ -159,7 +133,6 @@ async def package_template(kind: str, name: str = Query("example", max_length=80
 
 @router.get("/capabilities", response_model=CapabilityPage)
 async def browse_capabilities(
-    request: Request,
     db: DbSession,
     user: OptionalUser,
     q: str = "",
@@ -186,10 +159,9 @@ async def browse_capabilities(
 
     skill / mcp：按 Agent 内嵌能力名筛选（匹配 input_schema.embedded_*）。
     tag：标签精确包含（最新版本去重后按 tags 判定）。
-    act-as：服务令牌带 X-Act-As-Sub 时按目标用户可见性过滤（agent 侧防越权）。
     include_components：为 false 时隐藏全部 plugin 拆出子能力（含已发布）。
     """
-    viewer = await _viewer_identity(request, db, user)
+    viewer = user
     conditions: list = []
     visibility_where = _visibility_where(viewer)
     if visibility_where is not None:
@@ -314,20 +286,19 @@ async def browse_capabilities(
 
 @router.get("/capabilities/task-search", response_model=TaskSearchOut)
 async def task_search_capabilities(
-    request: Request,
     db: DbSession,
     user: OptionalUser,
     q: str = Query("", max_length=200),
 ):
     """按要办的事搜索：关键词打分 + 依赖/used_by 扩展，分组返回助手/技能/连接器/安装包。
 
-    服务令牌 + ``X-Act-As-Sub`` 时按**目标用户(subject)**的可见性过滤（与浏览/task-search 一致）。
+    可见性与「可直接调用」标记一律按当前 Bearer 用户（无 token 为匿名视角）。
     """
     query = (q or "").strip()
     if not query:
         return TaskSearchOut()
 
-    viewer = await _viewer_identity(request, db, user)
+    viewer = user
     conditions: list = [Capability.status == "published"]
     visibility_where = _visibility_where(viewer)
     if visibility_where is not None:
@@ -392,7 +363,6 @@ async def task_search_capabilities(
 
 @router.get("/capabilities/sync", response_model=list[dict])
 async def sync_capabilities(
-    request: Request,
     db: DbSession,
     user: OptionalUser,
     since: str | None = Query(
@@ -404,40 +374,14 @@ async def sync_capabilities(
 
     含已发布的 plugin 拆出组件（skill/mcp 等），便于其他 Agent 依赖复用。
     传 since 时改为增量：返回该时刻之后更新的全部 published/deprecated 行（不折叠为最新版）。
-    服务令牌须带 sync scope；``X-Act-As-Sub`` 代表目标用户，仅返回其已订阅且可访问的
-    remote/both 能力（非服务令牌忽略该头）。
+    可见性一律按当前 Bearer 用户；服务令牌须带 sync scope（身份即令牌绑定用户）。
     """
     from datetime import datetime
 
-    act_user: User | None = None
     if is_service_token(user):
         require_service_scope(user, "sync")
-        act_sub = (request.headers.get("x-act-as-sub") or "").strip()
-        if act_sub:
-            act_user = await resolve_act_as(db, user, act_sub)
-    elif (request.headers.get("x-act-as-sub") or "").strip():
-        logger.debug("非服务令牌携带 X-Act-As-Sub，已忽略")
 
-    visible = await get_visible_capabilities(db, act_user or user)
-    if act_user is not None:
-        # admin 不依赖订阅（与 access.py 的 admin 早退一致）：返回其可见 ∩ 可访问 ∩ 非 local；
-        # 普通用户则仅返回已订阅能力。订阅按能力名跨版本（重发布后旧订阅仍生效）
-        subscribed_names: set[str] = set()
-        if act_user.role != "admin":
-            subscribed_names = set(
-                await db.scalars(
-                    select(Capability.name)
-                    .join(UserCapability, UserCapability.capability_id == Capability.id)
-                    .where(UserCapability.user_id == act_user.id)
-                )
-            )
-        visible = [
-            c
-            for c in visible
-            if (act_user.role == "admin" or c.name in subscribed_names)
-            and capability_access_ok(c, act_user)
-            and (getattr(c, "distribution", None) or "both") != "local"
-        ]
+    visible = await get_visible_capabilities(db, user)
     published = [c for c in visible if c.status in ("published", "deprecated")]
 
     since_dt = None
@@ -634,12 +578,9 @@ async def tags_meta(db: DbSession):
 
 
 @router.get("/capabilities/{cap_id}", response_model=CapabilityOut)
-async def capability_detail(
-    request: Request, cap_id: str, db: DbSession, user: OptionalUser
-):
-    """能力详情；服务令牌带 X-Act-As-Sub 时按目标用户可见性过滤。"""
-    viewer = await _viewer_identity(request, db, user)
-    visible = await get_visible_capabilities(db, viewer)
+async def capability_detail(cap_id: str, db: DbSession, user: OptionalUser):
+    """能力详情；可见性一律按当前 Bearer 用户。"""
+    visible = await get_visible_capabilities(db, user)
     cap = next((c for c in visible if c.id == cap_id), None)
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
@@ -825,7 +766,7 @@ async def update_install_policy(
 async def update_binding(
     cap_id: str, data: BindingUpdate, db: DbSession, user: CurrentUser
 ):
-    """执行身份绑定：user=按提问者代授权(subject, 走 /api/runtime/*) / service=服务身份。"""
+    """执行身份绑定：user=按提问者（当前用户 token, 走 /api/runtime/*） / service=服务身份。"""
     cap = await db.get(Capability, cap_id)
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")

@@ -45,7 +45,7 @@ from mcp.server.sse import SseServerTransport
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.types import CallToolRequestParams, PaginatedRequestParams
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse
 
 logger = logging.getLogger("market.mcp_gateway")
 
@@ -72,13 +72,6 @@ def _conversation_id_from_scope(scope) -> str:
         if vals and vals[0].strip():
             return vals[0].strip()[:128]
     return ""
-
-
-def _audit_params(audit: dict[str, Any], **base: Any) -> dict[str, Any]:
-    """审计参数；服务令牌代表用户（act_as）时附加标注，便于按用户排查。"""
-    if audit.get("act_as"):
-        base["act_as"] = audit["act_as"]
-    return base
 
 
 async def persist_gateway_usage(
@@ -482,16 +475,14 @@ async def authorize_capability_gateway(
 ) -> tuple[dict[str, Any] | None, int | None, dict | None]:
     """能力级网关鉴权：Bearer（HS256|SSO|服务令牌）+ scope/runtime 门禁 + 限流/熔断。
 
-    服务令牌须带 gateway scope；带 ``X-Act-As-Sub`` 时后续门禁/限流/密钥注入均按目标
-    用户执行（非服务令牌忽略该头）。返回 (config, err_status, err_body)，config 含
-    `_audit` 元数据供调用审计。
+    身份即 token 用户本人；服务令牌须带 gateway scope，门禁/限流/密钥注入均按其绑定
+    用户执行。返回 (config, err_status, err_body)，config 含 `_audit` 元数据供调用审计。
     """
     from fastapi import HTTPException
 
     from app.auth import get_current_user
     from app.database import SessionLocal
     from app.permissions import require_runtime_access
-    from app.services.act_as import resolve_act_as
     from app.services.capabilities import split_cap_ref
     from app.services.gateway_governance import check_circuit, check_rate_limit
     from app.services.service_tokens import is_service_token, require_service_scope
@@ -513,38 +504,16 @@ async def authorize_capability_gateway(
             detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
             return None, int(exc.status_code), {"detail": detail}
 
-        actor_id = ""
-        act_as_name = ""
-        act_sub = (_header(scope, "x-act-as-sub") or "").strip()
         if is_service_token(user):
-            actor_id = user.id
             try:
                 require_service_scope(user, "gateway")
             except HTTPException as exc:
                 detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
                 return None, int(exc.status_code), {"detail": detail}
-            if act_sub:
-                # act-as 是会话级身份：env/密钥在建立上游连接时固化，agent 每个
-                # worker 固定 act-as；同一会话内不要切换身份，换身份需新建会话
-                try:
-                    target = await resolve_act_as(db, user, act_sub)
-                except HTTPException as exc:
-                    detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
-                    return None, int(exc.status_code), {"detail": detail}
-                if target is not None:
-                    user = target
-                    act_as_name = target.username
-        elif act_sub:
-            logger.debug("非服务令牌携带 X-Act-As-Sub，已忽略 path=%s", scope.get("path"))
 
         ok, reason = check_rate_limit(f"user:{user.id}")
         if not ok:
             return None, 429, {"detail": reason}
-        if act_as_name:
-            # act-as 时 actor（服务令牌绑定用户）与目标用户双键限流，防单令牌刷目标配额
-            ok, reason = check_rate_limit(f"svc:{actor_id}")
-            if not ok:
-                return None, 429, {"detail": reason}
 
         cap = await find_published_mcp(db, name)
         if cap is None:
@@ -567,8 +536,7 @@ async def authorize_capability_gateway(
         from app.services.capability_secrets import resolve_capability_env
         from app.services.secret_vault import attach_platform_env
 
-        # 平台轨统一注入能力级平台密钥：按能力名跨版本、全用户共用；
-        # act-as 只影响可见/可调用范围，不改变注入的密钥
+        # 平台轨统一注入能力级平台密钥：按能力名跨版本、全用户共用
         try:
             platform_env = await resolve_capability_env(db, cap.name)
         except HTTPException as exc:
@@ -584,15 +552,6 @@ async def authorize_capability_gateway(
             "conversation_id": _conversation_id_from_scope(scope),
             "circuit_key": circuit_key,
         }
-        if act_as_name:
-            config["_audit"]["act_as"] = act_as_name
-            config["_audit"]["actor_user_id"] = actor_id
-            logger.info(
-                "能力网关代表用户访问：cap=%s actor=%s act_as=%s",
-                cap.name,
-                actor_id,
-                act_as_name,
-            )
         return config, None, None
 
 
@@ -733,12 +692,11 @@ class _ForwardServer(MCPServer):
                     capability_id=audit["capability_id"],
                     capability_version=audit.get("capability_version") or "",
                     action="gateway_call",
-                    params=_audit_params(
-                        audit,
-                        tool=tool_name,
-                        capability=audit.get("capability_name") or self._gw_name,
-                        version=audit.get("capability_version") or "",
-                    ),
+                    params={
+                        "tool": tool_name,
+                        "capability": audit.get("capability_name") or self._gw_name,
+                        "version": audit.get("capability_version") or "",
+                    },
                     result_status=result_status,
                     duration_ms=int((time.monotonic() - t0) * 1000),
                     conversation_id=audit.get("conversation_id") or "",
@@ -774,10 +732,7 @@ class GatewayEndpoints:
         return await entry.get()
 
     def cache_config(self, config: dict[str, Any] | None) -> None:
-        """缓存上游配置（含 act-as 身份与已解析 env）。
-
-        act-as 会话内应保持恒定：env/密钥在建立上游连接时固化，换身份需新会话。
-        """
+        """缓存上游配置（含已解析 env）。env/密钥在建立上游连接时固化。"""
         self._cached_config = config
 
     async def resolve_config(self) -> dict[str, Any] | None:
@@ -818,12 +773,11 @@ class GatewayEndpoints:
                 capability_id=audit["capability_id"],
                 capability_version=audit.get("capability_version") or "",
                 action="mcp_connect",
-                params=_audit_params(
-                    audit,
-                    transport="sse",
-                    capability=audit.get("capability_name") or self.name,
-                    version=audit.get("capability_version") or "",
-                ),
+                params={
+                    "transport": "sse",
+                    "capability": audit.get("capability_name") or self.name,
+                    "version": audit.get("capability_version") or "",
+                },
                 result_status="ok",
                 duration_ms=0,
                 conversation_id=audit.get("conversation_id") or "",
@@ -848,12 +802,11 @@ class GatewayEndpoints:
                     capability_id=audit["capability_id"],
                     capability_version=audit.get("capability_version") or "",
                     action="mcp_connect",
-                    params=_audit_params(
-                        audit,
-                        transport="stream",
-                        capability=audit.get("capability_name") or self.name,
-                        version=audit.get("capability_version") or "",
-                    ),
+                    params={
+                        "transport": "stream",
+                        "capability": audit.get("capability_name") or self.name,
+                        "version": audit.get("capability_version") or "",
+                    },
                     result_status="ok",
                     duration_ms=0,
                     conversation_id=audit.get("conversation_id") or "",
@@ -904,7 +857,6 @@ class GatewayIdentity:
     username: str = ""
     role: str = ""
     user: Any = None  # ORM User；仅 jwt/sso/service_token 来源非空
-    act_as: str = ""  # 服务令牌代表的目标用户名（X-Act-As-Sub），仅审计标注
 
 
 class GatewayAuthError(Exception):
@@ -1055,13 +1007,6 @@ async def record_gateway_calls(
     from app.models import Capability, MCPGatewayCall
 
     error = (error or "")[:300]
-    if identity.act_as:
-        logger.info(
-            "网关调用审计 act_as=%s actor=%s server=%s",
-            identity.act_as,
-            identity.username or identity.user_id or "-",
-            server_name,
-        )
     try:
         async with SessionLocal() as db:
             audit = config.get("_audit") or {}
@@ -1249,8 +1194,7 @@ class GatewayASGIApp:
     async def _audit_identity(self, config: dict[str, Any], scope) -> GatewayIdentity:
         """身份来源仅用于审计归因；鉴权已在前一步完成，失败回退匿名。
 
-        审计口径：MCPGatewayCall.user_id 记服务令牌绑定用户（Bearer 解析结果），
-        act-as 的目标用户记在 UsageEvent.params.act_as（即 _audit.act_as）。
+        审计口径：MCPGatewayCall.user_id 记服务令牌绑定用户（Bearer 解析结果）。
         """
         try:
             identity = await authenticate_request(config, scope)
@@ -1259,8 +1203,6 @@ class GatewayASGIApp:
         audit = config.get("_audit") or {}
         if identity.user_id is None and audit.get("user_id"):
             identity.user_id = audit["user_id"]
-        if audit.get("act_as"):
-            identity.act_as = audit["act_as"]
         return identity
 
     async def _handle_jsonrpc(

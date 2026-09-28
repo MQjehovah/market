@@ -84,7 +84,7 @@ class Capability(Base):
     distribution: Mapped[str] = mapped_column(String(16), default="both")
     # local | remote | both —— 本地安装 / 平台网关 / 双形态
     binding: Mapped[str] = mapped_column(String(16), default="service")
-    # user | service —— 执行身份绑定: user=按提问者代授权(subject, 走 /api/runtime/* 逐请求),
+    # user | service —— 执行身份绑定: user=按提问者(当前用户 token, 走 /api/runtime/* 逐请求),
     # service=服务身份(平台持久会话);平台 MCP 轨只挂载 service,user 由 agent 的 market_runtime 调用
     display_name: Mapped[str] = mapped_column(String(255), default="")
     # 用户展示名(可中文); name 保持内部身份键不变(M1), 展示一律用本字段

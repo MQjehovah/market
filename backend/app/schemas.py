@@ -214,7 +214,7 @@ class InstallPolicyUpdate(BaseModel):
 
 
 class BindingUpdate(BaseModel):
-    """执行身份绑定：user=按提问者代授权(subject) / service=服务身份。"""
+    """执行身份绑定：user=按提问者（当前用户 token）执行 / service=服务身份。"""
 
     binding: Literal["user", "service"]
 
@@ -341,7 +341,7 @@ class TaskSearchHitOut(CapabilityOut):
 
     match_score: float = 0.0
     matched_terms: list[str] = Field(default_factory=list)
-    # 当前 viewer(subject)是否可直接调用: 已加入「我的能力」(按名跨版本) 或作者/管理员
+    # 当前 viewer 是否可直接调用: 已加入「我的能力」(按名跨版本) 或作者/管理员
     joined: bool = False
 
 

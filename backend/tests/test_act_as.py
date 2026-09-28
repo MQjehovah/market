@@ -1,4 +1,9 @@
-"""P5：服务令牌 scope 强制 + X-Act-As-Sub 代表用户访问。"""
+"""服务令牌 scope 语义 + 运行时/检索/网关一律按 Bearer 用户鉴权。
+
+X-Act-As-Sub 代授权已删除：本文件锁定移除后的语义——
+运行时端点只认用户令牌（服务令牌 403、无 token 401），
+sync/relay//my 一律按 token 用户本人判定，携带该头不再切换身份。
+"""
 
 import logging
 import types
@@ -6,10 +11,9 @@ import uuid
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import select
 
 from app.database import SessionLocal
-from app.models import ServiceToken, UserCapability
+from app.models import ServiceToken
 from app.services.mcp_gateway import authorize_capability_gateway
 from app.services.service_tokens import is_service_token, require_service_scope
 from test_mcp_debug import _mcp_zip
@@ -98,7 +102,7 @@ async def _publish(
         headers=publisher_headers,
         json={
             "name": name,
-            "description": "act-as 测试",
+            "description": "鉴权测试",
             "type": type_,
             "version": "1.0.0",
             "category": "测试",
@@ -144,13 +148,12 @@ async def _restrict_department(client, admin_headers, cap_id: str, department: s
     assert r.status_code == 200, r.text
 
 
-async def _sync(client, token: str | None = None, act_as: str | None = None) -> list[dict]:
-    headers: dict[str, str] = {}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    if act_as is not None:
-        headers["X-Act-As-Sub"] = act_as
-    r = await client.get("/api/capabilities/sync", headers=headers)
+def _bearer(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+async def _sync(client, headers: dict[str, str] | None = None) -> list[dict]:
+    r = await client.get("/api/capabilities/sync", headers=headers or {})
     assert r.status_code == 200, r.text
     return r.json()
 
@@ -191,74 +194,201 @@ def test_require_service_scope_unit(caplog):
 @pytest.mark.asyncio
 async def test_sync_scope_enforced_and_legacy_passes(client, admin_headers, caplog):
     _, token_bad = await _make_token(client, admin_headers, ["gateway"])
-    r = await client.get(
-        "/api/capabilities/sync", headers={"Authorization": f"Bearer {token_bad}"}
-    )
+    r = await client.get("/api/capabilities/sync", headers=_bearer(token_bad))
     assert r.status_code == 403
     assert "sync" in r.json()["detail"]
 
-    # scope 不足 + 带 X-Act-As-Sub：scope 校验先行，仍 403
+    # 带 X-Act-As-Sub 也不放行：代授权已删除，scope 校验仍然先行
     r = await client.get(
         "/api/capabilities/sync",
-        headers={"Authorization": f"Bearer {token_bad}", "X-Act-As-Sub": "admin"},
+        headers={**_bearer(token_bad), "X-Act-As-Sub": "admin"},
     )
     assert r.status_code == 403
     assert "sync" in r.json()["detail"]
 
     _, token_ok = await _make_token(client, admin_headers, ["gateway", "sync"])
-    r = await client.get(
-        "/api/capabilities/sync", headers={"Authorization": f"Bearer {token_ok}"}
-    )
+    r = await client.get("/api/capabilities/sync", headers=_bearer(token_ok))
     assert r.status_code == 200
 
     legacy, token_legacy = await _make_token(client, admin_headers, ["sync"])
     await _clear_scopes(legacy["id"])
     with caplog.at_level(logging.WARNING, logger="market.service_tokens"):
-        r = await client.get(
-            "/api/capabilities/sync", headers={"Authorization": f"Bearer {token_legacy}"}
-        )
+        r = await client.get("/api/capabilities/sync", headers=_bearer(token_legacy))
     assert r.status_code == 200
     assert any("scopes" in rec.message for rec in caplog.records)
 
 
-# ---------- sync：X-Act-As-Sub 视角过滤 ----------
+# ---------- sync：一律按 Bearer 用户可见性 ----------
 
 
 @pytest.mark.asyncio
-async def test_sync_act_as_filters_subscribed_visible(client, publisher_headers, admin_headers):
+async def test_sync_visibility_follows_bearer_user(client, publisher_headers, admin_headers):
+    """sync 可见性取 token 用户；订阅不再是过滤条件；X-Act-As-Sub 头完全忽略。"""
     await _create_user(client, admin_headers, "act-a", department="市场部")
     a_headers = await _login(client, "act-a")
 
-    cap_in = await _publish(client, publisher_headers, admin_headers, "act-in")
-    await _publish(client, publisher_headers, admin_headers, "act-out")
-    cap_denied = await _publish(client, publisher_headers, admin_headers, "act-denied")
-    cap_local = await _publish(
-        client, publisher_headers, admin_headers, "act-local", distribution="local"
+    cap_own = await _publish(client, publisher_headers, admin_headers, "act-own")
+    await _publish(client, publisher_headers, admin_headers, "act-other")
+    await _publish(
+        client, publisher_headers, admin_headers, "act-local-cap", distribution="local"
     )
-    for cap_id in (cap_in, cap_denied, cap_local):
-        await _subscribe(client, a_headers, cap_id)
-    # 已订阅后收紧部门白名单：有订阅但无权访问
-    await _restrict_department(client, admin_headers, cap_denied, "研发部")
+    await _subscribe(client, a_headers, cap_own)
 
+    # 用户可见的已发布能力全部返回（未订阅的 act-other / local 也在）
+    names = {i["name"] for i in await _sync(client, a_headers)}
+    assert {"act-own", "act-other", "act-local-cap"} <= names
+
+    # 带 X-Act-As-Sub：忽略该头，结果与不带一致
+    names_ghost = {i["name"] for i in await _sync(client, {**a_headers, "X-Act-As-Sub": "ghost"})}
+    assert names_ghost == names
+
+    # 服务令牌：按绑定用户自身视角；带目标用户名也不切换身份
     _, token = await _make_token(client, admin_headers, ["gateway", "sync"])
-
-    # 不带 act-as：服务自身视角不变（含未订阅 / local）
-    plain = {i["name"] for i in await _sync(client, token)}
-    assert {"act-in", "act-out", "act-denied", "act-local"} <= plain
-
-    # 带 act-as：仅 A 已订阅 + 可访问 + remote/both
-    names = {i["name"] for i in await _sync(client, token, act_as="act-a")}
-    assert "act-in" in names
-    assert "act-out" not in names
-    assert "act-denied" not in names
-    assert "act-local" not in names
+    svc_names = {i["name"] for i in await _sync(client, _bearer(token))}
+    svc_names_act = {
+        i["name"]
+        for i in await _sync(client, {**_bearer(token), "X-Act-As-Sub": "act-a"})
+    }
+    assert svc_names_act == svc_names
 
 
 @pytest.mark.asyncio
-async def test_act_as_subscription_follows_name_on_republish(
+async def test_sync_ignores_unknown_act_as_header(client, admin_headers):
+    """未知 act-as 目标不再 403：头被忽略，按 token 身份返回可见能力。"""
+    _, token = await _make_token(client, admin_headers, ["sync"])
+    r = await client.get(
+        "/api/capabilities/sync",
+        headers={**_bearer(token), "X-Act-As-Sub": "ghost"},
+    )
+    assert r.status_code == 200, r.text
+
+
+# ---------- relay：scope 门禁与绑定用户权限 ----------
+
+
+@pytest.mark.asyncio
+async def test_relay_scope_gate_and_bound_user(client, publisher_headers, admin_headers, caplog):
+    name = "act-relay-scope"
+    await _publish(client, publisher_headers, admin_headers, name, type_="mcp")
+    me = (await client.get("/api/auth/me", headers=admin_headers)).json()
+
+    # scope 不足：即使绑定管理员也被 scope 门禁拒绝
+    _, token_runtime = await _make_token(
+        client, admin_headers, ["runtime"], user_id=me["id"]
+    )
+    cfg, status, body = await authorize_capability_gateway(
+        _scope(_bearer(token_runtime)), name
+    )
+    assert cfg is None and status == 403
+    assert "gateway" in body["detail"]
+
+    # scope 不足 + 带 X-Act-As-Sub：scope 校验先行，仍 403（不切换身份）
+    cfg, status, body = await authorize_capability_gateway(
+        _scope({**_bearer(token_runtime), "X-Act-As-Sub": "admin"}), name
+    )
+    assert cfg is None and status == 403
+    assert "gateway" in body["detail"]
+
+    # scope 充足 + 绑定管理员：runtime 门禁正常放行
+    _, token_admin = await _make_token(
+        client, admin_headers, ["gateway", "sync"], user_id=me["id"]
+    )
+    cfg, status, _ = await authorize_capability_gateway(_scope(_bearer(token_admin)), name)
+    assert status is None and cfg is not None
+
+    # 存量令牌（scopes 清空）：放行 + 告警
+    meta, token_legacy = await _make_token(
+        client, admin_headers, ["gateway"], user_id=me["id"]
+    )
+    await _clear_scopes(meta["id"])
+    with caplog.at_level(logging.WARNING, logger="market.service_tokens"):
+        cfg, status, _ = await authorize_capability_gateway(
+            _scope(_bearer(token_legacy)), name
+        )
+    assert status is None and cfg is not None
+    assert any("scopes" in rec.message for rec in caplog.records)
+
+    # scope 充足但绑定普通用户未订阅：runtime 门禁照常 403（scope 不改变权限模型）
+    bound = await _create_user(client, admin_headers, "svc-bound-user")
+    _, token_bound = await _make_token(
+        client, admin_headers, ["gateway", "sync"], user_id=bound["id"]
+    )
+    cfg, status, body = await authorize_capability_gateway(
+        _scope(_bearer(token_bound)), name
+    )
+    assert cfg is None and status == 403
+    assert "我的能力" in body["detail"]
+
+
+# ---------- relay：用户 token 直连按本人准入 ----------
+
+
+@pytest.mark.asyncio
+async def test_relay_user_token_direct_access(client, publisher_headers, admin_headers):
+    name = "act-relay-user"
+    cap_id = await _publish(client, publisher_headers, admin_headers, name, type_="mcp")
+    user = await _create_user(client, admin_headers, "act-b")
+    b_headers = await _login(client, "act-b")
+
+    # 未订阅 → runtime 门禁 403
+    cfg, status, _ = await authorize_capability_gateway(_scope(b_headers), name)
+    assert cfg is None and status == 403
+
+    # 订阅后放行；审计按本人，不再有 act_as/actor 字段
+    await _subscribe(client, b_headers, cap_id)
+    cfg, status, _ = await authorize_capability_gateway(_scope(b_headers), name)
+    assert status is None and cfg is not None
+    assert cfg["_audit"]["user_id"] == user["id"]
+    assert "act_as" not in cfg["_audit"]
+    assert "actor_user_id" not in cfg["_audit"]
+
+    # 携带 X-Act-As-Sub 头被忽略：仍按本人放行
+    cfg, status, _ = await authorize_capability_gateway(
+        _scope({**b_headers, "X-Act-As-Sub": "ghost"}), name
+    )
+    assert status is None and cfg is not None
+
+
+@pytest.mark.asyncio
+async def test_relay_rate_limits_by_bearer_user(client, publisher_headers, admin_headers):
+    """限流按 token 用户单键；X-Act-As-Sub 不参与限流键，不能绕过。"""
+    from app.config import get_settings
+    from app.services.gateway_governance import reset_governance_for_tests
+
+    name = "act-relay-rl"
+    cap_id = await _publish(client, publisher_headers, admin_headers, name, type_="mcp")
+    await _create_user(client, admin_headers, "act-rl")
+    rl_headers = await _login(client, "act-rl")
+    await _subscribe(client, rl_headers, cap_id)
+
+    settings = get_settings()
+    old_limit = settings.mcp_gateway_rate_limit_per_minute
+    reset_governance_for_tests()
+    settings.mcp_gateway_rate_limit_per_minute = 2
+    try:
+        cfg, status, _ = await authorize_capability_gateway(_scope(rl_headers), name)
+        assert status is None and cfg is not None
+        cfg, status, _ = await authorize_capability_gateway(_scope(rl_headers), name)
+        assert status is None and cfg is not None
+        cfg, status, body = await authorize_capability_gateway(_scope(rl_headers), name)
+        assert cfg is None and status == 429
+        assert "限流" in body["detail"]
+
+        # 带 X-Act-As-Sub 不能另开限流键：同一用户键已超限，仍 429
+        cfg, status, _ = await authorize_capability_gateway(
+            _scope({**rl_headers, "X-Act-As-Sub": "ghost"}), name
+        )
+        assert status == 429
+    finally:
+        settings.mcp_gateway_rate_limit_per_minute = old_limit
+        reset_governance_for_tests()
+
+
+@pytest.mark.asyncio
+async def test_relay_gate_follows_name_across_republish(
     client, publisher_headers, admin_headers
 ):
-    """订阅旧版本后重发布：act-as sync 返回新版本，relay 门禁按名放行。"""
+    """订阅旧版本后重发布：用户 token sync 返回新版本，relay 按名放行。"""
     name = "act-ver-mcp"
     cap_id = await _publish(client, publisher_headers, admin_headers, name, type_="mcp")
     await _create_user(client, admin_headers, "act-ver-u")
@@ -288,353 +418,98 @@ async def test_act_as_subscription_follows_name_on_republish(
     )
     assert r.status_code == 200, r.text
 
-    _, token = await _make_token(client, admin_headers, ["gateway", "sync"])
-
-    # act-as sync：订阅旧版本，仍返回同名最新版本
-    items = {i["name"]: i for i in await _sync(client, token, act_as="act-ver-u")}
+    # 用户 token sync：订阅旧版本，仍返回同名最新版本
+    items = {i["name"]: i for i in await _sync(client, u_headers)}
     assert items[name]["version"] == "1.0.1"
 
     # relay：按名判定订阅，新版本门禁放行
-    cfg, status, body = await authorize_capability_gateway(
-        _scope({"Authorization": f"Bearer {token}", "X-Act-As-Sub": "act-ver-u"}), name
-    )
+    cfg, status, body = await authorize_capability_gateway(_scope(u_headers), name)
     assert status is None and cfg is not None, body
 
 
-@pytest.mark.asyncio
-async def test_sync_act_as_admin_skips_subscription(client, publisher_headers, admin_headers):
-    """admin 目标用户不依赖订阅（与 access.py 早退一致），等同全量可访问集；local 仍排除。"""
-    await _publish(client, publisher_headers, admin_headers, "act-admin-remote")
-    await _publish(
-        client, publisher_headers, admin_headers, "act-admin-local", distribution="local"
-    )
-    me = (await client.get("/api/auth/me", headers=admin_headers)).json()
-    async with SessionLocal() as db:
-        joined = (
-            await db.scalars(select(UserCapability).where(UserCapability.user_id == me["id"]))
-        ).all()
-    assert not joined, "admin 不应依赖订阅"
-
-    _, token = await _make_token(client, admin_headers, ["gateway", "sync"])
-    names = {i["name"] for i in await _sync(client, token, act_as="admin")}
-    assert "act-admin-remote" in names  # 未订阅也能拿到
-    assert "act-admin-local" not in names  # distribution=local 仍排除
+# ---------- /my：一律按 Bearer 用户执行 ----------
 
 
 @pytest.mark.asyncio
-async def test_sync_act_as_rejects_unknown_and_disabled(client, admin_headers):
-    user = await _create_user(client, admin_headers, "act-off")
-    _, token = await _make_token(client, admin_headers, ["sync"])
-
-    r = await client.get(
-        "/api/capabilities/sync",
-        headers={"Authorization": f"Bearer {token}", "X-Act-As-Sub": "ghost"},
-    )
-    assert r.status_code == 403
-    assert "act-as" in r.json()["detail"]
-
-    r = await client.patch(
-        f"/api/admin/users/{user['id']}", headers=admin_headers, json={"is_active": False}
-    )
-    assert r.status_code == 200
-    r = await client.get(
-        "/api/capabilities/sync",
-        headers={"Authorization": f"Bearer {token}", "X-Act-As-Sub": "act-off"},
-    )
-    assert r.status_code == 403
-
-
-@pytest.mark.asyncio
-async def test_sync_non_service_token_ignores_act_as(client, publisher_headers, admin_headers):
-    await _publish(client, publisher_headers, admin_headers, "act-jwt-cap")
-    r = await client.get(
-        "/api/capabilities/sync",
-        headers={**admin_headers, "X-Act-As-Sub": "ghost"},
-    )
-    assert r.status_code == 200
-    assert any(i["name"] == "act-jwt-cap" for i in r.json())
-
-
-# ---------- relay：scope 门禁与绑定用户权限 ----------
-
-
-@pytest.mark.asyncio
-async def test_relay_scope_gate_and_bound_user(client, publisher_headers, admin_headers, caplog):
-    name = "act-relay-scope"
-    await _publish(client, publisher_headers, admin_headers, name, type_="mcp")
-    me = (await client.get("/api/auth/me", headers=admin_headers)).json()
-
-    # scope 不足：即使绑定管理员也被 scope 门禁拒绝
-    _, token_runtime = await _make_token(
-        client, admin_headers, ["runtime"], user_id=me["id"]
-    )
-    cfg, status, body = await authorize_capability_gateway(
-        _scope({"Authorization": f"Bearer {token_runtime}"}), name
-    )
-    assert cfg is None and status == 403
-    assert "gateway" in body["detail"]
-
-    # scope 不足 + 带 X-Act-As-Sub：scope 校验先行，仍 403（不切换身份）
-    cfg, status, body = await authorize_capability_gateway(
-        _scope({"Authorization": f"Bearer {token_runtime}", "X-Act-As-Sub": "admin"}), name
-    )
-    assert cfg is None and status == 403
-    assert "gateway" in body["detail"]
-
-    # scope 充足 + 绑定管理员：runtime 门禁正常放行
-    _, token_admin = await _make_token(
-        client, admin_headers, ["gateway", "sync"], user_id=me["id"]
-    )
-    cfg, status, _ = await authorize_capability_gateway(
-        _scope({"Authorization": f"Bearer {token_admin}"}), name
-    )
-    assert status is None and cfg is not None
-
-    # 存量令牌（scopes 清空）：放行 + 告警
-    meta, token_legacy = await _make_token(
-        client, admin_headers, ["gateway"], user_id=me["id"]
-    )
-    await _clear_scopes(meta["id"])
-    with caplog.at_level(logging.WARNING, logger="market.service_tokens"):
-        cfg, status, _ = await authorize_capability_gateway(
-            _scope({"Authorization": f"Bearer {token_legacy}"}), name
-        )
-    assert status is None and cfg is not None
-    assert any("scopes" in rec.message for rec in caplog.records)
-
-    # scope 充足但绑定普通用户未订阅：runtime 门禁照常 403（scope 不改变权限模型）
-    bound = await _create_user(client, admin_headers, "svc-bound-user")
-    _, token_bound = await _make_token(
-        client, admin_headers, ["gateway", "sync"], user_id=bound["id"]
-    )
-    cfg, status, body = await authorize_capability_gateway(
-        _scope({"Authorization": f"Bearer {token_bound}"}), name
-    )
-    assert cfg is None and status == 403
-    assert "我的能力" in body["detail"]
-
-
-# ---------- relay：X-Act-As-Sub 代表用户 ----------
-
-
-@pytest.mark.asyncio
-async def test_relay_act_as_uses_target_user(client, publisher_headers, admin_headers):
-    name = "act-relay-as"
-    cap_id = await _publish(client, publisher_headers, admin_headers, name, type_="mcp")
-    user = await _create_user(client, admin_headers, "act-b")
-    b_headers = await _login(client, "act-b")
-    meta, token = await _make_token(client, admin_headers, ["gateway", "sync"])
-
-    # 服务令牌自身视角：runtime 门禁拒绝
-    cfg, status, _ = await authorize_capability_gateway(
-        _scope({"Authorization": f"Bearer {token}"}), name
-    )
-    assert cfg is None and status == 403
-
-    # act-as 用户不存在 → 403
-    cfg, status, body = await authorize_capability_gateway(
-        _scope({"Authorization": f"Bearer {token}", "X-Act-As-Sub": "ghost"}), name
-    )
-    assert cfg is None and status == 403
-    assert "act-as" in body["detail"]
-
-    # act-as 目标未订阅 → 403
-    cfg, status, _ = await authorize_capability_gateway(
-        _scope({"Authorization": f"Bearer {token}", "X-Act-As-Sub": "act-b"}), name
-    )
-    assert cfg is None and status == 403
-
-    # act-as 目标已订阅 → 放行，审计标注 act_as
-    await _subscribe(client, b_headers, cap_id)
-    cfg, status, _ = await authorize_capability_gateway(
-        _scope({"Authorization": f"Bearer {token}", "X-Act-As-Sub": "act-b"}), name
-    )
-    assert status is None and cfg is not None
-    assert cfg["_audit"]["act_as"] == "act-b"
-    assert cfg["_audit"]["user_id"] == user["id"]
-    assert cfg["_audit"]["actor_user_id"] == meta["user_id"]
-    assert cfg["_audit"]["actor_user_id"] != user["id"]
-
-
-@pytest.mark.asyncio
-async def test_relay_act_as_rate_limits_actor(client, publisher_headers, admin_headers):
-    """act-as 时 actor 与目标用户双键限流：actor 超限即 429。"""
-    from app.config import get_settings
-    from app.services.gateway_governance import check_rate_limit, reset_governance_for_tests
-
-    name = "act-relay-rl"
-    cap_id = await _publish(client, publisher_headers, admin_headers, name, type_="mcp")
-    await _create_user(client, admin_headers, "act-rl")
-    rl_headers = await _login(client, "act-rl")
-    await _subscribe(client, rl_headers, cap_id)  # 目标用户权限通畅，排除 403 干扰
-    meta, token = await _make_token(client, admin_headers, ["gateway", "sync"])
-
-    settings = get_settings()
-    old_limit = settings.mcp_gateway_rate_limit_per_minute
-    reset_governance_for_tests()
-    settings.mcp_gateway_rate_limit_per_minute = 2
-    try:
-        # 预热 actor 键至超限；目标用户键保持干净
-        assert check_rate_limit(f"svc:{meta['user_id']}")[0]
-        assert check_rate_limit(f"svc:{meta['user_id']}")[0]
-        cfg, status, body = await authorize_capability_gateway(
-            _scope({"Authorization": f"Bearer {token}", "X-Act-As-Sub": "act-rl"}), name
-        )
-        assert cfg is None and status == 429
-        assert "限流" in body["detail"]
-
-        # 对照：同一令牌不带 act-as 走 user 键（干净）→ 非 429，actor 键不误伤普通服务调用
-        cfg, status, _ = await authorize_capability_gateway(
-            _scope({"Authorization": f"Bearer {token}"}), name
-        )
-        assert status != 429
-    finally:
-        settings.mcp_gateway_rate_limit_per_minute = old_limit
-        reset_governance_for_tests()
-
-
-@pytest.mark.asyncio
-async def test_relay_non_service_token_ignores_act_as(client, publisher_headers, admin_headers):
-    name = "act-relay-jwt"
-    await _publish(client, publisher_headers, admin_headers, name, type_="mcp")
-    cfg, status, _ = await authorize_capability_gateway(
-        _scope({"Authorization": admin_headers["Authorization"], "X-Act-As-Sub": "ghost"}),
-        name,
-    )
-    assert status is None and cfg is not None
-
-
-# ---------- /my：加入/移出/订阅清单的 act-as ----------
-
-
-def _act_headers(token: str, sub: str | None) -> dict:
-    headers = {"Authorization": f"Bearer {token}"}
-    if sub is not None:
-        headers["X-Act-As-Sub"] = sub
-    return headers
-
-
-@pytest.mark.asyncio
-async def test_my_capabilities_and_subscriptions_act_as(client, publisher_headers, admin_headers):
-    """服务令牌+act-as：/my 列表/加入/移出/订阅清单全部按目标用户执行。"""
+async def test_my_operations_follow_bearer_user(client, publisher_headers, admin_headers):
+    """用户/服务令牌各按本人身份；X-Act-As-Sub 不再切换操作主体。"""
     name = "act-my-cap"
     cap_id = await _publish(client, publisher_headers, admin_headers, name, type_="tool")
     await _create_user(client, admin_headers, "act-my-user")
     a_headers = await _login(client, "act-my-user")
     _, token = await _make_token(client, admin_headers, ["gateway", "sync"])
-    act = _act_headers(token, "act-my-user")
-    service = _act_headers(token, None)
 
-    # 目标用户初始未加入
-    r = await client.get("/api/my/capabilities?scope=added", headers=act)
+    # 用户 token 带 X-Act-As-Sub：忽略，按本人（初始未加入）
+    r = await client.get(
+        "/api/my/capabilities?scope=added",
+        headers={**a_headers, "X-Act-As-Sub": "ghost"},
+    )
     assert r.status_code == 200, r.text
     assert not any(c["id"] == cap_id for c in r.json())
 
-    # 加入：落到目标用户（目标本人可见；服务自身不可见）
+    # 服务令牌带 X-Act-As-Sub：加入落到绑定服务用户，目标用户不受影响
+    svc_act = {**_bearer(token), "X-Act-As-Sub": "act-my-user"}
     r = await client.post(
-        "/api/my/capabilities", headers=act, json={"capability_id": cap_id}
+        "/api/my/capabilities", headers=svc_act, json={"capability_id": cap_id}
     )
     assert r.status_code == 201, r.text
-    r = await client.get("/api/my/capabilities?scope=added", headers=act)
-    assert any(c["id"] == cap_id for c in r.json())
     r = await client.get("/api/my/capabilities?scope=added", headers=a_headers)
-    assert any(c["id"] == cap_id for c in r.json())
-    r = await client.get("/api/my/capabilities?scope=added", headers=service)
     assert not any(c["id"] == cap_id for c in r.json())
+    r = await client.get("/api/my/capabilities?scope=added", headers=_bearer(token))
+    assert any(c["id"] == cap_id for c in r.json())
 
-    # 订阅清单：目标用户订阅后 act-as 可见；服务自身为空
-    r = await client.get("/api/my/subscriptions", headers=act)
-    assert r.status_code == 200, r.text
-    assert r.json()["names"] == []
+    # 订阅清单同样按 token 身份，act-as 头不切换
     r = await client.post(
         "/api/subscriptions", headers=a_headers, json={"capability_name": name}
     )
     assert r.status_code == 201, r.text
-    r = await client.get("/api/my/subscriptions", headers=act)
+    r = await client.get("/api/my/subscriptions", headers={**a_headers, "X-Act-As-Sub": "ghost"})
     assert r.json()["names"] == [name]
-    r = await client.get("/api/my/subscriptions", headers=service)
+    r = await client.get("/api/my/subscriptions", headers=svc_act)
     assert r.json()["names"] == []
 
-    # 移出：同样落到目标用户
-    r = await client.delete(f"/api/my/capabilities/{cap_id}", headers=act)
-    assert r.status_code == 200, r.text
-    r = await client.get("/api/my/capabilities?scope=added", headers=act)
-    assert not any(c["id"] == cap_id for c in r.json())
+
+# ---------- /runtime：用户 token 直连按本人准入 ----------
 
 
 @pytest.mark.asyncio
-async def test_my_act_as_scope_and_target_errors(client, admin_headers):
-    """scope 不足或 act-as 目标不存在/禁用 → 403。"""
-    _, token_bad = await _make_token(client, admin_headers, ["runtime"])
-    r = await client.get(
-        "/api/my/capabilities", headers=_act_headers(token_bad, "admin")
-    )
-    assert r.status_code == 403, r.text
-
-    _, token_ok = await _make_token(client, admin_headers, ["sync"])
-    r = await client.get(
-        "/api/my/capabilities", headers=_act_headers(token_ok, "ghost")
-    )
-    assert r.status_code == 403, r.text
-
-
-@pytest.mark.asyncio
-async def test_my_act_as_ignored_for_regular_user(client, admin_headers):
-    """非服务令牌带 X-Act-As-Sub：忽略该头，按本人身份执行。"""
-    r = await client.get(
-        "/api/my/capabilities", headers={**admin_headers, "X-Act-As-Sub": "ghost"}
-    )
-    assert r.status_code == 200, r.text
-    r = await client.get(
-        "/api/my/subscriptions", headers={**admin_headers, "X-Act-As-Sub": "ghost"}
-    )
-    assert r.status_code == 200, r.text
-
-
-# ---------- /runtime：代授权求交(actor ∩ subject) ----------
-
-
-@pytest.mark.asyncio
-async def test_runtime_act_as_intersection(client, publisher_headers, admin_headers):
-    """runtime 执行接口的代授权求交:
-
-    - actor(服务令牌绑定管理员) 有准入; subject 未订阅 → 403;
-    - subject 订阅后放行(actor ∩ subject);
-    - 非服务令牌带 X-Act-As-Sub 忽略, 按本人身份;
-    - actor 自身(无头)保持原有行为。
-    """
-    name = "rt-obo-tool"
+async def test_runtime_bearer_user_access(client, publisher_headers, admin_headers):
+    """runtime 端点只认用户令牌：无 token 401、无准入 403、准入 200、服务令牌 403。"""
+    name = "rt-user-tool"
     cap_id = await _publish(client, publisher_headers, admin_headers, name, type_="tool")
-    admin_id = (await client.get("/api/auth/me", headers=admin_headers)).json()["id"]
-    await _create_user(client, admin_headers, "rt-obo-u")
-    u_headers = await _login(client, "rt-obo-u")
-    _, token = await _make_token(client, admin_headers, ["runtime"], user_id=admin_id)
-
-    act = {"Authorization": f"Bearer {token}", "X-Act-As-Sub": "rt-obo-u"}
+    await _create_user(client, admin_headers, "rt-u")
+    u_headers = await _login(client, "rt-u")
+    url = f"/api/runtime/tools/{name}/invoke"
     body = {"params": {}}
 
-    # subject 未订阅 → 403（交集收窄）
-    r = await client.post(f"/api/runtime/tools/{name}/invoke", headers=act, json=body)
+    # 无 token → 401
+    r = await client.post(url, json=body)
+    assert r.status_code == 401
+
+    # 有 token 但未加入「我的能力」→ 403
+    r = await client.post(url, headers=u_headers, json=body)
     assert r.status_code == 403, r.text
 
-    # subject 订阅后放行
+    # 加入后 → 200（准入按本人）
     await _subscribe(client, u_headers, cap_id)
-    r = await client.post(f"/api/runtime/tools/{name}/invoke", headers=act, json=body)
+    r = await client.post(url, headers=u_headers, json=body)
     assert r.status_code == 200, r.text
 
-    # actor 自身(无头): 管理员准入, 放行
-    r = await client.post(
-        f"/api/runtime/tools/{name}/invoke",
-        headers={"Authorization": f"Bearer {token}"},
-        json=body,
+    # X-Act-As-Sub 头被忽略：不影响本人准入
+    r = await client.post(url, headers={**u_headers, "X-Act-As-Sub": "ghost"}, json=body)
+    assert r.status_code == 200, r.text
+
+    # 服务令牌（即使绑定管理员）不可访问 runtime → 403
+    admin_id = (await client.get("/api/auth/me", headers=admin_headers)).json()["id"]
+    _, token = await _make_token(
+        client, admin_headers, ["runtime", "gateway", "sync"], user_id=admin_id
     )
-    assert r.status_code == 200, r.text
+    r = await client.post(url, headers=_bearer(token), json=body)
+    assert r.status_code == 403, r.text
+    assert "服务令牌" in r.json()["detail"]
+    r = await client.get("/api/runtime/mcp/discover", headers=_bearer(token))
+    assert r.status_code == 403, r.text
 
-    # 非服务令牌带该头: 忽略, 按本人(subject 用户已订阅)放行
-    r = await client.post(
-        f"/api/runtime/tools/{name}/invoke",
-        headers={**u_headers, "X-Act-As-Sub": "ghost"},
-        json=body,
-    )
+    # 用户 token 下 discover 正常
+    r = await client.get("/api/runtime/mcp/discover", headers=u_headers)
     assert r.status_code == 200, r.text
-

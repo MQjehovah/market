@@ -1,4 +1,4 @@
-"""能力运行规格（设计文档 §3）输出矩阵 + 浏览/详情 act-as。"""
+"""能力运行规格（设计文档 §3）输出矩阵 + 浏览/详情/检索按 Bearer 用户可见性。"""
 
 import io
 import json
@@ -107,6 +107,14 @@ async def _make_token(client, admin_headers, scopes: list[str]) -> str:
     return r.json()["token"]
 
 
+async def _login(client, username: str) -> dict:
+    r = await client.post(
+        "/api/auth/login", json={"username": username, "password": "secret123"}
+    )
+    assert r.status_code == 200, r.text
+    return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+
 @pytest.mark.asyncio
 async def test_runtime_spec_matrix(client, publisher_headers, admin_headers):
     """runtime 字段矩阵：distribution 推导 cloud/local/recommended；清单来自 input_schema。"""
@@ -205,8 +213,8 @@ async def test_runtime_spec_matrix(client, publisher_headers, admin_headers):
 
 
 @pytest.mark.asyncio
-async def test_browse_and_detail_act_as(client, publisher_headers, admin_headers, user_headers):
-    """服务令牌+act-as：浏览/详情按目标用户可见性；无头/非服务令牌行为不变。"""
+async def test_browse_and_detail_by_bearer_user(client, publisher_headers, admin_headers):
+    """浏览/详情/检索一律按 Bearer 用户可见性；X-Act-As-Sub 头不再切换身份。"""
     # 作者与目标用户同团队（team 可见性需要非空且一致）
     pub_id = (await client.get("/api/auth/me", headers=publisher_headers)).json()["id"]
     r = await client.patch(
@@ -214,6 +222,7 @@ async def test_browse_and_detail_act_as(client, publisher_headers, admin_headers
     )
     assert r.status_code == 200, r.text
     await _create_user(client, admin_headers, "act-viewer", team="alpha")
+    viewer_headers = await _login(client, "act-viewer")
 
     public_id = await _publish(
         client, publisher_headers, admin_headers, "act公开能力", visibility="internal"
@@ -225,45 +234,74 @@ async def test_browse_and_detail_act_as(client, publisher_headers, admin_headers
         client, publisher_headers, admin_headers, "act私有能力", visibility="private"
     )
 
-    token = await _make_token(client, admin_headers, ["gateway", "sync"])
-    act = {"Authorization": f"Bearer {token}", "X-Act-As-Sub": "act-viewer"}
-    service = {"Authorization": f"Bearer {token}"}
-
-    # act-as 目标视角：internal + 同 team 可见；他人 private 不可见
+    # 同团队用户 token：internal + 同 team 可见；他人 private 不可见
     r = await client.get(
-        "/api/capabilities", params={"include_bricks": True, "page_size": 100}, headers=act
+        "/api/capabilities",
+        params={"include_bricks": True, "page_size": 100},
+        headers=viewer_headers,
     )
     assert r.status_code == 200, r.text
     ids = {i["id"] for i in r.json()["items"]}
     assert public_id in ids and team_id in ids and private_id not in ids
 
-    r = await client.get(f"/api/capabilities/{team_id}", headers=act)
+    r = await client.get(f"/api/capabilities/{team_id}", headers=viewer_headers)
     assert r.status_code == 200, r.text
     assert r.json()["runtime"]["transport"] == "stdio"
-    r = await client.get(f"/api/capabilities/{private_id}", headers=act)
+    r = await client.get(f"/api/capabilities/{private_id}", headers=viewer_headers)
     assert r.status_code == 404
 
-    # 服务令牌自身（无头）：team/private 均不可见
-    r = await client.get(
-        "/api/capabilities", params={"include_bricks": True, "page_size": 100}, headers=service
-    )
-    ids = {i["id"] for i in r.json()["items"]}
-    assert public_id in ids and team_id not in ids and private_id not in ids
-    r = await client.get(f"/api/capabilities/{team_id}", headers=service)
-    assert r.status_code == 404
-
-    # act-as 目标不存在 → 403（浏览与详情一致）
-    ghost = {"Authorization": f"Bearer {token}", "X-Act-As-Sub": "ghost"}
-    r = await client.get("/api/capabilities", params={"include_bricks": True}, headers=ghost)
-    assert r.status_code == 403
-    r = await client.get(f"/api/capabilities/{public_id}", headers=ghost)
-    assert r.status_code == 403
-
-    # 非服务令牌带该头：忽略，按本人身份（普通用户可见 internal 能力）
+    # X-Act-As-Sub 头被忽略：不再 403、也不再切换视角
+    ghost = {**viewer_headers, "X-Act-As-Sub": "ghost"}
     r = await client.get(
         "/api/capabilities",
         params={"include_bricks": True, "page_size": 100},
-        headers={**user_headers, "X-Act-As-Sub": "ghost"},
+        headers=ghost,
     )
     assert r.status_code == 200
-    assert public_id in {i["id"] for i in r.json()["items"]}
+    assert {i["id"] for i in r.json()["items"]} == ids
+
+    # task-search 同样按 Bearer 用户过滤，头不改变结果
+    def _hit_names(body: dict) -> set[str]:
+        return {
+            h["name"]
+            for key in ("agents", "skills", "mcps", "plugins", "others")
+            for h in body[key]
+        }
+
+    r = await client.get(
+        "/api/capabilities/task-search", params={"q": "act"}, headers=viewer_headers
+    )
+    assert r.status_code == 200, r.text
+    hit_names = _hit_names(r.json())
+    assert "act团队能力" in hit_names and "act私有能力" not in hit_names
+
+    r = await client.get(
+        "/api/capabilities/task-search", params={"q": "act"}, headers=ghost
+    )
+    assert r.status_code == 200
+    assert _hit_names(r.json()) == hit_names
+
+    # 服务令牌按绑定用户自身视角（无 team）：仅 internal 可见；带 act-as 头不切换
+    token = await _make_token(client, admin_headers, ["gateway", "sync"])
+    service = {"Authorization": f"Bearer {token}"}
+    r = await client.get(
+        "/api/capabilities",
+        params={"include_bricks": True, "page_size": 100},
+        headers=service,
+    )
+    assert r.status_code == 200, r.text
+    svc_ids = {i["id"] for i in r.json()["items"]}
+    assert public_id in svc_ids and team_id not in svc_ids and private_id not in svc_ids
+    r = await client.get(f"/api/capabilities/{team_id}", headers=service)
+    assert r.status_code == 404
+
+    ghost_svc = {"Authorization": f"Bearer {token}", "X-Act-As-Sub": "act-viewer"}
+    r = await client.get(
+        "/api/capabilities",
+        params={"include_bricks": True, "page_size": 100},
+        headers=ghost_svc,
+    )
+    assert {i["id"] for i in r.json()["items"]} == svc_ids
+    r = await client.get(f"/api/capabilities/{team_id}", headers=ghost_svc)
+    assert r.status_code == 404
+

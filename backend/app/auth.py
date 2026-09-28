@@ -141,7 +141,7 @@ async def _resolve_sso_user(
     claim_email = raw_email.lower() if raw_email else None
 
     # 身份识别顺序: 工号 -> 邮箱 -> 新建。
-    # 以「工号(username=sub)」为主键：与 agent 侧一致(agent 恒以工号为 name/act-as)，
+    # 以「工号(username=sub)」为主键：与 agent 侧一致(agent 恒以工号为身份主键)，
     # 避免一人多账号时 SSO 被邮箱优先映射到旧账号导致 web/桌面 订阅集不一致；
     # 工号未命中再退回邮箱(兼容历史自建/邮箱注册账号)，最后才新建。
     user = None
@@ -205,7 +205,7 @@ async def _resolve_sso_user(
         user.department = claim_dept
         changed = True
     # 角色: 以 SSO roles 为权威源, 但仅"升权"(避免误将手工管理员降级, 防锁死)。
-    # 代授权(subject)需要真实角色, 否则管理员在 market 侧会退化为 user 而无运行时准入。
+    # 运行时准入需要真实角色, 否则管理员在 market 侧会退化为 user 而无运行时准入。
     claim_role = _sso_role(claims)
     if _ROLE_RANK.get(claim_role, 0) > _ROLE_RANK.get(user.role, 0):
         user.role = claim_role

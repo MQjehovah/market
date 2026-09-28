@@ -18,7 +18,6 @@ from fastapi import HTTPException, status
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import CurrentUser
 from app.config import get_settings
 from app.models import Capability, User, UserCapability
 from app.services.access import access_deny_reason, capability_access_ok
@@ -149,24 +148,3 @@ async def require_runtime_access(user: User, cap: Capability, db: AsyncSession) 
         status.HTTP_403_FORBIDDEN,
         "没有调用该能力的权限：仅管理员、能力作者或已加入「我的能力」的调用方可用",
     )
-
-
-async def require_runtime_access_obo(
-    db: AsyncSession, actor: User, subject: User | None, cap: Capability
-) -> None:
-    """代授权(on-behalf-of)执行门禁：有效权限 = actor ∩ subject。
-
-    - actor(服务身份, 如零号员工) 必须有权执行；
-    - subject(真实提问者) 若与 actor 不同, 还必须对该能力可见且通过统一访问谓词；
-    - 任一不满足即拒绝。subject 为空或等于 actor 时退化为既有 ``require_runtime_access``。
-
-    与 sync/relay 的「身份切换」不同, 这里保留 actor 门禁形成交集, 防止服务身份被
-    用来放大 subject 之外的权限。
-    """
-    await require_runtime_access(actor, cap, db)
-    if subject is None or subject.id == actor.id:
-        return
-    if not is_capability_visible(cap, subject):
-        # 不泄露能力是否存在: 与 resolve_capability 的不可见语义一致
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在或无权访问")
-    await require_runtime_access(subject, cap, db)

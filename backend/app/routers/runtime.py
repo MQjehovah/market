@@ -1,17 +1,15 @@
 """执行引擎：Agent 实例化 / 任务执行 / 工具调用 / 技能激活 / MCP 安装与发现。"""
 
-import logging
 import time
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 
 from app.auth import CurrentUser, DbSession
 from app.models import User
-from app.permissions import require_runtime_access_obo
+from app.permissions import require_runtime_access
 from app.schemas import (
-    CapabilityOut,
     McpCallRequest,
     RuntimeInstantiateRequest,
     RuntimeTaskOut,
@@ -21,7 +19,6 @@ from app.schemas import (
     RuntimeInvokeRequest,
     RuntimeResult,
 )
-from app.services.act_as import resolve_act_as
 from app.services.marketplace import (
     activate_skill,
     discover_mcp,
@@ -37,36 +34,22 @@ from app.services.service_tokens import is_service_token
 
 router = APIRouter(prefix="/api/runtime", tags=["runtime"])
 
-logger = logging.getLogger("market.runtime")
 
-# runtime 代授权所需服务令牌 scope（命中任一即可）: 兼容既有 agent 平台令牌(gateway/sync)
-_RUNTIME_ACT_AS_SCOPES = ("runtime", "gateway", "sync")
+async def current_runtime_user(user: CurrentUser) -> User:
+    """运行时接口仅接受用户令牌（Bearer）；服务令牌等 M2M 身份不可调用。
 
-
-async def current_runtime_subject(
-    request: Request, db: DbSession, user: CurrentUser
-) -> User:
-    """运行时执行主体(subject): 服务令牌 + X-Act-As-Sub 时代理目标用户, 否则为自身。
-
-    仅服务令牌生效; 非服务令牌带该头忽略(全局约定)。actor 身份仍由 ``CurrentUser`` 提供,
-    授权走 ``require_runtime_access_obo`` 的 actor ∩ subject 交集; 执行与用量归因用 subject。
+    身份即 token 用户本人；授权走 ``require_runtime_access``（作者 / 管理员 /
+    已加入「我的能力」且通过统一访问谓词）。
     """
-    sub = (request.headers.get("x-act-as-sub") or "").strip()
-    if not sub or not is_service_token(user):
-        return user
-    target = await resolve_act_as(db, user, sub, scopes=_RUNTIME_ACT_AS_SCOPES)
-    if target is not None:
-        logger.info(
-            "运行时代表用户执行: actor=%s act_as=%s path=%s",
-            user.id,
-            target.username,
-            request.url.path,
+    if is_service_token(user):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "运行时接口仅接受用户令牌（Bearer），服务令牌不可调用",
         )
-        return target
     return user
 
 
-RuntimeSubject = Annotated[User, Depends(current_runtime_subject)]
+RuntimeUser = Annotated[User, Depends(current_runtime_user)]
 
 
 def _result(cap, action: str, message: str, result: dict[str, Any]) -> RuntimeResult:
@@ -82,22 +65,21 @@ def _result(cap, action: str, message: str, result: dict[str, Any]) -> RuntimeRe
 async def instantiate(
     name: str,
     db: DbSession,
-    user: CurrentUser,
-    subject: RuntimeSubject,
+    user: RuntimeUser,
     task: str = "执行任务",
     data: RuntimeInstantiateRequest | None = None,
 ):
     cap = await resolve_capability(db, user, name)
-    await require_runtime_access_obo(db, user, subject, cap)
+    await require_runtime_access(user, cap, db)
     if data is None:
-        result = await instantiate_agent(db, subject, cap, task)
+        result = await instantiate_agent(db, user, cap, task)
     else:
         from app.services.bindings import resolve_binding
 
         binding = await resolve_binding(db, cap, data.binding) if data.binding else None
         result = await instantiate_agent(
             db,
-            subject,
+            user,
             cap,
             data.task or task,
             binding=binding,
@@ -109,10 +91,10 @@ async def instantiate(
 
 
 @router.post("/tools/{name}/invoke", response_model=RuntimeResult)
-async def invoke(name: str, data: RuntimeInvokeRequest, db: DbSession, user: CurrentUser, subject: RuntimeSubject):
+async def invoke(name: str, data: RuntimeInvokeRequest, db: DbSession, user: RuntimeUser):
     cap = await resolve_capability(db, user, name)
-    await require_runtime_access_obo(db, user, subject, cap)
-    result = await invoke_tool(db, subject, cap, data.params)
+    await require_runtime_access(user, cap, db)
+    result = await invoke_tool(db, user, cap, data.params)
     await db.commit()
     await db.refresh(cap)
     message = (
@@ -124,26 +106,26 @@ async def invoke(name: str, data: RuntimeInvokeRequest, db: DbSession, user: Cur
 
 
 @router.post("/skills/{name}/activate", response_model=RuntimeResult)
-async def activate(name: str, data: RuntimeActivateRequest, db: DbSession, user: CurrentUser, subject: RuntimeSubject):
+async def activate(name: str, data: RuntimeActivateRequest, db: DbSession, user: RuntimeUser):
     cap = await resolve_capability(db, user, name)
-    await require_runtime_access_obo(db, user, subject, cap)
+    await require_runtime_access(user, cap, db)
     if cap.type != "skill":
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{name} 不是 skill 能力")
-    result = await activate_skill(db, subject, cap, data.context)
+    result = await activate_skill(db, user, cap, data.context)
     await db.commit()
     await db.refresh(cap)
     return _result(cap, "activate", f"技能「{cap.name}」激活成功", result)
 
 
 @router.get("/agents/{name}/persona", response_model=RuntimeResult)
-async def agent_persona(name: str, db: DbSession, user: CurrentUser, subject: RuntimeSubject):
+async def agent_persona(name: str, db: DbSession, user: RuntimeUser):
     """线上拉取助手人设 PROMPT.md（与 skill activate 对称；不走 /edit 编辑 API）。"""
     cap = await resolve_capability(db, user, name)
-    await require_runtime_access_obo(db, user, subject, cap)
+    await require_runtime_access(user, cap, db)
     if cap.type != "agent":
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{name} 不是 agent 能力")
     try:
-        result = await fetch_agent_persona(db, subject, cap)
+        result = await fetch_agent_persona(db, user, cap)
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     await db.commit()
@@ -152,17 +134,17 @@ async def agent_persona(name: str, db: DbSession, user: CurrentUser, subject: Ru
 
 
 @router.post("/mcp/{name}/install", response_model=RuntimeResult)
-async def install(name: str, data: RuntimeInstallRequest, db: DbSession, user: CurrentUser, subject: RuntimeSubject):
+async def install(name: str, data: RuntimeInstallRequest, db: DbSession, user: RuntimeUser):
     cap = await resolve_capability(db, user, name)
-    await require_runtime_access_obo(db, user, subject, cap)
-    result = await install_mcp(db, subject, cap, data.config)
+    await require_runtime_access(user, cap, db)
+    result = await install_mcp(db, user, cap, data.config)
     await db.commit()
     await db.refresh(cap)
     return _result(cap, "install", f"连接器「{cap.name}」安装成功", result)
 
 
 @router.post("/mcp/{name}/connect")
-async def mcp_connect(name: str, db: DbSession, user: CurrentUser, subject: RuntimeSubject):
+async def mcp_connect(name: str, db: DbSession, user: RuntimeUser):
     """真实连接 MCP 能力包并发现其工具（调试/试用用）。"""
     from app.services.capability_secrets import resolve_capability_env
     from app.services.mcp_bridge import MCPBridge
@@ -175,7 +157,7 @@ async def mcp_connect(name: str, db: DbSession, user: CurrentUser, subject: Runt
             return None
 
     cap = await resolve_capability(db, user, name)
-    await require_runtime_access_obo(db, user, subject, cap)
+    await require_runtime_access(user, cap, db)
     if cap.type != "mcp":
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{name} 不是连接器能力")
     # 平台轨统一注入平台密钥（按能力名，与调用者身份无关）
@@ -183,7 +165,7 @@ async def mcp_connect(name: str, db: DbSession, user: CurrentUser, subject: Runt
     bridge = MCPBridge(gateway_loader=_gateway_loader, env=platform_env)
     try:
         info = await bridge.connect_capability(name, cap)
-        await record_usage(db, subject, cap, "mcp_connect", {"tools": len(bridge.tool_defs)})
+        await record_usage(db, user, cap, "mcp_connect", {"tools": len(bridge.tool_defs)})
         await db.commit()
         await db.refresh(cap)
         return _result(cap, "mcp_connect", f"连接器「{cap.name}」连接{'成功' if info.get('connected') else '失败'}", {
@@ -210,8 +192,7 @@ async def mcp_call(
     name: str,
     data: McpCallRequest,
     db: DbSession,
-    user: CurrentUser,
-    subject: RuntimeSubject,
+    user: RuntimeUser,
     x_conversation_id: str | None = Header(default=None, alias="X-Conversation-Id"),
 ):
     """调用 MCP 能力包暴露的某个工具（调试/试用用，每次调用独立连接）。"""
@@ -227,7 +208,7 @@ async def mcp_call(
 
     conversation_id = (x_conversation_id or "")[:128]
     cap = await resolve_capability(db, user, name)
-    await require_runtime_access_obo(db, user, subject, cap)
+    await require_runtime_access(user, cap, db)
     if cap.type != "mcp":
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{name} 不是连接器能力")
     # 平台轨统一注入平台密钥（按能力名，与调用者身份无关）
@@ -246,7 +227,7 @@ async def mcp_call(
         duration_ms = int((time.monotonic() - t0) * 1000)
         await record_usage(
             db,
-            subject,
+            user,
             cap,
             "mcp_call",
             {"tool": data.tool, "params": data.params},
@@ -270,7 +251,7 @@ async def mcp_call(
         try:
             await record_usage(
                 db,
-                subject,
+                user,
                 cap,
                 "mcp_call",
                 {"tool": data.tool, "params": data.params},
@@ -287,8 +268,8 @@ async def mcp_call(
 
 
 @router.get("/mcp/discover", response_model=RuntimeResult)
-async def discover(db: DbSession, user: CurrentUser, subject: RuntimeSubject):
-    tools = await discover_mcp(db, subject)
+async def discover(db: DbSession, user: RuntimeUser):
+    tools = await discover_mcp(db, user)
     return RuntimeResult(
         ok=True, capability=None, action="mcp_discover",
         message=f"发现 {len(tools)} 个连接器工具", result={"discovered": tools},
@@ -301,12 +282,12 @@ async def health():
 
 
 @router.post("/agents/{name}/tasks", response_model=RuntimeResult)
-async def run_agent_task(name: str, data: RuntimeTaskRequest, db: DbSession, user: CurrentUser, subject: RuntimeSubject):
+async def run_agent_task(name: str, data: RuntimeTaskRequest, db: DbSession, user: RuntimeUser):
     """直接向 Agent 发送任务：LLM 已配置时真实执行（工具沙箱 + 工具调用循环），否则模拟。"""
     from app.services.agent_runner import run_agent
 
     cap = await resolve_capability(db, user, name)
-    await require_runtime_access_obo(db, user, subject, cap)
+    await require_runtime_access(user, cap, db)
     if cap.type == "plugin":
         comps = (cap.input_schema or {}).get("components") or []
         primary = next((c for c in comps if c.get("role") == "primary"), None)
@@ -315,10 +296,10 @@ async def run_agent_task(name: str, data: RuntimeTaskRequest, db: DbSession, use
         if primary is None:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"能力包 {name} 没有可运行的 Agent")
         cap = await resolve_capability(db, user, primary["name"], primary.get("version"))
-        await require_runtime_access_obo(db, user, subject, cap)
+        await require_runtime_access(user, cap, db)
     if cap.type != "agent":
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{name} 不是 Agent 能力")
-    result = await run_agent(db, subject, cap, data.task)
+    result = await run_agent(db, user, cap, data.task)
     await db.refresh(cap)
     payload = RuntimeTaskOut(
         task_id=str(uuid.uuid4()),
