@@ -1,5 +1,6 @@
 """异步 SQLAlchemy 引擎与会话管理。"""
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.pool import StaticPool
@@ -37,6 +38,7 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await _auto_migrate(conn)
+    await run_user_column_migrations()
 
 
 async def _auto_migrate(conn) -> None:
@@ -177,3 +179,32 @@ async def _auto_migrate(conn) -> None:
             )
 
     await conn.run_sync(_do)
+
+
+async def run_user_column_migrations() -> None:
+    """users 表幂等迁移(PG): display_name→name, 补 work_id/phone 并回填。
+    SQLite(测试)直接跳过。"""
+    if engine.dialect.name != "postgresql":
+        return
+    async with engine.begin() as conn:
+        cols = {
+            r[0]
+            for r in (
+                await conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_name='users'"
+                    )
+                )
+            ).fetchall()
+        }
+        if "name" not in cols and "display_name" in cols:
+            await conn.execute(text("ALTER TABLE users RENAME COLUMN display_name TO name"))
+        if "work_id" not in cols:
+            await conn.execute(text("ALTER TABLE users ADD COLUMN work_id VARCHAR(64) DEFAULT ''"))
+        if "phone" not in cols:
+            await conn.execute(text("ALTER TABLE users ADD COLUMN phone VARCHAR(32) DEFAULT ''"))
+        await conn.execute(
+            text("UPDATE users SET work_id = username WHERE work_id = '' OR work_id IS NULL")
+        )
+        await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_work_id ON users(work_id)"))
