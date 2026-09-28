@@ -172,7 +172,7 @@ async def _resolve_sso_user(
         else:
             await db.refresh(user)
 
-    # 命中已有账号时以 SSO 为权威源回写邮箱与姓名。
+    # 命中已有账号时以 SSO 为权威源回写邮箱、姓名、工号、手机号与部门。
     changed = False
     if raw_email and raw_email != (user.email or ""):
         # 邮箱唯一：若该邮箱已属于其它账号（一人多账号场景），跳过回写，避免唯一约束 500。
@@ -189,6 +189,15 @@ async def _resolve_sso_user(
     claim_name = (claims.get("name") or "").strip()
     if claim_name and user.name != claim_name:
         user.name = claim_name
+        changed = True
+    # 工号以 SSO sub 为权威源：为空或变更都对齐
+    if (user.work_id or "") != username:
+        user.work_id = username
+        changed = True
+    # 手机号以 SSO 为权威源；claim 为空时保留管理员手工填写的值
+    claim_phone = (claims.get("mobile") or "").strip()
+    if claim_phone and (user.phone or "") != claim_phone:
+        user.phone = claim_phone
         changed = True
     # 部门以 SSO 为权威源；claim 为空时保留管理员手工填写的值
     claim_dept = (claims.get("dept") or "").strip()
@@ -238,12 +247,15 @@ def _new_sso_user(username: str, claims: dict) -> User:
 
     email 为 NOT NULL UNIQUE，claims 缺省时用派生自唯一 username 的占位邮箱，
     避免空串撞唯一索引；password_hash 置随机不可登录占位值（SSO 用户走免密）。
+    name 无值时回退工号；work_id 恒为工号(sub)。
     """
     return User(
         username=username,
         email=claims.get("email") or f"{username}@sso.local",
         password_hash=hash_password(secrets.token_urlsafe(32)),
-        name=claims.get("name") or claims.get("display_name") or username,
+        name=(claims.get("name") or "").strip() or username,
+        work_id=username,
+        phone=(claims.get("mobile") or "").strip(),
         role=_sso_role(claims),
         department=(claims.get("dept") or "").strip(),
         is_active=True,

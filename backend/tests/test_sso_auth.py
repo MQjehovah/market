@@ -108,10 +108,10 @@ def _cleanup_sso_settings_and_cache(monkeypatch):
     monkeypatch.setattr(settings, "sso_redirect_target", "/login")
 
     def _reset():
+        # state 已改为无状态 HMAC 签名(见 sso_auth.new_state), 无需清理进程内字典
         sso_auth._jwks_cache["data"] = None
         sso_auth._jwks_cache["fetched_at"] = 0.0
         sso_auth._jwks_cache["uri"] = ""
-        sso_auth._states.clear()
 
     _reset()
     yield
@@ -208,7 +208,9 @@ async def db(tmp_path):
         await engine.dispose()
 
 
-def _sso_employee_token(key, emp_no=SSO_EMP_NO, name=None, email=None, dept=None):
+def _sso_employee_token(
+    key, emp_no=SSO_EMP_NO, name=None, email=None, dept=None, mobile=None, roles=None
+):
     claims = {"sub": emp_no}
     if name is not None:
         claims["name"] = name
@@ -216,6 +218,10 @@ def _sso_employee_token(key, emp_no=SSO_EMP_NO, name=None, email=None, dept=None
         claims["email"] = email
     if dept is not None:
         claims["dept"] = dept
+    if mobile is not None:
+        claims["mobile"] = mobile
+    if roles is not None:
+        claims["roles"] = roles
     return sign_token(valid_claims(**claims), key)
 
 
@@ -338,6 +344,151 @@ async def test_get_current_user_sso_keeps_manual_department_when_claim_empty(sso
         _sso_employee_token(key, emp_no="202202100024", email="manual-dept@xzrobot.com", dept="   "), db
     )
     assert got.department == "手工填写部门"
+
+
+async def test_sso_login_writes_back_all_profile_fields(sso_env, db):
+    """已有账号 SSO 登录: name/work_id/phone/email/dept 全字段回写(空 claim 不覆盖)。"""
+    key, _ = sso_env
+    manual = User(
+        id="u-manual-profile",
+        username="jimingqing",
+        email="yjh@xzrobot.com",
+        password_hash=hash_password("unused"),
+        name="旧名字",
+        work_id="",
+        phone="",
+        role="user",
+        department="",
+        is_active=True,
+    )
+    db.add(manual)
+    await db.commit()
+
+    token = _sso_employee_token(
+        key,
+        emp_no="2025091000263",
+        name="羊柬衡",
+        dept="研发",
+        email="yjh@xzrobot.com",
+        mobile="13800000000",
+        roles=["user"],
+    )
+    user = await get_current_user(token, db)
+
+    assert user.id == "u-manual-profile"
+    assert (user.name, user.work_id, user.phone, user.email, user.department) == (
+        "羊柬衡",
+        "2025091000263",
+        "13800000000",
+        "yjh@xzrobot.com",
+        "研发",
+    )
+
+
+async def test_sso_login_rewrites_profile_on_claim_change(sso_env, db):
+    """重复登录 claims 变化: name/work_id/phone/dept 回写为新值。"""
+    key, _ = sso_env
+    first = await get_current_user(
+        _sso_employee_token(
+            key, emp_no="2025091000263", name="旧名", dept="旧部门", mobile="13000000000"
+        ),
+        db,
+    )
+    assert (first.name, first.work_id, first.phone, first.department) == (
+        "旧名",
+        "2025091000263",
+        "13000000000",
+        "旧部门",
+    )
+
+    second = await get_current_user(
+        _sso_employee_token(
+            key, emp_no="2025091000263", name="新名", dept="新部门", mobile="13900000000"
+        ),
+        db,
+    )
+
+    assert second.id == first.id
+    assert (second.name, second.work_id, second.phone, second.department) == (
+        "新名",
+        "2025091000263",
+        "13900000000",
+        "新部门",
+    )
+    assert await _count_users(db) == 1
+
+
+async def test_sso_login_keeps_manual_profile_when_claims_empty(sso_env, db):
+    """mobile/name/dept 缺失或空白: 保留手工值; work_id 恒对齐 SSO sub。"""
+    key, _ = sso_env
+    manual = User(
+        id="u-manual-keep",
+        username="manual-keep",
+        email="manual-keep@xzrobot.com",
+        password_hash=hash_password("unused"),
+        name="手工姓名",
+        work_id="manual-work-id",
+        phone="13700000000",
+        role="user",
+        department="手工部门",
+        is_active=True,
+    )
+    db.add(manual)
+    await db.commit()
+
+    got = await get_current_user(
+        _sso_employee_token(
+            key,
+            emp_no="2025091000263",
+            name="",
+            email="manual-keep@xzrobot.com",
+            dept="   ",
+            mobile="",
+        ),
+        db,
+    )
+
+    assert got.id == "u-manual-keep"
+    assert got.email == "manual-keep@xzrobot.com"
+    assert got.name == "手工姓名"
+    assert got.phone == "13700000000"
+    assert got.department == "手工部门"
+    assert got.work_id == "2025091000263"
+
+
+async def test_new_sso_user_provisions_all_profile_fields(sso_env, db):
+    """新开户路径: name/work_id/phone/email/dept 全字段按 claims 落库。"""
+    key, _ = sso_env
+    token = _sso_employee_token(
+        key,
+        emp_no="2025091000263",
+        name="羊柬衡",
+        dept="研发",
+        email="yjh@xzrobot.com",
+        mobile="13800000000",
+        roles=["user"],
+    )
+    user = await get_current_user(token, db)
+
+    assert (
+        user.username,
+        user.name,
+        user.work_id,
+        user.phone,
+        user.email,
+        user.department,
+    ) == ("2025091000263", "羊柬衡", "2025091000263", "13800000000", "yjh@xzrobot.com", "研发")
+    assert await _count_users(db) == 1
+
+
+async def test_new_sso_user_falls_back_to_username_without_name(sso_env, db):
+    """新开户无 name/mobile claim: name 回退工号, phone 为空串。"""
+    key, _ = sso_env
+    user = await get_current_user(_sso_employee_token(key, emp_no="80001"), db)
+
+    assert user.name == "80001"
+    assert user.work_id == "80001"
+    assert user.phone == ""
 
 
 async def test_get_current_user_sso_rejects_invalid_token(sso_env, db):
