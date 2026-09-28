@@ -182,18 +182,20 @@ async def _auto_migrate(conn) -> None:
 
 
 async def run_user_column_migrations() -> None:
-    """users 表幂等迁移(PG): display_name→name, 补 work_id/phone 并回填。
+    """users 表幂等迁移(PG): display_name→name, 补 work_id(按 username 回填工号)与 phone(无回填)。
     SQLite(测试)直接跳过。"""
     if engine.dialect.name != "postgresql":
         return
     async with engine.begin() as conn:
+        # 多 worker 并发启动时串行化迁移, 避免同时 ALTER 互相打断
+        await conn.execute(text("SELECT pg_advisory_xact_lock(839201001)"))
         cols = {
             r[0]
             for r in (
                 await conn.execute(
                     text(
                         "SELECT column_name FROM information_schema.columns "
-                        "WHERE table_name='users'"
+                        "WHERE table_name='users' AND table_schema = current_schema()"
                     )
                 )
             ).fetchall()
@@ -201,10 +203,15 @@ async def run_user_column_migrations() -> None:
         if "name" not in cols and "display_name" in cols:
             await conn.execute(text("ALTER TABLE users RENAME COLUMN display_name TO name"))
         if "work_id" not in cols:
-            await conn.execute(text("ALTER TABLE users ADD COLUMN work_id VARCHAR(64) DEFAULT ''"))
+            await conn.execute(
+                text("ALTER TABLE users ADD COLUMN IF NOT EXISTS work_id VARCHAR(64) DEFAULT ''")
+            )
+            # 旧数据 username 即工号: 仅加列当次回填, 不覆盖后续人工清空
+            await conn.execute(
+                text("UPDATE users SET work_id = username WHERE work_id = '' OR work_id IS NULL")
+            )
         if "phone" not in cols:
-            await conn.execute(text("ALTER TABLE users ADD COLUMN phone VARCHAR(32) DEFAULT ''"))
-        await conn.execute(
-            text("UPDATE users SET work_id = username WHERE work_id = '' OR work_id IS NULL")
-        )
+            await conn.execute(
+                text("ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(32) DEFAULT ''")
+            )
         await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_work_id ON users(work_id)"))
