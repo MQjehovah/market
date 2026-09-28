@@ -42,7 +42,7 @@ onMounted(load)
           <table class="table">
             <tbody>
               <tr><td class="muted" style="width: 120px">用户名</td><td>{{ user?.username }}</td></tr>
-              <tr><td class="muted">显示名</td><td>{{ user?.display_name }}</td></tr>
+              <tr><td class="muted">姓名</td><td>{{ user?.name }}</td></tr>
               <tr><td class="muted">邮箱</td><td>{{ user?.email }}</td></tr>
               <tr><td class="muted">角色</td><td>{{ roleLabel(user?.role) }}</td></tr>
               <tr><td class="muted">部门</td><td>{{ user?.department || '-' }}</td></tr>

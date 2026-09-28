@@ -58,7 +58,7 @@ let accessOptionsLoaded = false
 const userOptions = computed(() =>
   (accessOptions.value.users || []).map((u) => ({
     value: u.username,
-    label: u.display_name ? `${u.display_name}（${u.username}）` : u.username
+    label: u.name ? `${u.name}（${u.username}）` : u.username
   }))
 )
 const departmentOptions = computed(() => accessOptions.value.departments || [])

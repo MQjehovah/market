@@ -472,7 +472,7 @@ async def _publish(
                 username=author_username,
                 email=f"{author_username}@example.com",
                 password_hash=hash_password(resolve_seed_admin_password()),
-                display_name="能力层发布者",
+                name="能力层发布者",
                 role="admin",
                 organization="平台部",
             )

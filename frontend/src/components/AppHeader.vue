@@ -17,7 +17,7 @@ const isAdmin = computed(() => authState.user?.role === 'admin')
 const unreadCount = computed(() => notifications.value.filter((n) => !n.read).length)
 const roleText = computed(() => roleLabel(authState.user?.role))
 const userLabel = computed(
-  () => authState.user?.display_name || authState.user?.username || '未登录'
+  () => authState.user?.name || authState.user?.username || '未登录'
 )
 
 const isDiscoverActive = computed(

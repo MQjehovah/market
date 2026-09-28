@@ -233,7 +233,7 @@ async def test_get_current_user_sso_provisions_and_does_not_duplicate(sso_env, d
 
     assert user.username == SSO_EMP_NO
     assert user.email == "10086@example.com"
-    assert user.display_name == "测试员工"
+    assert user.name == "测试员工"
     assert user.role == "user"
     assert user.is_active is True
     assert await _count_users(db) == 1
@@ -255,7 +255,7 @@ async def test_get_current_user_sso_matches_existing_account_by_email(sso_env, d
         username="jimingqing",
         email="jimingqing@xzrobot.com",
         password_hash=hash_password("not-used-sso"),
-        display_name="旧名字",
+        name="旧名字",
         role="user",
         is_active=True,
     )
@@ -270,7 +270,7 @@ async def test_get_current_user_sso_matches_existing_account_by_email(sso_env, d
     assert user.id == "u-local"
 
     assert user.username == "jimingqing"  # username 不在 SSO 身份键上, 保持不变
-    assert user.display_name == "季明清"  # 姓名以 SSO 为权威源刷新
+    assert user.name == "季明清"  # 姓名以 SSO 为权威源刷新
     assert await _count_users(db) == 1
 
 
@@ -283,7 +283,7 @@ async def test_get_current_user_sso_without_email_uses_derived_fallback(sso_env,
 
     assert user.username == "20001"
     assert user.email == "20001@sso.local"
-    assert user.display_name == "无名氏"
+    assert user.name == "无名氏"
 
 
 async def test_get_current_user_sso_provisions_department(sso_env, db):
@@ -316,7 +316,7 @@ async def test_get_current_user_sso_keeps_manual_department_when_claim_empty(sso
         username="202202100024",
         email="manual-dept@xzrobot.com",
         password_hash=hash_password("unused"),
-        display_name="手工部门",
+        name="手工部门",
         role="user",
         department="手工填写部门",
         is_active=True,
@@ -354,7 +354,7 @@ async def test_get_current_user_sso_disabled_user_forbidden(sso_env, db):
         username="10087",
         email="10087@example.com",
         password_hash="unused",
-        display_name="已禁用",
+        name="已禁用",
         role="user",
         is_active=False,
     )
@@ -373,7 +373,7 @@ async def test_get_current_user_hs256_legacy_token_still_works(db):
         username="legacy",
         email="legacy@example.com",
         password_hash="unused",
-        display_name="老用户",
+        name="老用户",
         role="user",
         is_active=True,
     )
@@ -420,7 +420,7 @@ async def test_get_current_user_optional_valid_sso_token_returns_user(sso_env, d
 
     assert user is not None
     assert user.username == "30001"
-    assert user.display_name == "可选用户"
+    assert user.name == "可选用户"
 
 
 async def test_sso_start_disabled_returns_404(client):
@@ -536,5 +536,5 @@ async def test_http_me_accepts_sso_token(sso_env, client):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["username"] == "10086"
-    assert body["display_name"] == "测试员工"
+    assert body["name"] == "测试员工"
     assert body["role"] == "user"

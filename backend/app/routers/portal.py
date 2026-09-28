@@ -595,7 +595,7 @@ async def access_options(db: DbSession, user: OptionalUser):
     users = [
         {
             "username": u.username,
-            "display_name": u.display_name or "",
+            "name": u.name or "",
             "department": u.department or "",
         }
         for u in rows

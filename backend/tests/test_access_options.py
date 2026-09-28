@@ -16,5 +16,5 @@ async def test_access_options_lists_users_and_departments(client, user_headers):
     assert isinstance(data["users"], list) and data["users"]
     usernames = {u["username"] for u in data["users"]}
     assert "admin" in usernames
-    assert all({"username", "display_name", "department"} <= set(u) for u in data["users"])
+    assert all({"username", "name", "department"} <= set(u) for u in data["users"])
     assert isinstance(data["departments"], list)

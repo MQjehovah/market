@@ -187,8 +187,8 @@ async def _resolve_sso_user(
                 "跳过邮箱回写：%s 已属于账号 %s（当前账号 %s）", raw_email, owner, user.username
             )
     claim_name = (claims.get("name") or "").strip()
-    if claim_name and user.display_name != claim_name:
-        user.display_name = claim_name
+    if claim_name and user.name != claim_name:
+        user.name = claim_name
         changed = True
     # 部门以 SSO 为权威源；claim 为空时保留管理员手工填写的值
     claim_dept = (claims.get("dept") or "").strip()
@@ -243,7 +243,7 @@ def _new_sso_user(username: str, claims: dict) -> User:
         username=username,
         email=claims.get("email") or f"{username}@sso.local",
         password_hash=hash_password(secrets.token_urlsafe(32)),
-        display_name=claims.get("name") or claims.get("display_name") or username,
+        name=claims.get("name") or claims.get("display_name") or username,
         role=_sso_role(claims),
         department=(claims.get("dept") or "").strip(),
         is_active=True,

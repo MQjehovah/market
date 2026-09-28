@@ -56,7 +56,7 @@ async def create_service_token(
                 username=username,
                 email=f"{username}@service.local",
                 password_hash=hash_password(secrets.token_urlsafe(32)),
-                display_name=name,
+                name=name,
                 role="user",
                 department=admin.department or "",
                 is_active=True,

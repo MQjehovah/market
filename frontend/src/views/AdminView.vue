@@ -112,13 +112,13 @@ const userForm = ref({
   username: '',
   email: '',
   password: '',
-  display_name: '',
+  name: '',
   department: '',
   role: 'user'
 })
 const editForm = ref({
   username: '',
-  display_name: '',
+  name: '',
   email: '',
   department: '',
   password: ''
@@ -262,7 +262,7 @@ const filteredUsers = computed(() => {
   return users.value.filter(
     (u) =>
       u.username.toLowerCase().includes(q) ||
-      (u.display_name || '').toLowerCase().includes(q) ||
+      (u.name || '').toLowerCase().includes(q) ||
       (u.email || '').toLowerCase().includes(q)
   )
 })
@@ -401,13 +401,13 @@ async function createUser() {
       username: f.username,
       email: f.email,
       password: f.password,
-      display_name: f.display_name,
+      name: f.name,
       department: f.department,
       role: f.role
     })
     userNotice.value = `已创建用户 ${u.username}（${roleDefs.find((r) => r.key === u.role)?.label}）`
     showCreateUser.value = false
-    userForm.value = { username: '', email: '', password: '', display_name: '', department: '', role: 'user' }
+    userForm.value = { username: '', email: '', password: '', name: '', department: '', role: 'user' }
     await load()
   } catch (e) {
     error.value = e.message
@@ -422,7 +422,7 @@ function openEditUser(u) {
   editUser.value = u
   editForm.value = {
     username: u.username,
-    display_name: u.display_name || '',
+    name: u.name || '',
     email: u.email || '',
     department: u.department || '',
     password: ''
@@ -436,7 +436,7 @@ async function saveEditUser() {
   const f = editForm.value
   const patch = {}
   if (f.username && f.username !== editUser.value.username) patch.username = f.username
-  if (f.display_name !== (editUser.value.display_name || '')) patch.display_name = f.display_name
+  if (f.name !== (editUser.value.name || '')) patch.name = f.name
   if (f.email !== (editUser.value.email || '')) patch.email = f.email
   if (f.department !== (editUser.value.department || '')) patch.department = f.department
   if (f.password) patch.password = f.password
@@ -1035,7 +1035,7 @@ watch(
               <td colspan="6" class="muted">{{ userQuery ? '无匹配用户' : '暂无用户' }}</td>
             </tr>
             <tr v-for="u in filteredUsers" :key="u.id">
-              <td>{{ u.display_name || u.username }} <span class="muted">@{{ u.username }}</span></td>
+              <td>{{ u.name || u.username }} <span class="muted">@{{ u.username }}</span></td>
               <td>{{ u.email }}</td>
               <td>{{ u.department || '-' }}</td>
               <td>
@@ -1163,7 +1163,7 @@ watch(
           <div class="field"><label>用户名 *</label><input v-model="userForm.username" class="input" placeholder="3-64 位字母数字/._-" /></div>
           <div class="field"><label>邮箱 *</label><input v-model="userForm.email" class="input" placeholder="user@example.com" /></div>
           <div class="field"><label>初始密码 *</label><input v-model="userForm.password" type="password" class="input" placeholder="至少 6 位" /></div>
-          <div class="field"><label>显示名</label><input v-model="userForm.display_name" class="input" /></div>
+          <div class="field"><label>姓名</label><input v-model="userForm.name" class="input" /></div>
           <div class="field"><label>部门</label><input v-model="userForm.department" class="input" list="dept-suggest" placeholder="如：研发部" /></div>
         </div>
         <div class="field mt-12">
@@ -1192,7 +1192,7 @@ watch(
         <div class="grid" style="grid-template-columns: 1fr 1fr">
           <div class="field"><label>用户名</label><input v-model="editForm.username" class="input" /></div>
           <div class="field"><label>邮箱</label><input v-model="editForm.email" class="input" /></div>
-          <div class="field"><label>显示名</label><input v-model="editForm.display_name" class="input" /></div>
+          <div class="field"><label>姓名</label><input v-model="editForm.name" class="input" /></div>
           <div class="field"><label>部门</label><input v-model="editForm.department" class="input" list="dept-suggest" placeholder="如：研发部" /></div>
           <div class="field"><label>重置密码（留空不改）</label><input v-model="editForm.password" type="password" class="input" placeholder="至少 6 位" /></div>
         </div>

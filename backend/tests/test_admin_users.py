@@ -13,7 +13,7 @@ async def test_admin_create_user_role_and_toggle(client, admin_headers, user_hea
             "username": "newpublisher",
             "email": "newpublisher@example.com",
             "password": "secret123",
-            "display_name": "新用户",
+            "name": "新用户",
             "department": "平台部",
             "role": "user",
         },
@@ -74,7 +74,7 @@ async def test_admin_update_user_and_reset_password(client, admin_headers):
             "username": "editme",
             "email": "editme@example.com",
             "password": "oldpass123",
-            "display_name": "旧名字",
+            "name": "旧名字",
             "role": "user",
         },
     )
@@ -85,10 +85,10 @@ async def test_admin_update_user_and_reset_password(client, admin_headers):
     r = await client.patch(
         f"/api/admin/users/{uid}",
         headers=admin_headers,
-        json={"display_name": "新名字", "email": "edited@example.com", "password": "newpass456"},
+        json={"name": "新名字", "email": "edited@example.com", "password": "newpass456"},
     )
     assert r.status_code == 200, r.text
-    assert r.json()["display_name"] == "新名字"
+    assert r.json()["name"] == "新名字"
     assert r.json()["email"] == "edited@example.com"
 
     # 旧密码登录失败、新密码成功
@@ -279,7 +279,7 @@ async def test_admin_create_and_update_user_department(client, admin_headers):
     )
     assert r.json()["department"] == "财务部"
     r = await client.patch(
-        f"/api/admin/users/{uid}", headers=admin_headers, json={"display_name": "改名"}
+        f"/api/admin/users/{uid}", headers=admin_headers, json={"name": "改名"}
     )
     assert r.json()["department"] == "财务部"
 

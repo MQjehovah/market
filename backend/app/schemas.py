@@ -70,7 +70,9 @@ class UserOut(BaseModel):
     id: str
     username: str
     email: str
-    display_name: str
+    name: str
+    work_id: str = ""
+    phone: str = ""
     role: str
     team: str
     department: str = ""
@@ -82,7 +84,9 @@ class UserAdminCreate(BaseModel):
     username: str = Field(min_length=3, max_length=64, pattern=r"^[\w.\-]+$")
     email: str = Field(max_length=255)
     password: str = Field(min_length=6, max_length=128)
-    display_name: str = Field(default="", max_length=64)
+    name: str = Field(default="", max_length=64)
+    work_id: str = Field(default="", max_length=64)
+    phone: str = Field(default="", max_length=32)
     team: str = Field(default="", max_length=100)
     department: str = Field(default="", max_length=100)
     role: AdminRole = "user"
@@ -92,7 +96,9 @@ class UserAdminUpdate(BaseModel):
     username: str | None = Field(default=None, min_length=3, max_length=64, pattern=r"^[\w.\-]+$")
     email: str | None = Field(default=None, max_length=255)
     password: str | None = Field(default=None, min_length=6, max_length=128, description="留空不修改")
-    display_name: str | None = Field(default=None, max_length=64)
+    name: str | None = Field(default=None, max_length=64)
+    work_id: str | None = Field(default=None, max_length=64)
+    phone: str | None = Field(default=None, max_length=32)
     team: str | None = Field(default=None, max_length=100)
     department: str | None = Field(default=None, max_length=100)
     role: AdminRole | None = None

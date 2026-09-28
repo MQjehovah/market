@@ -33,7 +33,9 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
-    display_name: Mapped[str] = mapped_column(String(64), default="")
+    name: Mapped[str] = mapped_column(String(64), default="")
+    work_id: Mapped[str] = mapped_column(String(64), default="")
+    phone: Mapped[str] = mapped_column(String(32), default="")
     role: Mapped[str] = mapped_column(String(16), default="user")  # admin | user
     organization: Mapped[str] = mapped_column(String(100), default="")  # 历史字段, 已并入 department
     team: Mapped[str] = mapped_column(String(100), default="")
