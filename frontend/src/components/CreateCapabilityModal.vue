@@ -2,6 +2,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api'
+import MultiSelect from './MultiSelect.vue'
 import {
   ORCH_LABELS,
   PACKAGE_HINTS,
@@ -39,8 +40,8 @@ const form = reactive({
   tags: '',
   visibility: 'internal',
   access_policy: 'open',
-  allowedUsers: '',
-  allowedDepartments: '',
+  allowedUsers: [],
+  allowedDepartments: [],
   allowedRoles: [],
   distribution: 'both',
   risk_default: 'read',
@@ -50,6 +51,32 @@ const form = reactive({
 const ACCESS_ROLE_KEYS = ['admin', 'user']
 const error = ref('')
 const busy = ref(false)
+
+// 白名单下拉选项(用户/部门): 打开弹窗时懒加载; 失败时下拉为空, 仍可手输新增
+const accessOptions = ref({ users: [], departments: [] })
+let accessOptionsLoaded = false
+const userOptions = computed(() =>
+  (accessOptions.value.users || []).map((u) => ({
+    value: u.username,
+    label: u.display_name ? `${u.display_name}（${u.username}）` : u.username
+  }))
+)
+const departmentOptions = computed(() => accessOptions.value.departments || [])
+async function loadAccessOptions() {
+  if (accessOptionsLoaded) return
+  try {
+    accessOptions.value = await api.get('/meta/access-options')
+    accessOptionsLoaded = true
+  } catch (e) {
+    console.warn('访问权限选项加载失败，下拉为空仍可手输', e)
+  }
+}
+watch(
+  () => props.show,
+  (visible) => {
+    if (visible) void loadAccessOptions()
+  }
+)
 
 const shelfList = computed(() =>
   Object.values(SHELVES).filter((s) => s.key !== 'install')
@@ -145,14 +172,8 @@ async function create() {
     .split(/[,，]/)
     .map((s) => s.trim())
     .filter(Boolean)
-  const allowedUsers = form.allowedUsers
-    .split(/[,，]/)
-    .map((s) => s.trim())
-    .filter(Boolean)
-  const allowedDepartments = form.allowedDepartments
-    .split(/[,，]/)
-    .map((s) => s.trim())
-    .filter(Boolean)
+  const allowedUsers = [...form.allowedUsers]
+  const allowedDepartments = [...form.allowedDepartments]
   const allowedRoles = [...form.allowedRoles]
   busy.value = true
   try {
@@ -348,15 +369,25 @@ async function create() {
             </select>
           </div>
           <div v-if="form.access_policy === 'restricted'" class="field">
-            <label>白名单用户名（逗号分隔）</label>
-            <input v-model="form.allowedUsers" class="input" placeholder="zhangsan, lisi" />
+            <label>白名单用户（多选，工号）</label>
+            <MultiSelect
+              v-model="form.allowedUsers"
+              :options="userOptions"
+              placeholder="搜索并选择用户（姓名/工号）"
+              allow-create
+            />
           </div>
         </div>
 
         <div v-if="form.access_policy === 'restricted'" class="grid mt-12" style="grid-template-columns: 1fr 1fr">
           <div class="field">
-            <label>部门白名单（逗号分隔，留空不限）</label>
-            <input v-model="form.allowedDepartments" class="input" placeholder="软件部, 信息部（留空不限）" />
+            <label>部门白名单（多选，留空不限）</label>
+            <MultiSelect
+              v-model="form.allowedDepartments"
+              :options="departmentOptions"
+              placeholder="搜索并选择部门（可手输新增）"
+              allow-create
+            />
           </div>
           <div class="field">
             <label>角色白名单（勾选，留空不限）</label>

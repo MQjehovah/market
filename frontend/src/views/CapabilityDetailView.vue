@@ -40,6 +40,7 @@ import PackageEditor from '../components/PackageEditor.vue'
 import DebugCapabilityModal from '../components/DebugCapabilityModal.vue'
 import ConfirmActionModal from '../components/ConfirmActionModal.vue'
 import AskTrialPanel from '../components/AskTrialPanel.vue'
+import MultiSelect from '../components/MultiSelect.vue'
 
 const __API_BASE__ = (import.meta.env.BASE_URL || '/').replace(/\/$/, '') + '/api'
 
@@ -72,11 +73,31 @@ const iconError = ref('')
 const iconFailed = ref(false)
 const accessPolicy = ref('open')
 const installPolicy = ref('optional')
-const allowedUsers = ref('')
-const allowedDepartments = ref('')
+const allowedUsers = ref([])
+const allowedDepartments = ref([])
 const allowedRoles = ref([])
 const accessSaved = ref('')
 const ACCESS_ROLE_KEYS = ['admin', 'user']
+
+// 白名单下拉选项(用户/部门): 懒加载; 失败时下拉为空, 仍可手输新增
+const accessOptions = ref({ users: [], departments: [] })
+let accessOptionsLoaded = false
+const userOptions = computed(() =>
+  (accessOptions.value.users || []).map((u) => ({
+    value: u.username,
+    label: u.display_name ? `${u.display_name}（${u.username}）` : u.username
+  }))
+)
+const accessDepartmentOptions = computed(() => accessOptions.value.departments || [])
+async function loadAccessOptions() {
+  if (accessOptionsLoaded) return
+  try {
+    accessOptions.value = await api.get('/meta/access-options')
+    accessOptionsLoaded = true
+  } catch (e) {
+    console.warn('访问权限选项加载失败，下拉为空仍可手输', e)
+  }
+}
 
 function normList(values) {
   if (!Array.isArray(values)) return []
@@ -840,9 +861,10 @@ async function load() {
     cap.value = await api.get(`/capabilities/${props.id}`)
     accessPolicy.value = cap.value.access_policy || 'open'
     installPolicy.value = cap.value.install_policy || 'optional'
-    allowedUsers.value = (cap.value.allowed_users || []).join(', ')
-    allowedDepartments.value = normList(cap.value.allowed_departments).join(', ')
+    allowedUsers.value = normList(cap.value.allowed_users)
+    allowedDepartments.value = normList(cap.value.allowed_departments)
     allowedRoles.value = normList(cap.value.allowed_roles)
+    void loadAccessOptions()
     versions.value = await api.get(`/capabilities/${props.id}/versions`)
     ratings.value = await api.get(`/capabilities/${props.id}/ratings`)
     await loadMcpPackageMeta()
@@ -1006,9 +1028,9 @@ async function saveAccess() {
   try {
     await api.post(`/capabilities/${props.id}/access`, {
       access_policy: accessPolicy.value,
-      allowed_users: splitList(allowedUsers.value),
+      allowed_users: [...allowedUsers.value],
       // 未传=保持、传空数组=清空；本页始终显式提交两个名单
-      allowed_departments: splitList(allowedDepartments.value),
+      allowed_departments: [...allowedDepartments.value],
       allowed_roles: [...allowedRoles.value]
     })
     await api.post(`/capabilities/${props.id}/install-policy`, {
@@ -2080,24 +2102,22 @@ onMounted(() => {
             </div>
             <div class="access-lists mt-12">
               <div class="field">
-                <label>用户白名单（逗号分隔，留空不限）</label>
-                <input
+                <label>用户白名单（多选，留空不限）</label>
+                <MultiSelect
                   v-model="allowedUsers"
-                  class="input"
-                  placeholder="zhangsan, lisi（留空不限）"
+                  :options="userOptions"
+                  placeholder="搜索并选择用户（姓名/工号）"
+                  allow-create
                 />
               </div>
               <div class="field">
-                <label>部门白名单（逗号分隔，留空不限）</label>
-                <input
+                <label>部门白名单（多选，留空不限）</label>
+                <MultiSelect
                   v-model="allowedDepartments"
-                  class="input"
-                  list="access-dept-options"
-                  placeholder="软件部, 信息部（留空不限）"
+                  :options="accessDepartmentOptions"
+                  placeholder="搜索并选择部门（可手输新增）"
+                  allow-create
                 />
-                <datalist id="access-dept-options">
-                  <option v-for="d in departmentSuggestions" :key="d" :value="d" />
-                </datalist>
               </div>
               <div class="field">
                 <label>角色白名单（勾选，留空不限）</label>

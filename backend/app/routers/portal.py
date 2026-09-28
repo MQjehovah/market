@@ -583,6 +583,27 @@ async def categories(db: DbSession, user: OptionalUser):
     return result
 
 
+@router.get("/meta/access-options")
+async def access_options(db: DbSession, user: OptionalUser):
+    """访问权限编辑器选项: 用户(工号/姓名) + 部门(现存值)。
+
+    供能力的「白名单(restricted)」配置下拉使用; 登录用户可读(与浏览能力同级的公开信息)。
+    """
+    if user is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "未登录")
+    rows = (await db.scalars(select(User).order_by(User.username.asc()).limit(1000))).all()
+    users = [
+        {
+            "username": u.username,
+            "display_name": u.display_name or "",
+            "department": u.department or "",
+        }
+        for u in rows
+    ]
+    departments = sorted({(u.department or "").strip() for u in rows if (u.department or "").strip()})
+    return {"users": users, "departments": departments}
+
+
 @router.get("/meta/scopes")
 async def scopes_meta():
     """能力 scope 目录（前端展示 / step-up 提示用）。"""
