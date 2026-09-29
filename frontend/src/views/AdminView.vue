@@ -1028,14 +1028,15 @@ watch(
         <div v-if="userNotice" class="alert alert-success">{{ userNotice }}</div>
         <table class="table mt-16">
           <thead>
-            <tr><th>工号</th><th>姓名</th><th>手机</th><th>邮箱</th><th>部门</th><th>角色</th><th>状态</th><th>操作</th></tr>
+            <tr><th style="width: 70px">ID</th><th>工号</th><th>姓名</th><th>手机</th><th>邮箱</th><th>部门</th><th>角色</th><th>状态</th><th>操作</th></tr>
           </thead>
           <tbody>
             <tr v-if="filteredUsers.length === 0">
-              <td colspan="8" class="muted">{{ userQuery ? '无匹配用户' : '暂无用户' }}</td>
+              <td colspan="9" class="muted">{{ userQuery ? '无匹配用户' : '暂无用户' }}</td>
             </tr>
             <tr v-for="u in filteredUsers" :key="u.id">
-              <td>{{ u.work_id || u.username }}</td>
+              <td>{{ u.id }}</td>
+              <td>{{ u.work_id || '—' }}</td>
               <td>{{ u.name || '—' }}</td>
               <td>{{ u.phone || '—' }}</td>
               <td>{{ u.email || '—' }}</td>
