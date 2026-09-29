@@ -1040,7 +1040,7 @@ watch(
               <td>{{ u.name || '—' }}</td>
               <td>{{ u.phone || '—' }}</td>
               <td>{{ u.email || '—' }}</td>
-              <td>{{ u.department || '-' }}</td>
+              <td>{{ u.department || '—' }}</td>
               <td>
                 <select :value="u.role" class="select" style="width: auto; padding: 4px 8px" :disabled="isSelf(u)" @change="updateUser(u, { role: $event.target.value })">
                   <option value="admin">管理员</option>
