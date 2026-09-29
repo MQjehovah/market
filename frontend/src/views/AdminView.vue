@@ -1028,15 +1028,17 @@ watch(
         <div v-if="userNotice" class="alert alert-success">{{ userNotice }}</div>
         <table class="table mt-16">
           <thead>
-            <tr><th>用户</th><th>邮箱</th><th>部门</th><th>角色</th><th>状态</th><th>操作</th></tr>
+            <tr><th>工号</th><th>姓名</th><th>手机</th><th>邮箱</th><th>部门</th><th>角色</th><th>状态</th><th>操作</th></tr>
           </thead>
           <tbody>
             <tr v-if="filteredUsers.length === 0">
-              <td colspan="6" class="muted">{{ userQuery ? '无匹配用户' : '暂无用户' }}</td>
+              <td colspan="8" class="muted">{{ userQuery ? '无匹配用户' : '暂无用户' }}</td>
             </tr>
             <tr v-for="u in filteredUsers" :key="u.id">
-              <td>{{ u.name || u.username }} <span class="muted">@{{ u.username }}</span></td>
-              <td>{{ u.email }}</td>
+              <td>{{ u.work_id || u.username }}</td>
+              <td>{{ u.name || '—' }}</td>
+              <td>{{ u.phone || '—' }}</td>
+              <td>{{ u.email || '—' }}</td>
               <td>{{ u.department || '-' }}</td>
               <td>
                 <select :value="u.role" class="select" style="width: auto; padding: 4px 8px" :disabled="isSelf(u)" @change="updateUser(u, { role: $event.target.value })">
