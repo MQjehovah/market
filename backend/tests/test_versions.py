@@ -166,16 +166,54 @@ async def test_submit_requires_package(client, publisher_headers):
 
 
 @pytest.mark.asyncio
-async def test_upload_rejected_on_published(client, publisher_headers, admin_headers):
-    cap_id = await _create_and_publish(
-        client, publisher_headers, admin_headers, "no-reupload-tool", "1.0.0"
-    )
+async def test_upload_on_published_opens_new_version(client, publisher_headers, admin_headers):
+    """已发布能力再上传：自动基于已发布开新版（继承能力包），返回新草稿，原已发布不受影响。"""
+    name = "reupload-tool"
+    cap_id = await _create_and_publish(client, publisher_headers, admin_headers, name, "1.0.0")
+
     r = await client.post(
         f"/api/publish/capabilities/{cap_id}/artifact",
         headers=publisher_headers,
-        files={"file": ("pkg.zip", _tool_zip("no-reupload-tool", "1.0.0"), "application/zip")},
+        files={"file": ("pkg.zip", _tool_zip(name, "1.0.1"), "application/zip")},
     )
-    assert r.status_code == 409
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "draft"
+    assert body["version"] == "1.0.1"
+    assert body["artifacts"], "应继承/包含能力包"
+
+    r = await client.get(f"/api/capabilities/{cap_id}", headers=publisher_headers)
+    assert r.status_code == 200
+    assert r.json()["status"] == "published"
+
+
+@pytest.mark.asyncio
+async def test_edit_draft_endpoint_inherits_package(client, publisher_headers, admin_headers):
+    """一键开新版：/edit-draft 返回继承能力包的草稿，且重复调用复用同一草稿。"""
+    name = "edit-draft-tool"
+    cap_id = await _create_and_publish(client, publisher_headers, admin_headers, name, "1.0.0")
+
+    r = await client.post(f"/api/publish/capabilities/{cap_id}/edit-draft", headers=publisher_headers)
+    assert r.status_code == 200, r.text
+    draft = r.json()
+    assert draft["status"] == "draft"
+    assert draft["version"] != "1.0.0"
+    assert draft["artifacts"], "应继承已发布能力包"
+
+    r2 = await client.post(f"/api/publish/capabilities/{cap_id}/edit-draft", headers=publisher_headers)
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["id"] == draft["id"]
+
+
+@pytest.mark.asyncio
+async def test_admin_can_edit_draft_others_published(client, publisher_headers, admin_headers):
+    """管理员可对他人已发布能力一键开新版编辑。"""
+    name = "admin-edit-tool"
+    cap_id = await _create_and_publish(client, publisher_headers, admin_headers, name, "1.0.0")
+    r = await client.post(f"/api/publish/capabilities/{cap_id}/edit-draft", headers=admin_headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "draft"
+    assert r.json()["artifacts"]
 
 
 @pytest.mark.asyncio

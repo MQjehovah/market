@@ -145,7 +145,9 @@ const editForm = reactive({
 const isOwner = computed(() => cap.value && authState.user && cap.value.author_id === authState.user.id)
 const isAdmin = computed(() => authState.user?.role === 'admin')
 
-const canEdit = computed(() => isOwner.value && ['draft', 'returned', 'rejected'].includes(cap.value?.status))
+const canEdit = computed(
+  () => (isOwner.value || isAdmin.value) && ['draft', 'returned', 'rejected'].includes(cap.value?.status)
+)
 /** 可在「文件预览」Tab 直接编辑/上传包内文件：作者或管理员，且处于可上传状态 */
 const canEditPackage = computed(
   () =>
@@ -194,6 +196,10 @@ const progressIndex = computed(() =>
 const onlineEditPath = computed(() => (cap.value ? editRouteFor(cap.value) : null))
 const preferOnlineEdit = computed(
   () => Boolean(onlineEditPath.value && (isOwner.value || isAdmin.value) && canOnlineEdit(cap.value?.type))
+)
+/** 已发布/已下架：属主或管理员可一键开新版（继承能力包）后在线编辑 */
+const canRevise = computed(
+  () => (isOwner.value || isAdmin.value) && ['published', 'deprecated'].includes(cap.value?.status)
 )
 const pluginComponents = computed(() => {
   const schema = cap.value?.input_schema || {}
@@ -1056,6 +1062,31 @@ async function doAction(path, payload = {}) {
 
 function submitReview(action) {
   doAction(`/admin/capabilities/${props.id}/review`, { action, comment: reviewComment.value })
+}
+
+const revising = ref(false)
+const reviseError = ref('')
+
+/** 一键基于已发布版本开新版（继承能力包），跳转到新草稿继续在线编辑/上传 */
+async function openEditDraft() {
+  if (revising.value) return
+  revising.value = true
+  reviseError.value = ''
+  try {
+    const draft = await api.post(`/publish/capabilities/${props.id}/edit-draft`, {})
+    if (!draft?.id) throw new Error('已创建版本但未返回草稿 id')
+    await router.push({
+      path: `/capabilities/${draft.id}`,
+      query: { focus: 'package', created: draft.version }
+    })
+  } catch (e) {
+    if (e && (e.name === 'NavigationDuplicated' || String(e.message || '').includes('Avoided redundant'))) {
+      return
+    }
+    reviseError.value = e.message || String(e)
+  } finally {
+    revising.value = false
+  }
 }
 
 async function uploadArtifact(event) {
@@ -2078,6 +2109,25 @@ onMounted(() => {
               <button v-if="isAdmin && cap.status === 'published'" class="btn btn-danger" type="button" @click="doAction(`/admin/capabilities/${props.id}/deprecate`)">下架（弃用）</button>
               <button v-if="isAdmin && ['published', 'deprecated', 'rejected', 'returned'].includes(cap.status)" class="btn btn-danger" type="button" @click="doAction(`/admin/capabilities/${props.id}/archive`)">归档</button>
             </div>
+          </div>
+
+          <div v-if="canRevise" class="panel">
+            <div class="flex-between flex-wrap">
+              <h3>在线编辑</h3>
+              <span class="muted" style="font-size: 12px">基于当前已发布版本开新版（自动继承能力包），编辑/替换后再提交审核</span>
+            </div>
+            <div class="flex mt-16" style="gap: 10px; flex-wrap: wrap">
+              <button class="btn btn-primary" type="button" :disabled="revising" @click="openEditDraft">
+                {{ revising ? '正在开新版…' : '在线编辑（开新版）' }}
+              </button>
+              <router-link
+                v-if="preferOnlineEdit"
+                :to="onlineEditPath"
+                class="btn"
+                :disabled="revising"
+              >按类型在线编辑</router-link>
+            </div>
+            <div v-if="reviseError" class="error mt-12">{{ reviseError }}</div>
           </div>
 
           <h3 class="manage-group">治理</h3>

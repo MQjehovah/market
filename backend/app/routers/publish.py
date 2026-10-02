@@ -6,11 +6,11 @@ import zipfile
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.orm import joinedload, selectinload
 
 from app.auth import CurrentUser, DbSession
-from app.models import Capability
+from app.models import Capability, CapabilityArtifact
 from app.schemas import (
     CapabilityCreate,
     CapabilityOut,
@@ -26,9 +26,9 @@ from app.services.capabilities import (
     create_capability,
     create_new_version,
     delete_capability,
-    get_visible_capabilities,
     highest_version,
     next_version,
+    parse_semver,
     read_capability_files,
     submit_for_review,
     to_capability_out,
@@ -147,18 +147,102 @@ async def suggest_version(cap_id: str, db: DbSession, user: CurrentUser):
     }
 
 
+async def _find_open_draft(db, cap: Capability) -> Capability | None:
+    rows = (
+        await db.scalars(
+            select(Capability)
+            .options(selectinload(Capability.artifacts))
+            .where(and_(Capability.name == cap.name, Capability.type == cap.type))
+        )
+    ).all()
+    drafts = [r for r in rows if r.status in ("draft", "returned", "rejected")]
+    return max(drafts, key=lambda c: parse_semver(c.version)) if drafts else None
+
+
+async def _latest_published_with_artifact(db, cap: Capability) -> Capability | None:
+    rows = (
+        await db.scalars(
+            select(Capability)
+            .options(selectinload(Capability.artifacts))
+            .where(and_(Capability.name == cap.name, Capability.type == cap.type))
+        )
+    ).all()
+    pubs = [r for r in rows if r.status in ("published", "deprecated") and r.artifacts]
+    return max(pubs, key=lambda c: parse_semver(c.version)) if pubs else None
+
+
+def _inherit_package(db, src: Capability, dst: Capability) -> None:
+    """把 src 的能力包复制到 dst(草稿)，并继承 README/schema/校验摘要。"""
+    if not src.artifacts:
+        return
+    content = get_storage().open(src.artifacts[-1].uri).read()
+    info = get_storage().save(dst.id, f"{dst.name}-{dst.version}.zip", io.BytesIO(content))
+    db.add(CapabilityArtifact(capability_id=dst.id, filename=f"{dst.name}-{dst.version}.zip", **info))
+    dst.readme_md = src.readme_md or dst.readme_md or ""
+    if src.input_schema:
+        dst.input_schema = dict(src.input_schema)
+    if src.validation_report:
+        dst.validation_report = dict(src.validation_report)
+
+
+async def _reload_cap(db, cap_id: str) -> Capability:
+    return await db.scalar(
+        select(Capability)
+        .options(selectinload(Capability.artifacts), joinedload(Capability.author))
+        .where(Capability.id == cap_id)
+    )
+
+
+async def ensure_editable_draft(db, user, cap: Capability) -> Capability:
+    """属主/管理员返回可编辑的草稿（已发布则自动开新版并继承能力包）。
+
+    - 已是可上传态(草稿/打回/驳回/待审) → 原样返回；
+    - 已发布/已下架 → 复用同名草稿，否则基于已发布新建下一版本草稿并复制能力包。
+    """
+    _require_owner(cap, user)
+    if cap.status in UPLOADABLE_STATUSES:
+        return await _reload_cap(db, cap.id)
+    if cap.status not in ("published", "deprecated"):
+        raise HTTPException(status.HTTP_409_CONFLICT, "当前状态不可在线编辑")
+    draft = await _find_open_draft(db, cap)
+    if draft is not None:
+        return await _reload_cap(db, draft.id)
+    base = cap if cap.artifacts else await _latest_published_with_artifact(db, cap)
+    version = next_version(cap.version, "patch")
+    while await db.scalar(
+        select(Capability.id).where(
+            and_(Capability.name == cap.name, Capability.version == version)
+        )
+    ):
+        version = next_version(version, "patch")
+    draft = await create_new_version(
+        db, user, cap, version, changelog=f"基于 v{cap.version} 在线编辑（自动开新版）"
+    )
+    if base is not None and base.artifacts:
+        _inherit_package(db, base, draft)
+        await db.commit()
+    return await _reload_cap(db, draft.id)
+
+
+@router.post("/capabilities/{cap_id}/edit-draft", response_model=CapabilityOut)
+async def edit_draft(cap_id: str, db: DbSession, user: CurrentUser):
+    """一键基于已发布版本开启可编辑草稿（继承能力包）；属主或管理员可用。"""
+    _require_creator(user)
+    cap = await db.get(Capability, cap_id)
+    if cap is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
+    draft = await ensure_editable_draft(db, user, cap)
+    return to_capability_out(draft, author_name=user.username)
+
+
 @router.post("/capabilities/{cap_id}/artifact", response_model=CapabilityOut)
 async def upload_artifact(cap_id: str, db: DbSession, user: CurrentUser, file: UploadFile = File(...)):
     _require_creator(user)
     cap = await db.get(Capability, cap_id)
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
-    _require_owner(cap, user)
-    if cap.status not in UPLOADABLE_STATUSES:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "仅草稿、打回、驳回或待审状态可上传能力包；已发布请先创建新版本",
-        )
+    # 已发布/已下架：属主或管理员上传即自动开新版（继承已发布能力包）
+    cap = await ensure_editable_draft(db, user, cap)
     content = await file.read()
     content, details = prepare_package(cap.type, content)
     from app.services.packages import extract_readme_text
@@ -290,6 +374,7 @@ async def upload_artifact(cap_id: str, db: DbSession, user: CurrentUser, file: U
         select(Capability)
         .options(selectinload(Capability.artifacts), joinedload(Capability.author))
         .where(Capability.id == cap.id)
+        .execution_options(populate_existing=True)
     )
     return to_capability_out(cap, author_name=user.username)
 
@@ -342,15 +427,6 @@ def _zip_files(files: dict[str, bytes]) -> bytes:
     return buf.getvalue()
 
 
-def _require_package_editable(cap: Capability, user) -> None:
-    _require_owner(cap, user)
-    if cap.status not in UPLOADABLE_STATUSES:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "仅草稿、打回、驳回或待审状态可编辑文件；已发布请先创建新版本",
-        )
-
-
 @router.put("/capabilities/{cap_id}/package", response_model=CapabilityOut)
 async def edit_package(cap_id: str, data: PackageEditSave, db: DbSession, user: CurrentUser):
     """在线编辑：按文件树覆盖文本文件 / 删除文件，重建能力包。"""
@@ -362,7 +438,8 @@ async def edit_package(cap_id: str, data: PackageEditSave, db: DbSession, user: 
     )
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
-    _require_package_editable(cap, user)
+    # 已发布/已下架：属主或管理员编辑文件即自动开新版（继承已发布能力包）
+    cap = await ensure_editable_draft(db, user, cap)
 
     files = read_capability_files(cap)
     for raw in data.deleted or []:
@@ -394,7 +471,8 @@ async def upload_package_file(
     )
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
-    _require_package_editable(cap, user)
+    # 已发布/已下架：属主或管理员上传文件即自动开新版（继承已发布能力包）
+    cap = await ensure_editable_draft(db, user, cap)
 
     target = _norm_pkg_path(path or file.filename or "file.bin")
     files = read_capability_files(cap)
