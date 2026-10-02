@@ -51,9 +51,13 @@ async def lifespan(app: FastAPI):
     await init_db()
     async with SessionLocal() as session:
         await seed_if_empty(session)
+    from app.services.workflow_triggers import start_scheduler, stop_scheduler
+
+    start_scheduler()
     try:
         yield
     finally:
+        stop_scheduler()
         await gateway_registry.shutdown()
 
 

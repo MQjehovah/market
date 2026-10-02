@@ -563,10 +563,20 @@ async def _execute_node(
     if ntype == "knowledge_retrieval":
         return {"output": await _knowledge_retrieval(node.get("params") or {}, ctx)}
     if ntype == "code":
-        # 占位：沙箱执行(Python/Node)在 P3 接入；未启用时给出清晰错误
-        raise HTTPException(
-            status.HTTP_501_NOT_IMPLEMENTED, "code 节点沙箱尚未启用（P3 接入）。可先用 http / template / llm 节点替代。"
-        )
+        from app.services.sandbox import run_code
+
+        p = node.get("params") or {}
+        code = str(p.get("code") or "")
+        inputs = render_value(p.get("inputs") or {}, ctx)
+        if not isinstance(inputs, dict):
+            inputs = {"inputs": inputs}
+        try:
+            res = await run_code(
+                str(p.get("language") or "python"), code, inputs, int(p.get("timeout_seconds") or 30)
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"code 执行失败: {exc}")
+        return {"output": res}
 
     raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"未知节点类型 {ntype}")
 
