@@ -322,15 +322,16 @@ def _build_agents(agent_root: Path, version: str) -> list[dict]:
         desc = meta.get("description") or ""
         is_team = (d / "TEAM.md").is_file() and (d / "agents").is_dir()
         files = {
-            "agent.json": _json_bytes(
+            "plugin.json": _json_bytes(
                 {
                     "name": name,
                     "description": desc,
                     "version": version,
                     "role": name,
+                    "dependencies": [],
                 }
             ),
-            "PROMPT.md": text.encode("utf-8"),
+            f"agents/{name}.md": text.encode("utf-8"),
         }
         team = d / "TEAM.md"
         if team.is_file():

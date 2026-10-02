@@ -32,9 +32,13 @@ def _skill_zip(name: str, marker: str) -> bytes:
 def _agent_with_deps_zip(name: str, deps: list[dict]) -> bytes:
     return _zip(
         {
-            "agent.json": json.dumps({"name": name, "description": "测试人设"}).encode("utf-8"),
-            "PROMPT.md": f"你是{name}，负责测试。".encode("utf-8"),
-            "dependencies.json": json.dumps(deps, ensure_ascii=False).encode("utf-8"),
+            "plugin.json": json.dumps(
+                {"name": name, "description": "测试人设", "dependencies": deps},
+                ensure_ascii=False,
+            ).encode("utf-8"),
+            f"agents/{name}.md": (
+                f"---\nname: {name}\ndescription: 测试人设\n---\n你是{name}，负责测试。"
+            ).encode("utf-8"),
         }
     )
 

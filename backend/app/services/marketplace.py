@@ -128,12 +128,8 @@ def _read_agent_join_manifest(cap: Capability) -> list[dict[str, Any]]:
             content = get_storage().open(arts[-1].uri).read()
             with zipfile.ZipFile(io.BytesIO(content)) as zf:
                 names = set(zf.namelist())
-                if "dependencies.json" in names:
-                    _extend_dep_manifest(
-                        manifest, json.loads(zf.read("dependencies.json").decode("utf-8"))
-                    )
-                elif "agent.json" in names:
-                    meta = json.loads(zf.read("agent.json").decode("utf-8"))
+                if "plugin.json" in names:
+                    meta = json.loads(zf.read("plugin.json").decode("utf-8-sig"))
                     if isinstance(meta, dict):
                         _extend_dep_manifest(manifest, meta.get("dependencies"))
         except Exception:  # noqa: BLE001
@@ -207,13 +203,15 @@ async def _resolve_runtime(
     try:
         content = get_storage().open(cap.artifacts[-1].uri).read()
         with zipfile.ZipFile(io.BytesIO(content)) as zf:
-            if "dependencies.json" in zf.namelist():
-                manifest = json.loads(zf.read("dependencies.json").decode("utf-8"))
-                return await _resolve_manifest(db, user, manifest)
+            if "plugin.json" in zf.namelist():
+                meta = json.loads(zf.read("plugin.json").decode("utf-8-sig"))
+                manifest = meta.get("dependencies") if isinstance(meta, dict) else None
+                if isinstance(manifest, list):
+                    return await _resolve_manifest(db, user, manifest)
     except Exception:  # noqa: BLE001
         pass
 
-    # 无 dependencies.json：用已固化的市场关联回退
+    # 无 plugin.json：用已固化的市场关联回退
     schema = cap.input_schema or {}
     manifest: list[dict[str, Any]] = []
     for item in schema.get("embedded_skills") or []:
@@ -322,14 +320,14 @@ async def activate_skill(db: AsyncSession, user: User, cap: Capability, context:
 
 
 def read_agent_prompt(cap: Capability, *, max_chars: int = 50000) -> str:
-    """从能力包读取 PROMPT.md（桌面人设 / 模型按需注入，非远程执行）。"""
+    """从能力包读取主提示词 agents/<name>.md（桌面人设 / 模型按需注入，非远程执行）。"""
+    from app.services.agent_package import load_prompt_deps
     from app.services.mcp_gateway import read_package_files
 
-    raw = read_package_files(cap).get("PROMPT.md")
-    if not raw:
+    prompt, _ = load_prompt_deps(read_package_files(cap), cap.name)
+    if not prompt:
         return ""
-    text = raw.decode("utf-8", errors="replace")
-    return text[:max_chars] if max_chars > 0 else text
+    return prompt[:max_chars] if max_chars > 0 else prompt
 
 
 async def _dep_distribution(db: AsyncSession, name: str, dep_type: str) -> str:
@@ -372,9 +370,9 @@ async def fetch_agent_persona(db: AsyncSession, user: User, cap: Capability) -> 
         {"prompt_chars": len(prompt), "deps": len(deps)},
     )
     note = (
-        "请将 PROMPT.md 用作本地人设；依赖 skill/mcp/tool 需另装或走线上网关。"
+        f"请将 agents/{cap.name}.md 用作本地人设；依赖 skill/mcp/tool 需另装或走线上网关。"
         if prompt
-        else "专家包缺少 PROMPT.md，无法提供人设。"
+        else "专家包缺少 agents/*.md，无法提供人设。"
     )
     return {
         "agent": cap.name,

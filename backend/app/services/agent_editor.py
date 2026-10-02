@@ -1,7 +1,6 @@
 """Agent 编辑：提示词 + 绑定能力一体化编辑，保存即生成新版本草稿（提示词与依赖进入能力包）。"""
 
 import io
-import json
 import zipfile
 from typing import Any
 
@@ -12,6 +11,13 @@ from sqlalchemy.orm import selectinload
 
 from app.models import Capability, CapabilityArtifact, User
 from app.schemas import AgentEditSave
+from app.services.agent_package import (
+    agent_md_path,
+    build_agent_md,
+    build_plugin_json,
+    load_prompt_deps,
+    parse_plugin_meta,
+)
 from app.services.capabilities import (
     draft_policy_kwargs,
     merge_edit_package_files,
@@ -19,7 +25,6 @@ from app.services.capabilities import (
     package_base_for_save,
     parse_semver,
     read_capability_files,
-    text_file,
 )
 from app.storage import get_storage
 
@@ -30,12 +35,9 @@ def _read_zip(cap: Capability) -> dict[str, bytes] | None:
 
 
 def _prompt_deps_from_files(files: dict[str, bytes]) -> tuple[str, list[dict[str, str]]]:
-    prompt = text_file(files, "PROMPT.md")
-    try:
-        deps = json.loads(files.get("dependencies.json", b"[]").decode("utf-8"))
-        deps = deps if isinstance(deps, list) else []
-    except (ValueError, UnicodeDecodeError):
-        deps = []
+    meta = parse_plugin_meta(files)
+    name = str(meta.get("name") or "")
+    prompt, deps = load_prompt_deps(files, name)
     return prompt, deps
 
 
@@ -75,32 +77,19 @@ def build_agent_package(
     prompt: str,
     deps: list[dict[str, str]],
 ) -> bytes:
-    """重建 agent 能力包：保留人设附属文件（TEAM/skills/agents…），替换 PROMPT.md 与依赖清单。"""
+    """重建 agent 插件包：保留附属文件（TEAM/skills/mcps…），替换 plugin.json 与 agents/<name>.md。"""
     files: dict[str, bytes] = {}
     if base is not None:
         for fname, content in read_capability_files(base).items():
-            if fname in ("agent.json", "PROMPT.md", "dependencies.json", "tools.json"):
+            if fname in ("plugin.json", "agent.json", "PROMPT.md", "dependencies.json", "tools.json"):
                 continue
+            if fname.startswith("tools/") or fname.startswith("agents/"):
+                continue  # 主提示词文件由下方重建
             files[fname] = content
-    files["PROMPT.md"] = prompt.encode("utf-8")
-    files["dependencies.json"] = json.dumps(deps, ensure_ascii=False, indent=2).encode("utf-8")
-    files["tools.json"] = json.dumps(
-        [{"name": d["name"], "version": d["version"]} for d in deps if d["type"] == "tool"],
-        ensure_ascii=False,
-        indent=2,
-    ).encode("utf-8")
-    files["agent.json"] = json.dumps(
-        {
-            "name": name,
-            "description": description,
-            "version": version,
-            "role": name,
-            "editable": True,
-            "dependencies": deps,
-        },
-        ensure_ascii=False,
-        indent=2,
-    ).encode("utf-8")
+    files["plugin.json"] = build_plugin_json(
+        name=name, description=description, version=version, role=name, editable=True, dependencies=deps
+    )
+    files[agent_md_path(name)] = build_agent_md(name, description, prompt)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for fname, content in files.items():
@@ -128,7 +117,7 @@ async def get_editable(
     if cap is None:
         cap = max(versions, key=lambda c: parse_semver(c.version))
     files = merge_edit_package_files(
-        cap, published, core_text_files=frozenset({"PROMPT.md", "dependencies.json"})
+        cap, published, core_text_files=frozenset({"plugin.json", "agents/*.md"})
     )
     prompt, deps = _prompt_deps_from_files(files)
     base_version = max(published, key=lambda c: parse_semver(c.version)).version if published else ""
@@ -148,7 +137,7 @@ async def save_version(
     inherit_files = merge_edit_package_files(
         draft or base or versions[0],
         published,
-        core_text_files=frozenset({"PROMPT.md", "dependencies.json"}),
+        core_text_files=frozenset({"plugin.json", "agents/*.md"}),
     )
     inherit_prompt, _ = _prompt_deps_from_files(inherit_files)
 

@@ -1,18 +1,21 @@
 """从 Agent 能力包提取内嵌 skills / MCP 元数据（Market Skills & MCP 规范对齐）。
 
 支持来源：
-- Skills A: agent.json 顶层 skills[]
+- Skills A: plugin.json 顶层 skills[]（兼容保留）
 - Skills B: skills/*.yaml（文件名作 name）
 - Skills C: skills/*/skill.json（identity.name）
-- MCP A1: agent.json.mcp_servers[]
-- MCP A2: agent.json.mcp.required_servers[]
-- MCP B: mcp/config.json 或 mcp/servers.json 的 mcpServers
+- Skills D: skills/*/SKILL.md（目录名作 name）
+- MCP A1: plugin.json.mcp_servers[]
+- MCP A2: plugin.json.mcp.required_servers[]
+- MCP B: mcps/<name>/connection.json（每个一个目录）
 """
 
 from __future__ import annotations
 
 import json
 from typing import Any
+
+from app.services.agent_package import parse_plugin_meta
 
 
 def _loads(raw: bytes | None) -> Any:
@@ -74,7 +77,7 @@ def _mcp_entry(
 
 def extract_embedded_skills(files: dict[str, bytes], agent_meta: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """归一化提取 Agent 包内 skills，同名去重（先声明优先）。"""
-    meta = agent_meta if isinstance(agent_meta, dict) else _loads(files.get("agent.json")) or {}
+    meta = agent_meta if isinstance(agent_meta, dict) else parse_plugin_meta(files)
     skills: list[dict[str, Any]] = []
     seen: set[str] = set()
 
@@ -156,7 +159,7 @@ def extract_embedded_skills(files: dict[str, bytes], agent_meta: dict[str, Any] 
 
 def extract_embedded_mcp(files: dict[str, bytes], agent_meta: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """归一化提取 Agent 包内 MCP 依赖，同名去重（先声明优先）。"""
-    meta = agent_meta if isinstance(agent_meta, dict) else _loads(files.get("agent.json")) or {}
+    meta = agent_meta if isinstance(agent_meta, dict) else parse_plugin_meta(files)
     mcp_list: list[dict[str, Any]] = []
     seen: set[str] = set()
 
@@ -199,38 +202,32 @@ def extract_embedded_mcp(files: dict[str, bytes], agent_meta: dict[str, Any] | N
             )
         )
 
-    for cfg_path in ("mcp/config.json", "mcp/servers.json"):
-        loaded = _loads(files.get(cfg_path))
+    for path in sorted(files):
+        if not (path.startswith("mcps/") and path.endswith("/connection.json")):
+            continue
+        name = path[len("mcps/") : -len("/connection.json")]
+        if not name or "/" in name or name in seen:
+            continue
+        loaded = _loads(files.get(path))
         if not isinstance(loaded, dict):
             continue
-        servers = loaded.get("mcpServers")
-        if not isinstance(servers, dict):
-            continue
-        for raw_name, srv_cfg in servers.items():
-            name = str(raw_name).strip()
-            if not name or name in seen:
-                continue
-            if not isinstance(srv_cfg, dict):
-                continue
-            seen.add(name)
-            mcp_list.append(
-                _mcp_entry(
-                    name=name,
-                    description=str(srv_cfg.get("description") or ""),
-                    command=str(srv_cfg.get("command") or ""),
-                    args=srv_cfg.get("args") if isinstance(srv_cfg.get("args"), list) else [],
-                    required_env=_env_keys(srv_cfg.get("env")),
-                )
+        seen.add(name)
+        mcp_list.append(
+            _mcp_entry(
+                name=name,
+                description=str(loaded.get("description") or ""),
+                command=str(loaded.get("command") or ""),
+                args=loaded.get("args") if isinstance(loaded.get("args"), list) else [],
+                required_env=_env_keys(loaded.get("env")),
             )
+        )
 
     return mcp_list
 
 
 def extract_agent_embedded(files: dict[str, bytes]) -> dict[str, Any]:
     """返回写入 Capability.input_schema 的 embedded_skills / embedded_mcp。"""
-    meta = _loads(files.get("agent.json"))
-    if not isinstance(meta, dict):
-        meta = {}
+    meta = parse_plugin_meta(files)
     return {
         "embedded_skills": extract_embedded_skills(files, meta),
         "embedded_mcp": extract_embedded_mcp(files, meta),

@@ -86,7 +86,7 @@ def test_dashboard_projection_tool_and_skill_online_fields():
     agent = dashboard_projection(AgentCap())
     assert agent["mode"] == "persona"
     assert agent["online"] == "/api/runtime/agents/ops-bot/persona"
-    assert "PROMPT.md" in agent.get("note", "")
+    assert "agents/" in agent.get("note", "")
     assert "勿用" in agent.get("note", "")
 
     class McpCap:

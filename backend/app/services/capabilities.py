@@ -153,6 +153,8 @@ def _is_blank_core(path: str, content: bytes, core_text_files: frozenset[str]) -
     matched = path in core_text_files
     if not matched and "implementation/*.py" in core_text_files:
         matched = path.startswith("implementation/") and path.endswith(".py")
+    if not matched and "agents/*.md" in core_text_files:
+        matched = path.startswith("agents/") and path.endswith(".md")
     if not matched:
         return False
     try:

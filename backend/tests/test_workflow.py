@@ -39,10 +39,13 @@ def _tool_zip(name: str) -> bytes:
 def _agent_zip(name: str) -> bytes:
     return _zip(
         {
-            "agent.json": json.dumps(
-                {"name": name, "description": "测试人设", "version": "1.0.0"}
+            "plugin.json": json.dumps(
+                {"name": name, "description": "测试人设", "version": "1.0.0", "dependencies": []},
+                ensure_ascii=False,
             ).encode("utf-8"),
-            "PROMPT.md": f"你是{name}，负责测试。".encode("utf-8"),
+            f"agents/{name}.md": (
+                f"---\nname: {name}\ndescription: 测试人设\n---\n你是{name}，负责测试。"
+            ).encode("utf-8"),
         }
     )
 
@@ -289,7 +292,8 @@ async def test_assemble_agent_package(client, publisher_headers, admin_headers):
     assert r.status_code == 200, r.text
     with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
         names = set(zf.namelist())
-        assert {"agent.json", "PROMPT.md", "dependencies.json", "tools.json"} <= names
-        assert f"tools/{dep_tool}/tool.py" in names
-        manifest = json.loads(zf.read("dependencies.json"))
-    assert manifest == [{"name": dep_tool, "type": "tool", "version": "1.0.0"}]
+        assert {"plugin.json", "agents/assemble-demo.md"} <= names
+        meta = json.loads(zf.read("plugin.json"))
+        prompt = zf.read("agents/assemble-demo.md").decode("utf-8")
+    assert meta["dependencies"] == [{"name": dep_tool, "type": "tool", "version": "1.0.0"}]
+    assert "你是assemble-persona，负责测试。" in prompt

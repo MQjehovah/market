@@ -215,8 +215,8 @@ def dashboard_projection(cap) -> dict[str, Any]:
             "path": f"localagent/agents/{name}/",
             "online": f"/api/runtime/agents/{quote(name, safe='')}/persona",
             "note": (
-                "员工装机可走 path 或 online 拉 PROMPT.md（勿用 /api/agents/.../edit）；"
-                "依赖 skill/mcp 需另装或走能力包/线上网关。"
+                "员工装机可走 path 或 online 拉 agents/<name>.md（勿用 /api/agents/.../edit）；"
+                "自带 skill/mcp 随插件目录，依赖技能/MCP 需另装或走线上网关。"
             ),
         }
 

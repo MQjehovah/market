@@ -134,14 +134,18 @@ async def test_new_version_draft_inherits_prompt_for_edit(
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr(
-            "agent.json",
-            json.dumps({"name": persona, "description": "测试人设", "version": "1.0.0"}),
+            "plugin.json",
+            json.dumps(
+                {
+                    "name": persona,
+                    "description": "测试人设",
+                    "version": "1.0.0",
+                    "dependencies": [{"name": dep_tool, "type": "tool", "version": ""}],
+                },
+                ensure_ascii=False,
+            ),
         )
-        zf.writestr("PROMPT.md", "你是继承测试人设，负责回归。")
-        zf.writestr(
-            "dependencies.json",
-            json.dumps([{"name": dep_tool, "type": "tool", "version": ""}], ensure_ascii=False),
-        )
+        zf.writestr(f"agents/{persona}.md", "你是继承测试人设，负责回归。")
     cap_id = await _publish_capability(
         client, publisher_headers, admin_headers, persona, "agent", buf.getvalue()
     )
@@ -166,11 +170,18 @@ async def test_new_version_draft_inherits_prompt_for_edit(
     # 草稿若误存了空 PROMPT.md（且未带 dependencies），编辑态仍回落到已发布内容
     empty = io.BytesIO()
     with zipfile.ZipFile(empty, "w") as zf:
-        zf.writestr("PROMPT.md", "")
         zf.writestr(
-            "agent.json",
-            json.dumps({"name": persona, "version": "1.0.1"}),
+            "plugin.json",
+            json.dumps(
+                {
+                    "name": persona,
+                    "version": "1.0.1",
+                    "dependencies": [{"name": dep_tool, "type": "tool", "version": ""}],
+                },
+                ensure_ascii=False,
+            ),
         )
+        zf.writestr(f"agents/{persona}.md", "")
     draft_id = body["capability"]["id"]
     r = await client.post(
         f"/api/publish/capabilities/{draft_id}/artifact",

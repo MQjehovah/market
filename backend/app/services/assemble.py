@@ -1,13 +1,11 @@
 """Agent 组装：人设（agent 能力）+ 工具/技能/MCP 依赖 → 生成可发布的 agent 包。
 
-产物 zip 结构：
-    agent.json          组装元信息（base persona + dependencies 清单）
-    PROMPT.md           人设提示词（原样保留）
-    dependencies.json   完整依赖清单 [{name, type, version}]
-    tools.json          工具清单 [{name, version, schema}]
-    tools/<name>/tool.py       工具源码快照（供本地安装）
+产物 zip 结构（插件格式）：
+    plugin.json         根描述（name/description/version/role/dependencies）
+    agents/<name>.md    主提示词（frontmatter name/description + 正文）
     skills/<name>/SKILL.md     技能快照（含 references/scripts/assets）
-    mcp/<name>/connection.json MCP 连接配置快照
+    mcps/<name>/connection.json  MCP 依赖连接配置
+    TEAM.md             团队（人设自带时）
 """
 
 import io
@@ -18,7 +16,6 @@ from typing import Any
 from fastapi import HTTPException, status
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import joinedload, selectinload
 
 from app.models import Capability, CapabilityArtifact, User
 from app.schemas import AssembleDependency, AssembleRequest
@@ -26,7 +23,13 @@ from app.services.capabilities import (
     ensure_name_ownership,
     normalize_cap_name,
     parse_semver,
-    to_capability_out,
+)
+from app.services.agent_package import (
+    agent_md_path,
+    build_agent_md,
+    build_plugin_json,
+    connection_to_mcpserver,
+    load_prompt_deps,
 )
 from app.storage import get_storage
 
@@ -85,29 +88,25 @@ def build_assembled_package(
     deps: list[tuple[Capability, AssembleDependency]],
     data: AssembleRequest,
 ) -> bytes:
-    """组装 agent 包字节（纯函数，便于测试与播种）。"""
+    """组装 agent 插件包字节（纯函数，便于测试与播种）。"""
     persona_files = _unzip(_artifact_bytes(persona))
-    if "PROMPT.md" not in persona_files:
+    prompt, _ = load_prompt_deps(persona_files, persona.name)
+    if not prompt:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, f"人设 {persona.name} 缺少 PROMPT.md"
+            status.HTTP_422_UNPROCESSABLE_ENTITY, f"人设 {persona.name} 缺少提示词(agents/*.md)"
         )
 
     manifest: list[dict[str, str]] = []
-    tools: list[dict[str, Any]] = []
-    skills: list[dict[str, str]] = []
-    mcps: list[dict[str, str]] = []
+    mcp_entries: dict[str, dict[str, Any]] = {}
     files: dict[str, bytes] = {}
 
     for cap, dep in deps:
         manifest.append({"name": cap.name, "type": dep.type, "version": cap.version})
         dep_files = _unzip(_artifact_bytes(cap))
         if dep.type == "tool":
-            tools.append({"name": cap.name, "version": cap.version, "schema": cap.input_schema or {}})
-            impl = dep_files.get("implementation/tool.py")
-            if impl is not None:
-                files[f"tools/{cap.name}/tool.py"] = impl
-        elif dep.type == "skill":
-            skills.append({"name": cap.name, "version": cap.version})
+            # 工具统一走 MCP；能力包内 tools/ 不再随包（仅登记依赖）
+            continue
+        if dep.type == "skill":
             skill_md = dep_files.get("SKILL.md")
             if skill_md is not None:
                 files[f"skills/{cap.name}/SKILL.md"] = skill_md
@@ -118,34 +117,32 @@ def build_assembled_package(
                 for name, content in _collect_package_dir(dep_files, "assets/").items():
                     files[f"skills/{cap.name}/{name}"] = content
         elif dep.type == "mcp":
-            mcps.append({"name": cap.name, "version": cap.version})
             conn = dep_files.get("connection.json")
+            server = None
             if conn is not None:
-                files[f"mcp/{cap.name}/connection.json"] = conn
-            meta = dep_files.get("mcp.json")
-            if meta is not None:
-                files[f"mcp/{cap.name}/mcp.json"] = meta
+                try:
+                    server = connection_to_mcpserver(json.loads(conn.decode("utf-8-sig")))
+                except ValueError:
+                    server = None
+            if server is not None:
+                mcp_entries[cap.name] = server
 
-    out = {
-        "agent.json": json.dumps(
-            {
-                "name": data.name,
-                "description": data.description,
-                "version": data.version,
-                "role": data.name,
-                "assembled": True,
-                "base_persona": {"name": persona.name, "version": persona.version},
-                "dependencies": manifest,
-            },
-            ensure_ascii=False,
-            indent=2,
-        ).encode("utf-8"),
-        "PROMPT.md": persona_files["PROMPT.md"],
-        "dependencies.json": json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
-        "tools.json": json.dumps(tools, ensure_ascii=False, indent=2).encode("utf-8"),
+    out: dict[str, bytes] = {
+        "plugin.json": build_plugin_json(
+            name=data.name,
+            description=data.description,
+            version=data.version,
+            role=data.name,
+            assembled=True,
+            base_persona={"name": persona.name, "version": persona.version},
+            dependencies=manifest,
+        ),
+        agent_md_path(data.name): build_agent_md(data.name, data.description, prompt),
     }
     if "TEAM.md" in persona_files:
         out["TEAM.md"] = persona_files["TEAM.md"]
+    for srv_name, entry in mcp_entries.items():
+        out[f"mcps/{srv_name}/connection.json"] = json.dumps(entry, ensure_ascii=False, indent=2).encode("utf-8")
     out.update(files)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:

@@ -9,31 +9,14 @@ import pytest
 
 def _agent_zip_with_embedded(*, name: str = "demo-agent") -> bytes:
     files = {
-        "agent.json": json.dumps(
-            {
-                "name": name,
-                "description": "demo",
-                "version": "1.0.0",
-                "skills": [
-                    {
-                        "name": "wecom-message",
-                        "display_name": "WeCom",
-                        "description": "msg",
-                        "version": "1.0.0",
-                    }
-                ],
-                "mcp_servers": [
-                    {
-                        "name": "wecom-api",
-                        "command": "npx",
-                        "args": ["-y", "@demo/wecom"],
-                        "env": {"WECOM_CORPID": "${CORPID}"},
-                    }
-                ],
-            },
+        "plugin.json": json.dumps(
+            {"name": name, "description": "demo", "version": "1.0.0", "dependencies": []},
             ensure_ascii=False,
         ).encode("utf-8"),
-        "PROMPT.md": b"# demo\n",
+        f"agents/{name}.md": (
+            f"---\nname: {name}\ndescription: demo\n---\n# demo\n"
+        ).encode("utf-8"),
+        "skills/wecom-message/SKILL.md": b"# wecom\n",
         "skills/text-summarizer/SKILL.md": b"# summarize\n",
         "skills/text-summarizer/skill.json": json.dumps(
             {
@@ -47,17 +30,13 @@ def _agent_zip_with_embedded(*, name: str = "demo-agent") -> bytes:
             ensure_ascii=False,
         ).encode("utf-8"),
         "skills/legacy.yaml": b"pipeline: []\n",
-        "mcp/config.json": json.dumps(
-            {
-                "mcpServers": {
-                    "aliyun-log": {
-                        "type": "stdio",
-                        "command": "npx",
-                        "args": ["-y", "@demo/log"],
-                        "env": {"CRED": "${CRED}"},
-                    }
-                }
-            }
+        "mcps/wecom-api/connection.json": json.dumps(
+            {"command": "npx", "args": ["-y", "@demo/wecom"], "env": {"WECOM_CORPID": "${CORPID}"}},
+            ensure_ascii=False,
+        ).encode("utf-8"),
+        "mcps/aliyun-log/connection.json": json.dumps(
+            {"command": "npx", "args": ["-y", "@demo/log"], "env": {"CRED": "${CRED}"}},
+            ensure_ascii=False,
         ).encode("utf-8"),
     }
     buf = io.BytesIO()

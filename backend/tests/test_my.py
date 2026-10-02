@@ -217,23 +217,21 @@ async def test_join_agent_also_joins_dependencies(
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr(
-            "agent.json",
+            "plugin.json",
             json.dumps(
-                {"name": agent_name, "description": "join deps", "version": "1.0.0"},
+                {
+                    "name": agent_name,
+                    "description": "join deps",
+                    "version": "1.0.0",
+                    "dependencies": [
+                        {"name": skill_name, "type": "skill", "version": "1.0.0"},
+                        {"name": tool_name, "type": "tool", "version": ""},
+                    ],
+                },
                 ensure_ascii=False,
             ),
         )
-        zf.writestr("PROMPT.md", f"你是{agent_name}。")
-        zf.writestr(
-            "dependencies.json",
-            json.dumps(
-                [
-                    {"name": skill_name, "type": "skill", "version": "1.0.0"},
-                    {"name": tool_name, "type": "tool", "version": ""},
-                ],
-                ensure_ascii=False,
-            ),
-        )
+        zf.writestr(f"agents/{agent_name}.md", f"你是{agent_name}。")
     await _publish_capability(
         client, publisher_headers, admin_headers, agent_name, "agent", buf.getvalue()
     )
@@ -298,23 +296,21 @@ async def test_join_agent_skips_denied_dependency(
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr(
-            "agent.json",
+            "plugin.json",
             json.dumps(
-                {"name": agent_name, "description": "join skip", "version": "1.0.0"},
+                {
+                    "name": agent_name,
+                    "description": "join skip",
+                    "version": "1.0.0",
+                    "dependencies": [
+                        {"name": skill_name, "type": "skill", "version": "1.0.0"},
+                        {"name": tool_name, "type": "tool", "version": ""},
+                    ],
+                },
                 ensure_ascii=False,
             ),
         )
-        zf.writestr("PROMPT.md", f"你是{agent_name}。")
-        zf.writestr(
-            "dependencies.json",
-            json.dumps(
-                [
-                    {"name": skill_name, "type": "skill", "version": "1.0.0"},
-                    {"name": tool_name, "type": "tool", "version": ""},
-                ],
-                ensure_ascii=False,
-            ),
-        )
+        zf.writestr(f"agents/{agent_name}.md", f"你是{agent_name}。")
     await _publish_capability(
         client, publisher_headers, admin_headers, agent_name, "agent", buf.getvalue()
     )

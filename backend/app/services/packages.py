@@ -13,7 +13,7 @@ from fastapi import HTTPException, status
 from app.schemas import _normalize_requires
 
 REQUIRED_FILES: dict[str, list[str]] = {
-    "agent": ["agent.json", "PROMPT.md"],
+    "agent": ["plugin.json"],
     "tool": ["tool.json", "schema.json", "implementation/tool.py"],
     # 标准优先: skill 以 SKILL.md 为准(skill.json 可选); mcp 以 server.json 为准(旧 4 文件兼容)
     "skill": ["SKILL.md"],
@@ -29,7 +29,7 @@ REQUIRED_FILES: dict[str, list[str]] = {
 _MCP_LEGACY_FILES = {"mcp.json", "connection.json", "tools.json", "security.json"}
 
 OPTIONAL_FILES: dict[str, list[str]] = {
-    "agent": ["TEAM.md", "tools.json", "knowledge/", "skills/", "examples/", "agents/", "dependencies.json"],
+    "agent": ["TEAM.md", "mcps/", "knowledge/", "skills/", "examples/", "agents/"],
     "tool": ["security.json", "tests/", "examples/", "docs/", "implementation/__init__.py"],
     "skill": ["templates/", "assets/", "dependencies.json", "examples/", "scripts/", "references/"],
     "mcp": ["docker-compose.yml", "docs/", "implementation/"],
@@ -515,7 +515,7 @@ def validate_package(capability_type: str, content: bytes) -> dict[str, Any]:
             _check_name(str(meta["name"]), meta_file)
     else:
         meta_file = {
-            "agent": "agent.json",
+            "agent": "plugin.json",
             "tool": "tool.json",
             "workflow": "workflow.json",
             "rule": "rule.json",
@@ -781,13 +781,12 @@ def build_package_template(kind: str, *, name: str = "example") -> bytes:
             '    return {"ok": True, "echo": params.get("text")}\n'
         )
     elif kind == "agent":
-        files["agent.json"] = json.dumps(
-            {"name": safe, "description": "示例 Agent", "version": "0.1.0"},
+        files["plugin.json"] = json.dumps(
+            {"name": safe, "description": "示例 Agent", "version": "0.1.0", "dependencies": []},
             ensure_ascii=False,
             indent=2,
         )
-        files["PROMPT.md"] = f"# {safe}\n\n你是一个示例专家。\n"
-        files["dependencies.json"] = "[]\n"
+        files[f"agents/{safe}.md"] = f"---\nname: {safe}\ndescription: 示例专家\n---\n你是一个示例专家。\n"
     elif kind == "plugin":
         files["plugin.json"] = json.dumps(
             {
