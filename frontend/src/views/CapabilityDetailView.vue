@@ -199,7 +199,10 @@ const preferOnlineEdit = computed(
 )
 /** 已发布/已下架：属主或管理员可一键开新版（继承能力包）后在线编辑 */
 const canRevise = computed(
-  () => (isOwner.value || isAdmin.value) && ['published', 'deprecated'].includes(cap.value?.status)
+  () =>
+    (isOwner.value || isAdmin.value) &&
+    ['published', 'deprecated'].includes(cap.value?.status) &&
+    cap.value?.type !== 'workflow'
 )
 const pluginComponents = computed(() => {
   const schema = cap.value?.input_schema || {}
@@ -1077,7 +1080,7 @@ async function openEditDraft() {
     if (!draft?.id) throw new Error('已创建版本但未返回草稿 id')
     await router.push({
       path: `/capabilities/${draft.id}`,
-      query: { focus: 'package', created: draft.version }
+      query: { focus: 'files', created: draft.version }
     })
   } catch (e) {
     if (e && (e.name === 'NavigationDuplicated' || String(e.message || '').includes('Avoided redundant'))) {
@@ -1142,7 +1145,7 @@ async function createVersion() {
     // router-view 按 path 重建后，用 query 保留成功提示
     await router.push({
       path: `/capabilities/${v.id}`,
-      query: { focus: 'package', created: v.version }
+      query: { focus: 'files', created: v.version }
     })
   } catch (e) {
     if (e && (e.name === 'NavigationDuplicated' || String(e.message || '').includes('Avoided redundant'))) {
@@ -1336,6 +1339,19 @@ function focusPackagePanel() {
   contentTab.value = 'files'
 }
 
+/** 统一在线编辑入口：workflow 走可视化编排器；已发布→开新版；草稿→打开文件编辑器 */
+function goEdit() {
+  if (cap.value?.type === 'workflow' && onlineEditPath.value) {
+    router.push(onlineEditPath.value)
+    return
+  }
+  if (canRevise.value) {
+    openEditDraft()
+    return
+  }
+  focusPackagePanel()
+}
+
 async function bootstrapDetail({ keepNotice = false } = {}) {
   if (!keepNotice) notice.value = ''
   error.value = ''
@@ -1346,8 +1362,12 @@ async function bootstrapDetail({ keepNotice = false } = {}) {
   if (route.query.created) {
     notice.value = `新版本 v${route.query.created} 草稿已创建`
   }
-  if (route.query.focus === 'package') {
+  if (route.query.focus === 'files' || route.query.focus === 'package') {
     focusPackagePanel()
+  }
+  // 「在线编辑」入口带 edit=1：已发布能力自动开新版草稿后进入同一文件编辑器
+  if (route.query.edit === '1' && !route.query.created && canRevise.value && !revising.value) {
+    await openEditDraft()
   }
 }
 
@@ -2094,12 +2114,14 @@ onMounted(() => {
             <div v-if="canSubmit || canWithdraw || canDelete || preferOnlineEdit || isAdmin" class="panel">
             <h3>操作</h3>
             <div class="flex flex-wrap" style="gap: 8px">
-              <router-link
-                v-if="preferOnlineEdit"
-                :to="onlineEditPath"
+              <button
+                v-if="preferOnlineEdit && !canRevise"
                 class="btn"
                 :class="canEdit ? 'btn-primary' : ''"
-              >{{ canEdit ? '在线编辑' : (cap.type === 'workflow' ? '查看编排' : '在线编辑') }}</router-link>
+                type="button"
+                :disabled="revising"
+                @click="goEdit"
+              >{{ cap.type === 'workflow' ? '查看编排' : '在线编辑' }}</button>
               <button
                 v-if="canSubmit"
                 class="btn btn-success"
@@ -2122,12 +2144,6 @@ onMounted(() => {
               <button class="btn btn-primary" type="button" :disabled="revising" @click="openEditDraft">
                 {{ revising ? '正在开新版…' : '在线编辑（开新版）' }}
               </button>
-              <router-link
-                v-if="preferOnlineEdit"
-                :to="onlineEditPath"
-                class="btn"
-                :disabled="revising"
-              >按类型在线编辑</router-link>
             </div>
             <div v-if="reviseError" class="error mt-12">{{ reviseError }}</div>
           </div>
@@ -2272,11 +2288,12 @@ onMounted(() => {
               <template v-else>完善内容后提交审核；上架后才能加入与本地安装。</template>
             </p>
             <div class="aside-cta mt-16">
-              <router-link
+              <button
                 v-if="preferOnlineEdit && canEdit"
-                :to="onlineEditPath"
                 class="btn btn-block btn-primary btn-lg"
-              >在线编辑</router-link>
+                type="button"
+                @click="goEdit"
+              >在线编辑</button>
               <button
                 v-else-if="canSubmit"
                 class="btn btn-block btn-success btn-lg"

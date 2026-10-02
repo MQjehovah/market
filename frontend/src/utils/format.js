@@ -473,7 +473,7 @@ export function ownerProgressIndex(cap, { joined = false } = {}) {
 }
 
 /** 支持网页在线编辑的类型（保存可生成/更新能力包） */
-export const ONLINE_EDITABLE_KINDS = ['skill', 'mcp', 'tool', 'agent', 'workflow', 'rule', 'command', 'hook']
+export const ONLINE_EDITABLE_KINDS = ['skill', 'mcp', 'tool', 'agent', 'workflow', 'rule', 'command', 'hook', 'plugin']
 
 /** 非 zip 主路径的 kind（内容在编辑器/定义里） */
 export const ZIP_OPTIONAL_KINDS = ['workflow']
@@ -486,30 +486,19 @@ export function canOnlineEdit(kind) {
   return ONLINE_EDITABLE_KINDS.includes(kind)
 }
 
-/** 在线编辑路由；plugin 无编辑页返回 null */
+/**
+ * 在线编辑路由：统一到「能力详情 · 文件」这一个文件树编辑器（PackageEditor）。
+ * - workflow 仍走可视化编排器；
+ * - 其余类型（含 plugin）→ 详情页 focus=files；已发布/已下架附带 edit=1，
+ *   由详情页自动开新版草稿后进入同一个编辑器。
+ */
 export function editRouteFor(cap) {
-  if (!cap?.name && !cap?.id) return null
-  const name = encodeURIComponent(cap.name || '')
-  switch (cap.type) {
-    case 'workflow':
-      return `/workflows/${cap.has_draft && cap.draft_id ? cap.draft_id : cap.id}/edit`
-    case 'skill':
-      return `/skills/${name}/edit`
-    case 'mcp':
-      return `/mcp/${name}/edit`
-    case 'tool':
-      return `/tools/${name}/edit`
-    case 'agent':
-      return `/agents/${name}/edit`
-    case 'rule':
-      return `/rules/${name}/edit`
-    case 'command':
-      return `/commands/${name}/edit`
-    case 'hook':
-      return `/hooks/${name}/edit`
-    default:
-      return null
+  if (!cap?.id) return null
+  if (cap.type === 'workflow') {
+    return `/workflows/${cap.has_draft && cap.draft_id ? cap.draft_id : cap.id}/edit`
   }
+  const edit = ['published', 'deprecated'].includes(cap.status) ? '&edit=1' : ''
+  return `/capabilities/${cap.id}?focus=files${edit}`
 }
 
 /** 创建草稿后的最佳下一步：有在线编辑则进编辑页，否则进详情页 */

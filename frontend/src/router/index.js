@@ -3,12 +3,6 @@ import { createRouter, createWebHistory } from 'vue-router'
 import LoginView from '../views/LoginView.vue'
 import BrowseView from '../views/BrowseView.vue'
 import CapabilityDetailView from '../views/CapabilityDetailView.vue'
-import AgentEditView from '../views/AgentEditView.vue'
-import SkillEditView from '../views/SkillEditView.vue'
-import MarkdownKindEditView from '../views/MarkdownKindEditView.vue'
-import HookEditView from '../views/HookEditView.vue'
-import ToolEditView from '../views/ToolEditView.vue'
-import McpEditView from '../views/McpEditView.vue'
 import WorkflowEditorView from '../views/WorkflowEditorView.vue'
 import MyCapabilitiesView from '../views/MyCapabilitiesView.vue'
 import MySecretsView from '../views/MySecretsView.vue'
@@ -38,13 +32,6 @@ const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     { path: '/', component: BrowseView, meta: { title: '能力平台' } },
-    { path: '/agents/:name/edit', component: AgentEditView, meta: { title: '编辑专家', auth: true } },
-    { path: '/skills/:name/edit', component: SkillEditView, meta: { title: '编辑技能', auth: true } },
-    { path: '/rules/:name/edit', component: MarkdownKindEditView, meta: { title: '编辑规则', auth: true, kind: 'rule' } },
-    { path: '/commands/:name/edit', component: MarkdownKindEditView, meta: { title: '编辑命令', auth: true, kind: 'command' } },
-    { path: '/hooks/:name/edit', component: HookEditView, meta: { title: '编辑 Hooks', auth: true } },
-    { path: '/tools/:name/edit', component: ToolEditView, meta: { title: '编辑编排函数', auth: true } },
-    { path: '/mcp/:name/edit', component: McpEditView, meta: { title: '编辑连接器', auth: true } },
     { path: '/workflows/new', component: WorkflowEditorView, meta: { title: '新建能力编排', auth: true, full: true } },
     { path: '/workflows/:id/edit', component: WorkflowEditorView, props: true, meta: { title: '能力编排', auth: true, full: true } },
     { path: '/login', component: LoginView, meta: { title: '登录', blank: true } },
