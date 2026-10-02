@@ -201,8 +201,7 @@ const preferOnlineEdit = computed(
 const canRevise = computed(
   () =>
     (isOwner.value || isAdmin.value) &&
-    ['published', 'deprecated'].includes(cap.value?.status) &&
-    cap.value?.type !== 'workflow'
+    ['published', 'deprecated'].includes(cap.value?.status)
 )
 const pluginComponents = computed(() => {
   const schema = cap.value?.input_schema || {}
@@ -1078,10 +1077,15 @@ async function openEditDraft() {
   try {
     const draft = await api.post(`/publish/capabilities/${props.id}/edit-draft`, {})
     if (!draft?.id) throw new Error('已创建版本但未返回草稿 id')
-    await router.push({
-      path: `/capabilities/${draft.id}`,
-      query: { focus: 'files', created: draft.version }
-    })
+    if (cap.value?.type === 'workflow') {
+      // 工作流走专用编排器编辑
+      await router.push(`/workflows/${draft.id}/edit`)
+    } else {
+      await router.push({
+        path: `/capabilities/${draft.id}`,
+        query: { focus: 'files', created: draft.version }
+      })
+    }
   } catch (e) {
     if (e && (e.name === 'NavigationDuplicated' || String(e.message || '').includes('Avoided redundant'))) {
       return
@@ -1341,12 +1345,13 @@ function focusPackagePanel() {
 
 /** 统一在线编辑入口：workflow 走可视化编排器；已发布→开新版；草稿→打开文件编辑器 */
 function goEdit() {
-  if (cap.value?.type === 'workflow' && onlineEditPath.value) {
-    router.push(onlineEditPath.value)
-    return
-  }
+  // 已发布（含工作流）→ 开新版草稿再编辑
   if (canRevise.value) {
     openEditDraft()
+    return
+  }
+  if (cap.value?.type === 'workflow' && onlineEditPath.value) {
+    router.push(onlineEditPath.value)
     return
   }
   focusPackagePanel()
