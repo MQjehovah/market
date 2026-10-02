@@ -1816,7 +1816,7 @@ onMounted(() => {
             <h2 class="detail-section-title">文件</h2>
             <p class="muted" style="font-size: 13px; margin: 0 0 12px">
               <template v-if="canEditPackage">
-                浏览能力包内文件，可直接在线编辑文本、上传/替换文件、新增或删除文件；保存后写入能力包。
+                多文件/文件夹在线编辑：新增文件与文件夹、上传多个文件或整个文件夹、重命名/删除；技能可用「技能模板」一键生成 SKILL.md 与 references/、scripts/、assets/。保存后写入能力包。
               </template>
               <template v-else>浏览能力包内文件；Markdown 渲染预览，其它文本以源码显示。</template>
             </p>
@@ -1824,6 +1824,8 @@ onMounted(() => {
               v-if="canEditPackage"
               :capability-id="cap.id"
               :can-edit="true"
+              :type="cap.type"
+              :name="cap.name"
               @saved="load"
             />
             <PackagePreview v-else-if="(cap.artifacts || []).length" :capability-id="cap.id" />
