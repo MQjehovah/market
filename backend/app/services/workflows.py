@@ -48,7 +48,7 @@ _MARKET_TYPES = {"tool", "agent", "skill", "mcp"}
 _NODE_TYPES = _MARKET_TYPES | {
     "start", "end", "llm", "http", "if_else", "iteration", "template",
     "question_classifier", "parameter_extractor", "list_operator", "doc_extractor",
-    "variable_aggregator", "variable_assigner", "loop", "answer", "knowledge_retrieval",
+    "variable_aggregator", "variable_assigner", "loop", "answer", "knowledge_retrieval", "code",
 }
 # Dify 节点名(连字符) → 内部名(下划线)；对齐 Dify 同时不改内部实现
 _TYPE_ALIASES = {
@@ -562,6 +562,11 @@ async def _execute_node(
         return {"output": {"answer": val}}
     if ntype == "knowledge_retrieval":
         return {"output": await _knowledge_retrieval(node.get("params") or {}, ctx)}
+    if ntype == "code":
+        # 占位：沙箱执行(Python/Node)在 P3 接入；未启用时给出清晰错误
+        raise HTTPException(
+            status.HTTP_501_NOT_IMPLEMENTED, "code 节点沙箱尚未启用（P3 接入）。可先用 http / template / llm 节点替代。"
+        )
 
     raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"未知节点类型 {ntype}")
 

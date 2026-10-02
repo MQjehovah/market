@@ -21,11 +21,12 @@ def test_validate_accepts_new_types_and_dify_aliases():
             {"id": "c", "type": "question-classifier"},
             {"id": "k", "type": "knowledge-retrieval"},
             {"id": "e", "type": "end"},
+            {"id": "x", "type": "code"},
         ],
         "edges": [{"from": "s", "to": "c"}, {"from": "c", "to": "k"}, {"from": "k", "to": "e"}],
     }
     order = validate_definition(wf)
-    assert set(order) == {"s", "c", "k", "e"}
+    assert set(order) == {"s", "c", "k", "e", "x"}
     assert _canon_type("question-classifier") == "question_classifier"
     assert _canon_type("if-else") == "if_else"
 
