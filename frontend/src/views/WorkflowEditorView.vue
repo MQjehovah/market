@@ -17,14 +17,38 @@ const route = useRoute()
 const router = useRouter()
 const { screenToFlowCoordinate } = useVueFlow()
 
-const nodeTypes = { tool: WorkflowNode, agent: WorkflowNode, skill: WorkflowNode, mcp: WorkflowNode }
+const ALL_TYPES = [
+  'start', 'end', 'answer', 'llm', 'agent', 'parameter-extractor', 'knowledge-retrieval',
+  'if-else', 'question-classifier', 'iteration', 'loop', 'variable-aggregator', 'variable-assigner',
+  'code', 'http-request', 'template-transform', 'doc-extractor', 'list-operator',
+  'tool', 'skill', 'mcp'
+]
+const nodeTypes = Object.fromEntries(ALL_TYPES.map((t) => [t, WorkflowNode]))
 
 const PALETTE = [
-  { type: 'tool', label: '工具', desc: '调用市场工具', color: '#4f8cff', icon: '🔧' },
-  { type: 'agent', label: 'Agent', desc: '委派 A2A Agent', color: '#9d6bff', icon: '🤖' },
-  { type: 'skill', label: '技能', desc: '激活执行技能', color: '#2fbf71', icon: '📘' },
-  { type: 'mcp', label: '连接器', desc: '接入连接器', color: '#e2a93b', icon: '🔌' }
+  { group: '基础', type: 'start', label: '开始', desc: '工作流入口', color: '#2fbf71', icon: 'IN' },
+  { group: '基础', type: 'end', label: '结束', desc: '汇总输出', color: '#e5534b', icon: 'OUT' },
+  { group: '基础', type: 'answer', label: '回复', desc: '直接回复(chatflow)', color: '#2fbf71', icon: 'ANS' },
+  { group: 'LLM', type: 'llm', label: 'LLM', desc: '调用大模型', color: '#4f8cff', icon: 'LLM' },
+  { group: 'LLM', type: 'agent', label: 'Agent', desc: '委派 A2A 专家', color: '#9d6bff', icon: 'AGT' },
+  { group: 'LLM', type: 'parameter-extractor', label: '参数提取', desc: '结构化抽取', color: '#9d6bff', icon: 'PAR' },
+  { group: 'LLM', type: 'knowledge-retrieval', label: '知识检索', desc: '检索知识库', color: '#2fbf71', icon: 'KB' },
+  { group: '逻辑', type: 'if-else', label: '条件分支', desc: 'true/false 分流', color: '#e2a93b', icon: 'IF' },
+  { group: '逻辑', type: 'question-classifier', label: '问题分类', desc: 'LLM 分类分流', color: '#e2a93b', icon: 'CLS' },
+  { group: '逻辑', type: 'iteration', label: '迭代', desc: '对数组逐项执行', color: '#e2a93b', icon: 'IT' },
+  { group: '逻辑', type: 'loop', label: '循环', desc: '条件循环', color: '#e2a93b', icon: 'LP' },
+  { group: '逻辑', type: 'variable-aggregator', label: '变量聚合', desc: '多路汇聚', color: '#e2a93b', icon: 'AGG' },
+  { group: '逻辑', type: 'variable-assigner', label: '变量赋值', desc: '写会话变量', color: '#e2a93b', icon: 'ASN' },
+  { group: '数据', type: 'code', label: '代码', desc: '沙箱执行', color: '#4f8cff', icon: '</>' },
+  { group: '数据', type: 'http-request', label: 'HTTP', desc: 'HTTP 请求', color: '#4f8cff', icon: 'HTTP' },
+  { group: '数据', type: 'template-transform', label: '模板', desc: '文本/JSON 变换', color: '#4f8cff', icon: 'TPL' },
+  { group: '数据', type: 'doc-extractor', label: '文档抽取', desc: '提取文本/JSON', color: '#4f8cff', icon: 'DOC' },
+  { group: '数据', type: 'list-operator', label: '列表操作', desc: '过滤/排序/取首', color: '#4f8cff', icon: 'LST' },
+  { group: '市场能力', type: 'tool', label: '工具', desc: '调用市场工具', color: '#4f8cff', icon: 'TL' },
+  { group: '市场能力', type: 'skill', label: '技能', desc: '激活执行技能', color: '#2fbf71', icon: 'SK' },
+  { group: '市场能力', type: 'mcp', label: '连接器', desc: '调用/安装 MCP', color: '#e2a93b', icon: 'MCP' }
 ]
+const PALETTE_GROUPS = ['基础', 'LLM', '逻辑', '数据', '市场能力']
 
 const meta = reactive({
   id: '',
@@ -54,6 +78,7 @@ const jsonOpen = ref(false)
 const jsonText = ref('')
 const testInput = ref('{\n  "query": ""\n}')
 const execution = ref(null)
+const templates = ref([])
 
 const error = ref('')
 const notice = ref('')
@@ -82,6 +107,15 @@ const filteredCaps = computed(() => {
   if (!q) return list
   return list.filter((c) => `${c.name} ${c.description || ''}`.toLowerCase().includes(q))
 })
+const MARKET_NODE_TYPES = ['tool', 'agent', 'skill', 'mcp']
+const isMarketNode = computed(() => MARKET_NODE_TYPES.includes(selectedNode.value?.type))
+const selectedTypeLabel = computed(
+  () =>
+    PALETTE.find((x) => x.type === selectedNode.value?.type)?.label ||
+    TYPE_LABELS[selectedNode.value?.type] ||
+    selectedNode.value?.type ||
+    ''
+)
 const inputVars = computed(() => {
   const vars = ['${input}']
   try {
@@ -105,7 +139,7 @@ watch(
     if (selectedNode.value) {
       paramsText.value = JSON.stringify(selectedNode.value.data.node.params || {}, null, 2)
       paramsError.value = ''
-      ensureCaps(selectedNode.value.type)
+      if (isMarketNode.value) ensureCaps(selectedNode.value.type)
     }
   }
 )
@@ -120,6 +154,12 @@ onMounted(() => {
     if (route.query.version) meta.version = route.query.version
     if (route.query.description) meta.description = route.query.description
   }
+  api
+    .get('/workflows/templates')
+    .then((t) => {
+      templates.value = Array.isArray(t) ? t : []
+    })
+    .catch(() => {})
   markWorkflowClean()
 })
 
@@ -150,7 +190,8 @@ async function load(id) {
       id: e.id || `e-${i}-${e.from}-${e.to}`,
       source: e.from,
       target: e.to,
-      animated: true
+      animated: true,
+      data: e.condition ? { condition: e.condition } : {}
     }))
     wfSettings.on_error = wf.on_error || 'fail'
     wfSettings.timeout_seconds = Number(wf.timeout_seconds) || 0
@@ -175,7 +216,12 @@ function toEngineWorkflow() {
       retries: Number(n.data.node.retries) || 0,
       position: n.position
     })),
-    edges: flowEdges.value.map((e) => ({ id: e.id, from: e.source, to: e.target })),
+    edges: flowEdges.value.map((e) => ({
+      id: e.id,
+      from: e.source,
+      to: e.target,
+      ...(e.data?.condition ? { condition: e.data.condition } : {})
+    })),
     on_error: wfSettings.on_error,
     timeout_seconds: Number(wfSettings.timeout_seconds) || 0
   }
@@ -241,12 +287,20 @@ function onDrop(event) {
 
 function onConnect(conn) {
   if (!conn.source || !conn.target || conn.source === conn.target) return
-  if (flowEdges.value.some((e) => e.source === conn.source && e.target === conn.target)) return
+  const condition = conn.sourceHandle || ''
+  if (
+    flowEdges.value.some(
+      (e) => e.source === conn.source && e.target === conn.target && (e.data?.condition || '') === condition
+    )
+  ) {
+    return
+  }
   flowEdges.value.push({
     id: `e-${conn.source}-${conn.target}-${Date.now().toString(36)}`,
     source: conn.source,
     target: conn.target,
-    animated: true
+    animated: true,
+    data: condition ? { condition } : {}
   })
 }
 
@@ -324,15 +378,7 @@ function toggleJson() {
   jsonOpen.value = true
 }
 
-function applyJson() {
-  error.value = ''
-  let wf
-  try {
-    wf = JSON.parse(jsonText.value)
-  } catch (e) {
-    error.value = `JSON 不合法：${e.message}`
-    return
-  }
+function applyWorkflow(wf) {
   flowNodes.value = (wf.nodes || []).map((n, i) => ({
     id: n.id,
     type: n.type,
@@ -343,12 +389,34 @@ function applyJson() {
     id: e.id || `e-${i}`,
     source: e.from,
     target: e.to,
-    animated: true
+    animated: true,
+    data: e.condition ? { condition: e.condition } : {}
   }))
   if (wf.on_error) wfSettings.on_error = wf.on_error
   if (wf.timeout_seconds !== undefined) wfSettings.timeout_seconds = wf.timeout_seconds
+  selectedNodeId.value = ''
+}
+
+function applyJson() {
+  error.value = ''
+  let wf
+  try {
+    wf = JSON.parse(jsonText.value)
+  } catch (e) {
+    error.value = `JSON 不合法：${e.message}`
+    return
+  }
+  applyWorkflow(wf)
   jsonOpen.value = false
   notice.value = '已从 JSON 加载画布'
+}
+
+function useTemplate(item) {
+  if (!item?.workflow) return
+  applyWorkflow(item.workflow)
+  if (item.name) meta.name = item.name
+  if (item.description) meta.description = item.description
+  notice.value = `已载入模板：${item.name}`
 }
 
 async function save() {
@@ -472,20 +540,23 @@ function stateLabel(state) {
     <div class="wf-main" :style="{ gridTemplateColumns: canEdit ? '210px 1fr 330px' : '1fr 330px' }">
       <aside v-if="canEdit" class="wf-palette">
         <div class="wf-panel-title">节点</div>
-        <div
-          v-for="p in PALETTE"
-          :key="p.type"
-          class="wf-palette-item"
-          draggable="true"
-          @dragstart="(e) => e.dataTransfer.setData('application/wf-node-type', p.type)"
-          @click="addNode(p.type)"
-        >
-          <span class="wf-palette-icon" :style="{ background: `${p.color}22`, color: p.color }">{{ p.icon }}</span>
-          <div>
-            <div class="wf-palette-name">{{ p.label }}</div>
-            <div class="muted" style="font-size: 11px">{{ p.desc }}</div>
+        <template v-for="g in PALETTE_GROUPS" :key="g">
+          <div class="wf-palette-group">{{ g }}</div>
+          <div
+            v-for="p in PALETTE.filter((x) => x.group === g)"
+            :key="p.type"
+            class="wf-palette-item"
+            draggable="true"
+            @dragstart="(e) => e.dataTransfer.setData('application/wf-node-type', p.type)"
+            @click="addNode(p.type)"
+          >
+            <span class="wf-palette-icon" :style="{ background: `${p.color}22`, color: p.color }">{{ p.icon }}</span>
+            <div>
+              <div class="wf-palette-name">{{ p.label }}</div>
+              <div class="muted" style="font-size: 11px">{{ p.desc }}</div>
+            </div>
           </div>
-        </div>
+        </template>
         <div class="muted wf-palette-tip">
           点击或拖拽到画布添加节点，从节点底部连线到下一节点。
         </div>
@@ -517,11 +588,11 @@ function stateLabel(state) {
       <aside class="wf-inspector">
         <template v-if="selectedNode">
           <div class="wf-panel-title">
-            节点配置 · {{ TYPE_LABELS[selectedNode.type] }}
+            节点配置 · {{ selectedTypeLabel }}
             <button class="wf-close" @click="selectedNodeId = ''">✕</button>
           </div>
 
-          <div class="field">
+          <div v-if="isMarketNode" class="field">
             <label>能力（市场已发布）</label>
             <input
               v-model="capSearch"
@@ -555,7 +626,7 @@ function stateLabel(state) {
             </div>
           </div>
 
-          <div class="field-row">
+          <div v-if="isMarketNode" class="field-row">
             <div class="field">
               <label>版本（留空 = 最新）</label>
               <input v-model="selectedNode.data.node.version" class="input" :disabled="!canEdit" placeholder="1.0.0" />
@@ -659,9 +730,19 @@ function stateLabel(state) {
             <CodeEditor v-model="testInput" language="json" compact :height="200" />
           </div>
 
+          <div v-if="canEdit && templates.length && !meta.id" class="field">
+            <label>从模板新建</label>
+            <div class="var-chips">
+              <button v-for="t in templates" :key="t.name" class="chip" type="button" @click="useTemplate(t)">
+                {{ t.name }}
+              </button>
+            </div>
+          </div>
+
           <div class="muted" style="font-size: 12px; line-height: 1.8">
-            <div>• 从左侧添加节点，拖拽节点底部手柄连接上下游</div>
-            <div>• 节点引用市场上已发布的 tool / agent / skill / mcp 能力</div>
+            <div>• 从左侧添加节点，拖拽节点底部手柄连接上下游；分支节点（条件/分类）有多个输出口</div>
+            <div>• 市场能力节点引用已发布的 tool / agent / skill / mcp；连接器支持 op=call 调用工具</div>
+            <div>• 变量：${input.字段} 引用入参；Dify 语法以 #node.field#（双花括号包裹）引用上游输出</div>
             <div>• 保存后为草稿，可在「我的能力」提交审核</div>
           </div>
         </template>
@@ -768,6 +849,11 @@ function stateLabel(state) {
   display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0;
 }
 .wf-palette-name { font-weight: 600; font-size: 13px; }
+.wf-palette-group {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--muted); margin: 12px 2px 6px;
+}
+.wf-palette-group:first-child { margin-top: 0; }
 .wf-palette-tip { font-size: 11px; line-height: 1.7; padding: 8px 2px; }
 .wf-canvas-wrap {
   position: relative;

@@ -112,6 +112,20 @@ def _load_workflow(cap: Capability) -> dict:
     return load_workflow_definition(cap, require_nodes=False)
 
 
+@router.get("/workflows/templates")
+async def workflow_templates():
+    """内置示例工作流模板（Dify 对齐），供「从模板新建」。"""
+    from app.services.workflow_samples import IT_ALERT_WORKFLOW
+
+    return [
+        {
+            "name": IT_ALERT_WORKFLOW.get("name", ""),
+            "description": IT_ALERT_WORKFLOW.get("description", ""),
+            "workflow": IT_ALERT_WORKFLOW,
+        }
+    ]
+
+
 @router.get("/workflows/{cap_id}/definition")
 async def workflow_definition(cap_id: str, db: DbSession, user: CurrentUser):
     """读取工作流定义（画布数据）。草稿仅作者/管理员；正式版按可见性。"""

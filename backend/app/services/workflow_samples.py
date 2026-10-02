@@ -1,0 +1,122 @@
+"""内置示例工作流（Dify 对齐）。可作为组装/导入模板与文档用途。
+
+场景：IT 告警 → 检索运维手册 → 严重度分类 → 查设备台账 → 专家诊断 → 自动处置/建单 → 钉钉通知。
+节点类型/变量语法对齐 Dify（连字符节点名 + {{#node.field#}}）。
+"""
+
+IT_ALERT_WORKFLOW: dict = {
+    "name": "IT告警处置",
+    "description": "告警接入 → 知识库检索 → 严重度分流 → 设备台账 → 专家诊断 → 建单/通知（钉钉）",
+    "on_error": "continue",
+    "timeout_seconds": 600,
+    "nodes": [
+        {
+            "id": "start",
+            "type": "start",
+            "params": {"fields": ["alert_id", "host", "severity", "message", "source"]},
+            "position": {"x": 40, "y": 200},
+        },
+        {
+            "id": "kb",
+            "type": "knowledge-retrieval",
+            "params": {"query": "{{#start.host#}} {{#start.message#}}", "top_k": 5},
+            "position": {"x": 260, "y": 200},
+        },
+        {
+            "id": "cls",
+            "type": "question-classifier",
+            "params": {
+                "query": "{{#start.message#}}",
+                "classes": [
+                    {"id": "p1", "name": "P1", "description": "严重/影响生产"},
+                    {"id": "p2", "name": "P2", "description": "一般故障"},
+                    {"id": "p3", "name": "P3", "description": "轻微/咨询"},
+                ],
+            },
+            "position": {"x": 480, "y": 200},
+        },
+        {
+            "id": "ledger",
+            "type": "mcp",
+            "capability": "mysql_query",
+            "params": {
+                "op": "call",
+                "tool": "execute_query",
+                "args": {"query": "select * from devices where host='{{#start.host#}}'"},
+            },
+            "position": {"x": 700, "y": 120},
+        },
+        {
+            "id": "diag",
+            "type": "agent",
+            "capability": "设备运维",
+            "params": {
+                "task": "诊断告警：{{#start.message#}}\n设备台账：{{#ledger.result#}}\n手册片段：{{#kb.hits#}}"
+            },
+            "position": {"x": 920, "y": 120},
+        },
+        {
+            "id": "canfix",
+            "type": "if-else",
+            "params": {
+                "conditions": [{"left": "{{#diag.text#}}", "operator": "contains", "right": "自动处置"}]
+            },
+            "position": {"x": 1140, "y": 120},
+        },
+        {
+            "id": "ticket",
+            "type": "llm",
+            "params": {
+                "system": "你是资深 IT 运维工程师，输出简洁的中文工单。",
+                "prompt": "根据以下信息生成工单（标题/描述/建议/优先级）：\n{{#diag.text#}}",
+            },
+            "position": {"x": 920, "y": 320},
+        },
+        {
+            "id": "notify",
+            "type": "mcp",
+            "capability": "dingtalk",
+            "params": {
+                "op": "call",
+                "tool": "dingtalk_send_message",
+                "args": {"text": "告警 {{#start.alert_id#}}（{{#start.host#}}）：\n{{#diag.text#}}\n工单：{{#ticket.text#}}"},
+            },
+            "position": {"x": 1360, "y": 220},
+        },
+        {
+            "id": "agg",
+            "type": "variable-aggregator",
+            "params": {
+                "variables": ["{{#diag.text#}}", "{{#ticket.text#}}", "{{#notify.result#}}"],
+                "mode": "append",
+            },
+            "position": {"x": 1580, "y": 220},
+        },
+        {
+            "id": "end",
+            "type": "end",
+            "params": {
+                "outputs": {
+                    "diagnosis": "{{#diag.text#}}",
+                    "ticket": "{{#ticket.text#}}",
+                    "notified": "{{#notify.result#}}",
+                }
+            },
+            "position": {"x": 1800, "y": 220},
+        },
+    ],
+    "edges": [
+        {"id": "e1", "from": "start", "to": "kb"},
+        {"id": "e2", "from": "kb", "to": "cls"},
+        {"id": "e3", "from": "cls", "to": "ledger", "condition": "p1"},
+        {"id": "e4", "from": "cls", "to": "ledger", "condition": "p2"},
+        {"id": "e5", "from": "cls", "to": "ticket", "condition": "p3"},
+        {"id": "e6", "from": "ledger", "to": "diag"},
+        {"id": "e7", "from": "diag", "to": "canfix"},
+        {"id": "e8", "from": "canfix", "to": "notify", "condition": "true"},
+        {"id": "e9", "from": "canfix", "to": "ticket", "condition": "false"},
+        {"id": "e10", "from": "ticket", "to": "notify"},
+        {"id": "e11", "from": "notify", "to": "agg"},
+        {"id": "e12", "from": "agg", "to": "end"},
+    ],
+}
