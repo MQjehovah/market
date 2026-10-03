@@ -962,7 +962,21 @@ function stateLabel(state) {
                   :placeholder="f.phKey || '键'"
                   @change="renameMap(f.key, k, $event.target.value)"
                 />
-                <VarInput v-model="p[f.key][k]" :disabled="!canEdit" :placeholder="f.phVal || '值'" :variables="flatVars" />
+                <VarInput
+                  v-if="Array.isArray(p[f.key][k])"
+                  :model-value="(p[f.key][k] || []).join(',')"
+                  :disabled="!canEdit"
+                  :placeholder="f.phVal || '值（多项用逗号分隔）'"
+                  :variables="flatVars"
+                  @update:model-value="(v) => (p[f.key][k] = String(v).split(',').map((s) => s.trim()).filter(Boolean))"
+                />
+                <VarInput
+                  v-else
+                  v-model="p[f.key][k]"
+                  :disabled="!canEdit"
+                  :placeholder="f.phVal || '值'"
+                  :variables="flatVars"
+                />
                 <button v-if="canEdit" class="btn btn-sm" type="button" @click="delMap(f.key, k)">×</button>
               </div>
               <button v-if="canEdit" class="btn btn-sm" type="button" @click="addMap(f.key)">+ 新增</button>
