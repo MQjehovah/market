@@ -10,7 +10,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
-from app.models import Capability, UsageEvent, User
+from app.models import AgentBinding, Capability, UsageEvent, User
 from app.services.capabilities import get_visible_capabilities, parse_semver, split_cap_ref
 from app.services.visibility import is_capability_visible
 from app.storage import get_storage
@@ -203,11 +203,29 @@ async def _resolve_runtime(
     try:
         content = get_storage().open(cap.artifacts[-1].uri).read()
         with zipfile.ZipFile(io.BytesIO(content)) as zf:
-            if "plugin.json" in zf.namelist():
-                meta = json.loads(zf.read("plugin.json").decode("utf-8-sig"))
-                manifest = meta.get("dependencies") if isinstance(meta, dict) else None
-                if isinstance(manifest, list):
-                    return await _resolve_manifest(db, user, manifest)
+            names = zf.namelist()
+            manifest = None
+            for meta_file in ("plugin.json", "agent.json"):
+                if meta_file in names:
+                    try:
+                        meta = json.loads(zf.read(meta_file).decode("utf-8-sig"))
+                    except Exception:  # noqa: BLE001
+                        meta = None
+                    if isinstance(meta, dict) and isinstance(meta.get("dependencies"), list):
+                        manifest = meta["dependencies"]
+                        break
+            # 旧格式：dependencies.json 单独存放依赖清单
+            if manifest is None and "dependencies.json" in names:
+                try:
+                    val = json.loads(zf.read("dependencies.json").decode("utf-8-sig"))
+                except Exception:  # noqa: BLE001
+                    val = None
+                if isinstance(val, list):
+                    manifest = val
+                elif isinstance(val, dict) and isinstance(val.get("dependencies"), list):
+                    manifest = val["dependencies"]
+            if isinstance(manifest, list):
+                return await _resolve_manifest(db, user, manifest)
     except Exception:  # noqa: BLE001
         pass
 

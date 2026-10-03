@@ -16,6 +16,10 @@ import json
 from typing import Any
 
 PLUGIN_JSON = "plugin.json"
+# 旧格式（读侧兼容，不回写）：agent.json / PROMPT.md / dependencies.json
+LEGACY_AGENT_JSON = "agent.json"
+LEGACY_PROMPT = "PROMPT.md"
+LEGACY_DEPS = "dependencies.json"
 
 
 def agent_md_path(name: str) -> str:
@@ -74,6 +78,8 @@ def build_plugin_json(
 def parse_plugin_meta(files: dict[str, bytes]) -> dict[str, Any]:
     raw = files.get(PLUGIN_JSON)
     if raw is None:
+        raw = files.get(LEGACY_AGENT_JSON)
+    if raw is None:
         return {}
     try:
         val = json.loads(raw.decode("utf-8-sig"))
@@ -82,8 +88,23 @@ def parse_plugin_meta(files: dict[str, bytes]) -> dict[str, Any]:
     return val if isinstance(val, dict) else {}
 
 
+def _legacy_deps(files: dict[str, bytes]) -> list[dict[str, Any]]:
+    raw = files.get(LEGACY_DEPS)
+    if raw is None:
+        return []
+    try:
+        val = json.loads(raw.decode("utf-8-sig"))
+    except Exception:  # noqa: BLE001
+        return []
+    if isinstance(val, list):
+        return [d for d in val if isinstance(d, dict)]
+    if isinstance(val, dict) and isinstance(val.get("dependencies"), list):
+        return [d for d in val["dependencies"] if isinstance(d, dict)]
+    return []
+
+
 def load_prompt_deps(files: dict[str, bytes], name: str = "") -> tuple[str, list[dict[str, str]]]:
-    """从插件包读取主提示词与依赖清单（供编辑/运行）。"""
+    """从插件包读取主提示词与依赖清单（供编辑/运行）；兼容旧格式 agent.json/PROMPT.md/dependencies.json。"""
     meta = parse_plugin_meta(files)
     prompt = ""
     candidate = agent_md_path(name) if name else ""
@@ -95,8 +116,11 @@ def load_prompt_deps(files: dict[str, bytes], name: str = "") -> tuple[str, list
                 fallback = path[len("agents/") : -len(".md")]
                 _, _, prompt = parse_agent_md(files[path], fallback)
                 break
+    if not prompt and LEGACY_PROMPT in files:
+        prompt = files[LEGACY_PROMPT].decode("utf-8", errors="replace").strip()
     deps = meta.get("dependencies")
-    deps = deps if isinstance(deps, list) else []
+    if not isinstance(deps, list):
+        deps = _legacy_deps(files)
     return prompt, [d for d in deps if isinstance(d, dict)]
 
 
