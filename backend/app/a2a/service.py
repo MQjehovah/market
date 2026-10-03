@@ -104,6 +104,7 @@ async def send_task(
     client_task_id: str,
     message: dict[str, Any],
     metadata: dict[str, Any] | None = None,
+    extra_deps: list[dict[str, str]] | None = None,
 ) -> A2ATaskModel:
     """创建任务并同步执行：LLM 已配置时真实执行（mode=llm），否则模拟（mode=simulated）。"""
     task_id = str(uuid.uuid4())
@@ -133,7 +134,9 @@ async def send_task(
         )
         from app.services.agent_runner import run_agent
 
-        result = await run_agent(db, user, agent, input_text or "（无文本内容）")
+        result = await run_agent(
+            db, user, agent, input_text or "（无文本内容）", extra_deps=extra_deps
+        )
         output_text = result.get("output") or ""
         mode = result.get("mode", "simulated")
         output_message = {

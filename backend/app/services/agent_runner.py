@@ -170,6 +170,7 @@ async def run_agent(
     task_text: str,
     *,
     max_iterations: int | None = None,
+    extra_deps: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """真实执行 agent：加载人设与绑定能力，LLM 工具调用循环；未配置 LLM 时模拟。"""
     if not is_llm_configured():
@@ -187,6 +188,14 @@ async def run_agent(
 
     prompt, deps = read_prompt_deps(cap)
     runtime = await _resolve_manifest(db, user, deps or [])
+    # 工作流 agent 节点内联绑定的额外能力（并入专家包依赖）
+    if extra_deps:
+        extra = await _resolve_manifest(db, user, extra_deps)
+        for bucket in ("tools", "skills", "mcps"):
+            seen = {x.get("name") for x in runtime.get(bucket) or []}
+            for item in extra.get(bucket) or []:
+                if item.get("name") not in seen:
+                    runtime.setdefault(bucket, []).append(item)
 
     async def _gateway_loader(name: str):
         try:

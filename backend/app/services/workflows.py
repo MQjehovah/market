@@ -203,6 +203,20 @@ def _stringify(v: Any) -> str:
     return json.dumps(v, ensure_ascii=False)
 
 
+_AGENT_EXTRA_TYPES = (("skills", "skill"), ("tools", "tool"), ("mcps", "mcp"))
+
+
+def _agent_extra_deps(params: dict[str, Any]) -> list[dict[str, str]]:
+    """agent 节点内联绑定的额外能力 → 依赖清单（供 run_agent 合并到专家包依赖）。"""
+    deps: list[dict[str, str]] = []
+    for bucket, typ in _AGENT_EXTRA_TYPES:
+        for item in params.get(bucket) or []:
+            name = item if isinstance(item, str) else (item or {}).get("name")
+            if name:
+                deps.append({"name": str(name), "type": typ})
+    return deps
+
+
 def normalize_start_fields(fields: Any) -> list[dict[str, Any]]:
     """把 start 节点 fields 统一成富字段列表（兼容纯字符串与对象混用）。"""
     out: list[dict[str, Any]] = []
@@ -465,6 +479,7 @@ async def _execute_node(
                 client_task_id=f"wf-{node['id']}",
                 message={"role": "user", "parts": [{"type": "text", "text": task_text}]},
                 metadata={"source": "workflow", "node": node["id"]},
+                extra_deps=_agent_extra_deps(params),
             )
             text = extract_text(task.output_message or {}) if task.output_message else ""
             return {"output": {"task_id": task.id, "state": task.state, "text": text, "agent": cap.name}}

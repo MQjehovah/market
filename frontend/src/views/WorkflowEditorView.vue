@@ -280,7 +280,12 @@ const FORMS = {
     { key: 'system', label: 'System', kind: 'textarea', ph: '角色设定' },
     { key: 'prompt', label: 'Prompt', kind: 'textarea', ph: '提示词，支持变量' }
   ],
-  agent: [{ key: 'task', label: '任务', kind: 'textarea', ph: '交给该专家处理的任务描述' }],
+  agent: [
+    { key: 'task', label: '任务', kind: 'textarea', ph: '交给该专家处理的任务描述' },
+    { key: 'skills', label: '额外技能（可选）', kind: 'strlist', ph: '技能名，如 weekly-report' },
+    { key: 'tools', label: '额外工具（可选）', kind: 'strlist', ph: '工具名，如 web_search' },
+    { key: 'mcps', label: '额外连接器（可选）', kind: 'strlist', ph: '连接器名，如 erp' }
+  ],
   skill: [{ key: 'context', label: '上下文', kind: 'textarea', ph: '传给技能的上下文' }],
   tool: [],
   mcp: [

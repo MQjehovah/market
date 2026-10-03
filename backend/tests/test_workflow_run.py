@@ -2,7 +2,18 @@
 
 import pytest
 
-from app.services.workflows import extract_run_meta, normalize_start_fields
+from app.services.workflows import _agent_extra_deps, extract_run_meta, normalize_start_fields
+
+
+def test_agent_extra_deps_mapping():
+    deps = _agent_extra_deps(
+        {"skills": ["weekly-report", {"name": "report-writer"}], "tools": ["web_search"], "mcps": ["erp"]}
+    )
+    assert {"name": "weekly-report", "type": "skill"} in deps
+    assert {"name": "report-writer", "type": "skill"} in deps
+    assert {"name": "web_search", "type": "tool"} in deps
+    assert {"name": "erp", "type": "mcp"} in deps
+    assert _agent_extra_deps({}) == []
 
 
 def test_normalize_start_fields_mixed():
