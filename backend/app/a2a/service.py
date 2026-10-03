@@ -4,14 +4,11 @@ import uuid
 from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import joinedload, selectinload
 
 from app.a2a.protocol import (
     A2AArtifact,
     A2AMessage,
-    A2APart,
     A2AStatus,
     A2ATask,
     AgentCard,
@@ -22,7 +19,7 @@ from app.a2a.protocol import (
 )
 from app.config import get_settings
 from app.models import A2ATask as A2ATaskModel
-from app.models import Capability, UsageEvent, User
+from app.models import Capability, User
 from app.services.capabilities import get_visible_capabilities, parse_semver
 from app.services.marketplace import record_usage
 
@@ -149,7 +146,12 @@ async def send_task(
             "parts": [{"type": "text", "text": output_text}],
         }
         task.state = "completed"
-        task.task_metadata = {**(task.task_metadata or {}), "mode": mode}
+        task.task_metadata = {
+            **(task.task_metadata or {}),
+            "mode": mode,
+            "tool_calls": result.get("tool_calls", 0),
+            "steps": (result.get("steps") or [])[-40:],
+        }
         task.output_message = output_message
         task.artifacts = [
             {
