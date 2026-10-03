@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { VueFlow, useVueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
@@ -9,6 +9,7 @@ import { authState } from '../stores/auth'
 import { TYPE_CATEGORIES, TYPE_LABELS, formatDate } from '../utils/format'
 import StatusBadge from '../components/StatusBadge.vue'
 import WorkflowNode from '../components/workflow/WorkflowNode.vue'
+import VarInput from '../components/workflow/VarInput.vue'
 import CodeEditor from '../components/CodeEditor.vue'
 import { bindUnsavedGuard } from '../utils/unsaved'
 
@@ -132,10 +133,9 @@ const selectedNodeId = ref('')
 const capCache = reactive({})
 const capLoading = reactive({})
 const capLoadError = reactive({})
-const capSearch = ref('')
 const paramsText = ref('{}')
 const paramsError = ref('')
-const paramsEditor = ref(null)
+
 const lockVersion = ref(true)
 
 const jsonOpen = ref(false)
@@ -165,12 +165,6 @@ const selectedNode = computed(() =>
   flowNodes.value.find((n) => n.id === selectedNodeId.value)
 )
 const selectedCaps = computed(() => capCache[selectedNode.value?.type] || [])
-const filteredCaps = computed(() => {
-  const q = capSearch.value.trim().toLowerCase()
-  const list = selectedCaps.value
-  if (!q) return list
-  return list.filter((c) => `${c.name} ${c.description || ''}`.toLowerCase().includes(q))
-})
 const MARKET_NODE_TYPES = ['tool', 'agent', 'skill', 'mcp']
 const isMarketNode = computed(() => MARKET_NODE_TYPES.includes(selectedNode.value?.type))
 const selectedTypeLabel = computed(
@@ -180,21 +174,56 @@ const selectedTypeLabel = computed(
     selectedNode.value?.type ||
     ''
 )
-const inputVars = computed(() => {
-  const vars = ['${input}']
+const OUTPUT_FIELDS = {
+  llm: ['text'],
+  answer: ['answer'],
+  agent: ['text'],
+  skill: ['skill_md', 'context'],
+  mcp: ['result'],
+  code: ['result'],
+  'if-else': ['result'],
+  'question-classifier': ['class_id', 'class_name'],
+  'parameter-extractor': ['params'],
+  'knowledge-retrieval': ['hits'],
+  'list-operator': ['result', 'count'],
+  'variable-aggregator': ['result'],
+  'variable-assigner': ['assigned'],
+  iteration: ['items', 'count'],
+  loop: ['results', 'count'],
+  'doc-extractor': ['text', 'json'],
+  approval: ['approved', 'comment', 'approver'],
+  'template-transform': ['text', 'value']
+}
+// 供 VarInput 使用的可插入变量（系统 / 入参 / 上游节点输出）
+const flatVars = computed(() => {
+  const out = [
+    { group: '系统', label: '用户输入', value: '${sys.query}' },
+    { group: '系统', label: '对话历史', value: '${sys.history}' },
+    { group: '系统', label: '当前时间', value: '${sys.now}' }
+  ]
   try {
     const obj = JSON.parse(testInput.value || '{}')
-    Object.keys(obj).forEach((k) => vars.push(`\${input.${k}}`))
+    Object.keys(obj).forEach((k) =>
+      out.push({ group: '入参 input', label: k, value: `\${input.${k}}` })
+    )
   } catch {
-    // 忽略非法 JSON，仅给通用变量
+    // 忽略非法 JSON
   }
-  return vars
-})
-const upstreamVars = computed(() => {
-  if (!selectedNode.value) return []
-  return flowNodes.value
-    .filter((n) => n.id !== selectedNode.value.id)
-    .flatMap((n) => [`\${${n.id}}`, `\${${n.id}.output}`])
+  for (const n of flowNodes.value) {
+    if (selectedNode.value && n.id === selectedNode.value.id) continue
+    const t = n.data?.node?.type || n.type
+    out.push({ group: `上游 · ${n.id}`, label: n.id, value: `\${${n.id}}` })
+    if (t === 'start') {
+      const fs = n.data?.node?.params?.fields || []
+      fs.forEach((f) => {
+        if (f) out.push({ group: `上游 · ${n.id}`, label: `input.${f}`, value: `\${input.${f}}` })
+      })
+    }
+    for (const f of OUTPUT_FIELDS[t] || []) {
+      out.push({ group: `上游 · ${n.id}`, label: `${n.id}.${f}`, value: `\${${n.id}.${f}}` })
+    }
+  }
+  return out
 })
 
 watch(
@@ -492,7 +521,6 @@ function addNode(type, position) {
     }
   })
   selectedNodeId.value = nid
-  capSearch.value = ''
 }
 
 function onDrop(event) {
@@ -524,7 +552,6 @@ function onConnect(conn) {
 
 function onNodeClick({ node }) {
   selectedNodeId.value = node.id
-  capSearch.value = ''
 }
 
 function onPaneClick() {
@@ -565,11 +592,14 @@ async function ensureCaps(type) {
   }
 }
 
-function pickCap(cap) {
+function onCapChange(name) {
   const node = selectedNode.value?.data.node
   if (!node) return
-  node.capability = cap.name
-  if (lockVersion.value) node.version = cap.version
+  node.capability = name
+  if (name && lockVersion.value) {
+    const cap = (capCache[node.type] || []).find((c) => c.name === name)
+    if (cap) node.version = cap.version
+  }
 }
 
 function applyParams() {
@@ -580,15 +610,6 @@ function applyParams() {
   } catch {
     paramsError.value = '参数 JSON 不合法，尚未生效'
   }
-}
-
-function insertVar(expr) {
-  if (paramsEditor.value?.insertAtCursor) {
-    paramsEditor.value.insertAtCursor(expr)
-  } else {
-    paramsText.value += expr
-  }
-  nextTick(applyParams)
 }
 
 function toggleJson() {
@@ -811,72 +832,63 @@ function stateLabel(state) {
             <button class="wf-close" @click="selectedNodeId = ''">✕</button>
           </div>
 
-          <div v-if="isMarketNode" class="field">
-            <label>能力（市场已发布）</label>
-            <input
-              v-model="capSearch"
-              class="input"
-              placeholder="搜索能力名称…"
-              :disabled="!canEdit"
-              @focus="ensureCaps(selectedNode.type)"
-            />
-            <div class="cap-list">
-              <button
-                v-for="cap in filteredCaps"
-                :key="cap.id"
-                class="cap-item"
-                :class="{ active: cap.name === selectedNode.data.node.capability }"
-                :disabled="!canEdit"
-                @click="pickCap(cap)"
-              >
-                <span>{{ cap.name }}</span>
-                <span class="muted">v{{ cap.version }} · {{ cap.usage_count }}次</span>
-              </button>
-              <div v-if="capLoading[selectedNode.type]" class="muted cap-empty">正在加载已发布能力…</div>
-              <div v-else-if="capLoadError[selectedNode.type]" class="alert alert-error cap-empty">
-                {{ capLoadError[selectedNode.type] }}（请确认已登录且后端在运行）
-              </div>
-              <div v-else-if="filteredCaps.length === 0" class="muted cap-empty">
-                暂无已发布的 {{ TYPE_LABELS[selectedNode.type] }}。
-                请先在「我的能力」发布对应组件/专家并审核通过，或到
-                <router-link to="/">能力平台</router-link>
-                确认是否有 {{ TYPE_LABELS[selectedNode.type] }} 已上架。
-              </div>
-            </div>
-          </div>
-
-          <div v-if="isMarketNode" class="field-row">
+          <template v-if="isMarketNode">
+            <div class="insp-sec">能力</div>
             <div class="field">
-              <label>版本（留空 = 最新）</label>
-              <input v-model="selectedNode.data.node.version" class="input" :disabled="!canEdit" placeholder="1.0.0" />
-            </div>
-            <div class="field">
-              <label>锁版本</label>
+              <label>{{ TYPE_LABELS[selectedNode.type] }}（市场已发布）</label>
+              <div class="cap-select-row">
+                <select
+                  :value="selectedNode.data.node.capability"
+                  class="select"
+                  :disabled="!canEdit || capLoading[selectedNode.type]"
+                  @focus="ensureCaps(selectedNode.type)"
+                  @change="onCapChange($event.target.value)"
+                >
+                  <option value="">{{ capLoading[selectedNode.type] ? '加载中…' : '请选择…' }}</option>
+                  <option v-for="cap in selectedCaps" :key="cap.id" :value="cap.name">
+                    {{ cap.name }} · v{{ cap.version }}
+                  </option>
+                </select>
+                <input
+                  v-model="selectedNode.data.node.version"
+                  class="input cap-ver"
+                  :disabled="!canEdit"
+                  placeholder="最新"
+                  title="留空 = 用最新版本"
+                />
+              </div>
               <label class="checkbox">
                 <input v-model="lockVersion" type="checkbox" :disabled="!canEdit" />
-                选择能力时锁定
+                选择能力后锁定其版本
               </label>
+              <div v-if="capLoadError[selectedNode.type]" class="alert alert-error cap-empty">
+                {{ capLoadError[selectedNode.type] }}（请确认已登录且后端在运行）
+              </div>
+              <div v-else-if="!capLoading[selectedNode.type] && selectedCaps.length === 0" class="muted cap-empty">
+                暂无已发布的 {{ TYPE_LABELS[selectedNode.type] }}，请先在「我的能力」发布并审核通过。
+              </div>
             </div>
-          </div>
+          </template>
 
+          <div class="insp-sec">参数</div>
           <div v-for="f in formFields" :key="f.key" class="field">
             <label>{{ f.label }}</label>
 
-            <input
+            <VarInput
               v-if="f.kind === 'text'"
               v-model="p[f.key]"
-              class="input"
               :disabled="!canEdit"
               :placeholder="f.ph || ''"
+              :variables="flatVars"
             />
-            <textarea
+            <VarInput
               v-else-if="f.kind === 'textarea'"
               v-model="p[f.key]"
-              class="textarea"
-              rows="3"
+              multiline
               :disabled="!canEdit"
               :placeholder="f.ph || ''"
-            ></textarea>
+              :variables="flatVars"
+            />
             <input
               v-else-if="f.kind === 'number'"
               v-model.number="p[f.key]"
@@ -890,7 +902,7 @@ function stateLabel(state) {
 
             <div v-else-if="f.kind === 'strlist'">
               <div v-for="i in (p[f.key] || []).length" :key="i" class="kv-row">
-                <input v-model="p[f.key][i - 1]" class="input" :disabled="!canEdit" :placeholder="f.ph || ''" />
+                <VarInput v-model="p[f.key][i - 1]" :disabled="!canEdit" :placeholder="f.ph || ''" :variables="flatVars" />
                 <button v-if="canEdit" class="btn btn-sm" type="button" @click="delRow(f.key, i - 1)">×</button>
               </div>
               <button v-if="canEdit" class="btn btn-sm" type="button" @click="addRow(f.key, '')">+ 新增</button>
@@ -905,7 +917,7 @@ function stateLabel(state) {
                   :placeholder="f.phKey || '键'"
                   @change="renameMap(f.key, k, $event.target.value)"
                 />
-                <input v-model="p[f.key][k]" class="input" :disabled="!canEdit" :placeholder="f.phVal || '值'" />
+                <VarInput v-model="p[f.key][k]" :disabled="!canEdit" :placeholder="f.phVal || '值'" :variables="flatVars" />
                 <button v-if="canEdit" class="btn btn-sm" type="button" @click="delMap(f.key, k)">×</button>
               </div>
               <button v-if="canEdit" class="btn btn-sm" type="button" @click="addMap(f.key)">+ 新增</button>
@@ -917,7 +929,7 @@ function stateLabel(state) {
                   <select v-if="rf.kind === 'select'" v-model="row[rf.key]" class="select" :disabled="!canEdit">
                     <option v-for="o in rf.options" :key="o" :value="o">{{ o }}</option>
                   </select>
-                  <input v-else v-model="row[rf.key]" class="input" :disabled="!canEdit" :placeholder="rf.ph || rf.key" />
+                  <VarInput v-else v-model="row[rf.key]" :disabled="!canEdit" :placeholder="rf.ph || rf.key" :variables="flatVars" />
                 </template>
                 <button v-if="canEdit" class="btn btn-sm" type="button" @click="delRow(f.key, i)">×</button>
               </div>
@@ -939,7 +951,7 @@ function stateLabel(state) {
           </div>
 
           <template v-if="selectedNode.type === 'start'">
-            <div class="field-label-strong">触发器</div>
+            <div class="insp-sec">触发器</div>
             <div class="field">
               <label>触发方式</label>
               <select v-model="trigger.type" class="select" :disabled="!canEdit">
@@ -1000,7 +1012,6 @@ function stateLabel(state) {
             <summary>高级：直接编辑 JSON</summary>
             <div class="field" style="margin-top: 8px">
               <CodeEditor
-                ref="paramsEditor"
                 v-model="paramsText"
                 language="json"
                 compact
@@ -1012,17 +1023,7 @@ function stateLabel(state) {
             </div>
           </details>
 
-          <div class="field">
-            <div class="muted" style="font-size: 12px; margin-bottom: 6px">可用变量（点击插入）</div>
-            <div class="var-chips">
-              <button v-for="v in inputVars" :key="v" class="chip" :disabled="!canEdit" @click="insertVar(v)">{{ v }}</button>
-              <button v-for="v in upstreamVars" :key="v" class="chip chip-up" :disabled="!canEdit" @click="insertVar(v)">{{ v }}</button>
-            </div>
-            <div class="muted" style="font-size: 11px; margin-top: 6px">
-              ${input.字段} 引用测试入参；${节点id.字段} 引用上游输出（如 ${t1.output}）
-            </div>
-          </div>
-
+          <div class="insp-sec">运行</div>
           <div class="field-row">
             <div class="field">
               <label>超时（秒）</label>
@@ -1034,7 +1035,7 @@ function stateLabel(state) {
             </div>
           </div>
 
-          <button v-if="canEdit" class="btn btn-danger btn-block" @click="deleteSelectedNode">删除节点</button>
+          <button v-if="canEdit" class="btn btn-danger btn-block mt-12" @click="deleteSelectedNode">删除节点</button>
         </template>
 
         <template v-else>
@@ -1314,14 +1315,20 @@ function stateLabel(state) {
   user-select: none;
 }
 .json-adv[open] > summary { color: var(--text); }
-.field-label-strong {
-  font-size: 12px;
+.insp-sec {
+  font-size: 11px;
   font-weight: 700;
-  color: var(--text);
-  margin: 4px 0 8px;
-  padding-top: 6px;
-  border-top: 1px dashed var(--border);
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  text-transform: uppercase;
+  margin: 16px 0 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
 }
+.insp-sec:first-child { margin-top: 4px; }
+.cap-select-row { display: flex; gap: 8px; align-items: center; }
+.cap-select-row .select { flex: 1; min-width: 0; }
+.cap-ver { flex: none; width: 84px; }
 .trigger-url {
   font-family: 'Cascadia Code', Consolas, monospace;
   font-size: 11px;
