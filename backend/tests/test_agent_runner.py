@@ -151,8 +151,8 @@ async def test_a2a_task_real_llm(client, publisher_headers, admin_headers, monke
     body = r.json()
     assert body["result"]["status"]["state"] == "completed"
     text = body["result"]["status"]["message"]["parts"][0]["text"]
-    assert "A2A真实回答" in text
-    assert "[执行模式] llm" in text
+    assert text.strip() == "A2A真实回答"
+    assert body["result"]["metadata"]["mode"] == "llm"
 
 
 @pytest.mark.asyncio

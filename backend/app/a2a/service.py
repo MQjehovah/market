@@ -136,11 +136,6 @@ async def send_task(
         result = await run_agent(db, user, agent, input_text or "（无文本内容）")
         output_text = result.get("output") or ""
         mode = result.get("mode", "simulated")
-        output_text = (
-            f"{output_text}\n\n[执行模式] {mode}"
-            if mode != "simulated"
-            else output_text
-        )
         output_message = {
             "role": "agent",
             "parts": [{"type": "text", "text": output_text}],
