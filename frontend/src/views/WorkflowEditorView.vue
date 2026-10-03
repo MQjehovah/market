@@ -63,6 +63,69 @@ const meta = reactive({
   author_id: ''
 })
 const wfSettings = reactive({ on_error: 'fail', timeout_seconds: 0 })
+const trigger = reactive({
+  type: 'none',
+  token: '',
+  cron: '0 9 * * *',
+  enabled: true,
+  inputText: '{}'
+})
+const TRIGGER_LABELS = {
+  none: '手动 / 被调用',
+  webhook: 'Webhook',
+  gitlab: 'GitLab Webhook',
+  schedule: '定时（cron）'
+}
+const CRON_PRESETS = [
+  { label: '每天 09:00', value: '0 9 * * *' },
+  { label: '每天 08:30', value: '30 8 * * *' },
+  { label: '每周一 09:00', value: '0 9 * * 1' },
+  { label: '每周五 17:00', value: '0 17 * * 5' },
+  { label: '每月 1 号 09:00', value: '0 9 1 * *' },
+  { label: '每 5 分钟', value: '*/5 * * * *' }
+]
+
+function setTrigger(t) {
+  const type = t?.type || 'none'
+  trigger.type = TRIGGER_LABELS[type] ? type : 'none'
+  trigger.token = t?.token || ''
+  trigger.cron = t?.cron || '0 9 * * *'
+  trigger.enabled = t?.enabled !== false
+  trigger.inputText = JSON.stringify(t?.input || {}, null, 2)
+}
+
+function triggerToJson() {
+  if (trigger.type === 'webhook') {
+    return { trigger: { type: 'webhook', token: trigger.token.trim() } }
+  }
+  if (trigger.type === 'gitlab') {
+    return { trigger: { type: 'gitlab', token: trigger.token.trim() } }
+  }
+  if (trigger.type === 'schedule') {
+    let input = {}
+    try {
+      input = JSON.parse(trigger.inputText || '{}')
+    } catch {
+      input = {}
+    }
+    return {
+      trigger: { type: 'schedule', cron: trigger.cron.trim(), enabled: trigger.enabled, input }
+    }
+  }
+  return {}
+}
+
+function genToken() {
+  const bytes = new Uint8Array(16)
+  crypto.getRandomValues(bytes)
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+const triggerUrl = computed(() => {
+  if (!meta.name || trigger.type === 'none' || trigger.type === 'schedule') return ''
+  const origin = typeof window !== 'undefined' ? window.location.origin : ''
+  return `${origin}/api/runtime/workflows/${encodeURIComponent(meta.name.trim())}/trigger`
+})
 const flowNodes = ref([])
 const flowEdges = ref([])
 const selectedNodeId = ref('')
@@ -348,6 +411,7 @@ async function load(id) {
     }))
     wfSettings.on_error = wf.on_error || 'fail'
     wfSettings.timeout_seconds = Number(wf.timeout_seconds) || 0
+    setTrigger(wf.trigger || {})
     markWorkflowClean()
   } catch (e) {
     error.value = e.message
@@ -376,7 +440,8 @@ function toEngineWorkflow() {
       ...(e.data?.condition ? { condition: e.data.condition } : {})
     })),
     on_error: wfSettings.on_error,
-    timeout_seconds: Number(wfSettings.timeout_seconds) || 0
+    timeout_seconds: Number(wfSettings.timeout_seconds) || 0,
+    ...triggerToJson()
   }
 }
 
@@ -547,6 +612,7 @@ function applyWorkflow(wf) {
   }))
   if (wf.on_error) wfSettings.on_error = wf.on_error
   if (wf.timeout_seconds !== undefined) wfSettings.timeout_seconds = wf.timeout_seconds
+  setTrigger(wf.trigger || {})
   selectedNodeId.value = ''
 }
 
@@ -959,6 +1025,61 @@ function stateLabel(state) {
             </div>
           </div>
 
+          <div class="field">
+            <label>触发方式</label>
+            <select v-model="trigger.type" class="select" :disabled="!canEdit">
+              <option v-for="(label, key) in TRIGGER_LABELS" :key="key" :value="key">{{ label }}</option>
+            </select>
+          </div>
+
+          <template v-if="trigger.type === 'webhook' || trigger.type === 'gitlab'">
+            <div class="field">
+              <label>{{ trigger.type === 'gitlab' ? 'GitLab Secret Token' : 'Webhook Token' }}</label>
+              <div class="kv-row">
+                <input v-model="trigger.token" class="input" :disabled="!canEdit" placeholder="点击生成或自定义" />
+                <button v-if="canEdit" class="btn btn-sm" type="button" @click="trigger.token = genToken()">生成</button>
+              </div>
+            </div>
+            <div v-if="triggerUrl" class="field">
+              <label>回调地址</label>
+              <div class="trigger-url">{{ triggerUrl }}</div>
+              <div v-if="trigger.type === 'gitlab'" class="muted" style="font-size: 11px; margin-top: 4px">
+                在 GitLab 项目 Settings → Webhooks 填此 URL，Secret token 填上方值，勾选 Push / Merge request events。
+              </div>
+              <div v-else class="muted" style="font-size: 11px; margin-top: 4px">
+                POST 此地址，请求头 X-Workflow-Token，body {"input": {...}}。
+              </div>
+            </div>
+          </template>
+
+          <template v-else-if="trigger.type === 'schedule'">
+            <div class="field">
+              <label>调度（cron：分 时 日 月 周）</label>
+              <div class="kv-row">
+                <input v-model="trigger.cron" class="input" :disabled="!canEdit" placeholder="0 9 * * *" />
+                <label class="checkbox"><input v-model="trigger.enabled" type="checkbox" :disabled="!canEdit" /> 启用</label>
+              </div>
+              <div class="var-chips" style="margin-top: 6px">
+                <button
+                  v-for="c in CRON_PRESETS"
+                  :key="c.value"
+                  class="chip"
+                  type="button"
+                  :disabled="!canEdit"
+                  @click="trigger.cron = c.value"
+                >{{ c.label }}</button>
+              </div>
+            </div>
+            <div class="field">
+              <label>触发入参（JSON）</label>
+              <CodeEditor v-model="trigger.inputText" language="json" compact :height="120" :readonly="!canEdit" />
+            </div>
+          </template>
+
+          <div v-if="trigger.type !== 'none'" class="muted" style="font-size: 11px; margin: -6px 0 10px">
+            触发仅对「已发布」版本生效。
+          </div>
+
           <div v-if="canTest" class="field">
             <label>测试入参（JSON，试运行时传入）</label>
             <CodeEditor v-model="testInput" language="json" compact :height="200" />
@@ -1190,4 +1311,14 @@ function stateLabel(state) {
   user-select: none;
 }
 .json-adv[open] > summary { color: var(--text); }
+.trigger-url {
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 11px;
+  word-break: break-all;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: #2451c7;
+}
 </style>
