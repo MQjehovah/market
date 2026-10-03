@@ -124,6 +124,83 @@ def load_prompt_deps(files: dict[str, bytes], name: str = "") -> tuple[str, list
     return prompt, [d for d in deps if isinstance(d, dict)]
 
 
+def _mcp_servers_from_files(files: dict[str, bytes]) -> list[dict[str, Any]]:
+    """旧格式内嵌 MCP：优先 agent.json.mcp_servers，其次顶层 mcp_servers.json。"""
+    meta = parse_plugin_meta(files)
+    servers = meta.get("mcp_servers")
+    if isinstance(servers, list):
+        return [s for s in servers if isinstance(s, dict)]
+    raw = files.get("mcp_servers.json")
+    if raw is not None:
+        try:
+            val = json.loads(raw.decode("utf-8-sig"))
+        except Exception:  # noqa: BLE001
+            return []
+        if isinstance(val, list):
+            return [s for s in val if isinstance(s, dict)]
+        if isinstance(val, dict) and isinstance(val.get("mcpServers"), dict):
+            out = []
+            for sn, cfg in val["mcpServers"].items():
+                if isinstance(cfg, dict):
+                    out.append({"name": sn, **cfg})
+            return out
+    return []
+
+
+def legacy_agent_to_new(
+    files: dict[str, bytes], fallback_name: str = ""
+) -> dict[str, bytes] | None:
+    """旧格式专家包 → 新格式（plugin.json + agents/<name>.md + mcps/<n>/connection.json）。
+
+    已是新格式返回 None。保留 skills/ 及其它附件；移除旧 meta 文件与旧 mcp/ 目录。
+    """
+    has_new = PLUGIN_JSON in files and any(
+        p.startswith("agents/") and p.endswith(".md") for p in files
+    )
+    if has_new:
+        return None
+    meta = parse_plugin_meta(files)
+    name = str(meta.get("name") or fallback_name or "").strip()
+    if not name:
+        return None
+    description = str(meta.get("description") or "")
+    version = str(meta.get("version") or "0.1.0")
+    role = str(meta.get("role") or "")
+    prompt, deps = load_prompt_deps(files, name)
+    servers = _mcp_servers_from_files(files)
+
+    drop = {LEGACY_AGENT_JSON, LEGACY_PROMPT, LEGACY_DEPS, "mcp_servers.json"}
+    out: dict[str, bytes] = {}
+    for path, data in files.items():
+        if path in drop:
+            continue
+        if path.startswith("mcp/") or path.startswith("mcps/"):
+            continue  # 由 mcps/<n>/connection.json 重建
+        out[path] = data
+
+    out[PLUGIN_JSON] = build_plugin_json(
+        name=name, description=description, version=version, role=role, dependencies=deps
+    )
+    out[agent_md_path(name)] = build_agent_md(name, description, prompt)
+    for s in servers:
+        sn = str(s.get("name") or "").strip()
+        if not sn:
+            continue
+        conn = {
+            "name": sn,
+            "transport": s.get("transport") or "stdio",
+            "command": s.get("command") or "python",
+            "args": list(s.get("args") or []),
+            "env": s.get("env") or {},
+            "description": s.get("description") or "",
+            "enabled": s.get("enabled", True),
+        }
+        out[f"mcps/{sn}/connection.json"] = json.dumps(
+            conn, ensure_ascii=False, indent=2
+        ).encode("utf-8")
+    return out
+
+
 def connection_to_mcpserver(conn: dict[str, Any]) -> dict[str, Any] | None:
     """把 MCP 能力包的 connection.json 转为内核可读的连接配置；无法本地直连(gateway/缺字段)返回 None。"""
     if not isinstance(conn, dict):

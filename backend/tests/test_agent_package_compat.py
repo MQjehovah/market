@@ -2,7 +2,13 @@
 
 import json
 
-from app.services.agent_package import load_prompt_deps, parse_plugin_meta
+import json as _json
+
+from app.services.agent_package import (
+    legacy_agent_to_new,
+    load_prompt_deps,
+    parse_plugin_meta,
+)
 
 
 def _b(obj) -> bytes:
@@ -45,3 +51,35 @@ def test_legacy_deps_embedded_in_agent_json():
     }
     _, deps = load_prompt_deps(files, "旧专家")
     assert deps == [{"name": "gitlab", "type": "mcp"}]
+
+
+def test_legacy_agent_converts_to_new_format():
+    files = {
+        "agent.json": _b(
+            {
+                "name": "数字中台",
+                "description": "供应链助手",
+                "version": "1.1.5",
+                "dependencies": [{"name": "erp", "type": "mcp"}],
+                "mcp_servers": [
+                    {"name": "erp", "command": "python", "args": ["erp.py"], "env": {"X": "${X}"}}
+                ],
+            }
+        ),
+        "PROMPT.md": "你是数字中台".encode("utf-8"),
+        "dependencies.json": _b([{"name": "erp", "type": "mcp"}]),
+        "skills/demo/SKILL.md": "# demo".encode("utf-8"),
+        "mcp/config.json": b"{}",
+    }
+    out = legacy_agent_to_new(files, "数字中台")
+    assert out is not None
+    assert "plugin.json" in out and "agents/数字中台.md" in out
+    assert "mcps/erp/connection.json" in out
+    assert "skills/demo/SKILL.md" in out
+    assert "agent.json" not in out and "PROMPT.md" not in out and "mcp/config.json" not in out
+    meta = _json.loads(out["plugin.json"])
+    assert meta["dependencies"] == [{"name": "erp", "type": "mcp"}]
+    conn = _json.loads(out["mcps/erp/connection.json"])
+    assert conn["transport"] == "stdio" and conn["command"] == "python"
+    # 已是新格式 → 返回 None
+    assert legacy_agent_to_new(out, "数字中台") is None
