@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     llm_base_url: str = ""
     llm_api_key: str = ""
     llm_model: str = ""
-    agent_max_iterations: int = 10
+    agent_max_iterations: int = 100
 
     # runtime 调用授权：只有这些角色可以调用/执行能力（工具调用、Agent 任务、技能激活、
     # MCP 安装、工作流执行、A2A 委派）。默认仅管理员，可配成 "admin,user" 等。

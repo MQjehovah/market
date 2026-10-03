@@ -220,7 +220,9 @@ async def run_agent(
         skill_def = _skill_tool_def(runtime.get("skills") or [])
         if skill_def:
             tools.append(skill_def)
-        iterations = max_iterations or get_settings().agent_max_iterations or DEFAULT_MAX_ITERATIONS
+        from app.services.runtime_settings import agent_max_iterations as _runtime_max_iters
+
+        iterations = max_iterations or _runtime_max_iters() or DEFAULT_MAX_ITERATIONS
         tool_calls = 0
         steps: list[dict[str, Any]] = []
 

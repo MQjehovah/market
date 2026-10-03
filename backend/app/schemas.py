@@ -917,3 +917,14 @@ class AuthoringJobOut(BaseModel):
     fields: dict[str, Any] = Field(default_factory=dict)
     raw: str = ""
     error: str = ""
+
+
+class RuntimeSettingsOut(BaseModel):
+    agent_max_iterations: int
+    default: int
+    overridden: bool
+
+
+class RuntimeSettingsUpdate(BaseModel):
+    agent_max_iterations: int | None = Field(default=None, ge=1, le=1000)
+

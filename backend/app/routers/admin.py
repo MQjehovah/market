@@ -6,6 +6,7 @@ from sqlalchemy.orm import joinedload, selectinload
 
 from app.auth import CurrentUser, DbSession
 from app.auth import hash_password
+from app.config import get_settings
 from app.models import (
     A2ATask,
     AgentBinding,
@@ -27,12 +28,15 @@ from app.schemas import (
     ReviewRequest,
     ServiceTokenCreate,
     ServiceTokenCreated,
+    RuntimeSettingsOut,
+    RuntimeSettingsUpdate,
     ServiceTokenOut,
     StatsOut,
     UserAdminCreate,
     UserAdminUpdate,
     UserOut,
 )
+from app.services import runtime_settings
 from app.services.capabilities import change_status, parse_semver, review_capability
 from app.services.capabilities import to_capability_out
 from app.services.service_tokens import (
@@ -389,3 +393,28 @@ async def admin_revoke_service_token(token_id: str, db: DbSession, user: Current
         created_by=row.created_by,
         created_at=row.created_at,
     )
+
+
+def _runtime_settings_out() -> RuntimeSettingsOut:
+    base = get_settings().agent_max_iterations
+    override = runtime_settings.load().get("agent_max_iterations")
+    return RuntimeSettingsOut(
+        agent_max_iterations=runtime_settings.agent_max_iterations(),
+        default=base,
+        overridden=override is not None,
+    )
+
+
+@router.get("/runtime-settings", response_model=RuntimeSettingsOut)
+async def get_runtime_settings(user: CurrentUser):
+    """运行时可变配置（读取即最新；改后无需重启，run_agent 每次生效）。"""
+    require_admin(user)
+    return _runtime_settings_out()
+
+
+@router.put("/runtime-settings", response_model=RuntimeSettingsOut)
+async def put_runtime_settings(data: RuntimeSettingsUpdate, user: CurrentUser):
+    """更新运行时配置；agent_max_iterations 传 null 则恢复默认。"""
+    require_admin(user)
+    runtime_settings.save({"agent_max_iterations": data.agent_max_iterations})
+    return _runtime_settings_out()
