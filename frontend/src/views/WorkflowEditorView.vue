@@ -745,6 +745,7 @@ function stateLabel(state) {
   return {
     pending: '等待',
     running: '执行中',
+    waiting: '待审批',
     succeeded: '成功',
     failed: '失败',
     timeout: '超时',
@@ -777,7 +778,7 @@ function stateLabel(state) {
     <div v-if="error" class="alert alert-error" style="margin: 0 16px 12px">{{ error }}</div>
     <div v-if="notice" class="alert alert-success" style="margin: 0 16px 12px">{{ notice }}</div>
 
-    <div class="wf-main" :style="{ gridTemplateColumns: canEdit ? '210px 1fr 330px' : '1fr 330px' }">
+    <div class="wf-main" :style="{ gridTemplateColumns: canEdit ? '224px 1fr 344px' : '1fr 344px' }">
       <aside v-if="canEdit" class="wf-palette">
         <div class="wf-panel-title">节点</div>
         <template v-for="g in PALETTE_GROUPS" :key="g">
@@ -828,7 +829,8 @@ function stateLabel(state) {
       <aside class="wf-inspector">
         <template v-if="selectedNode">
           <div class="wf-panel-title">
-            节点配置 · {{ selectedTypeLabel }}
+            <span class="wf-title-text">节点配置</span>
+            <span class="wf-type-chip">{{ selectedTypeLabel }}</span>
             <button class="wf-close" @click="selectedNodeId = ''">✕</button>
           </div>
 
@@ -845,6 +847,10 @@ function stateLabel(state) {
                   @change="onCapChange($event.target.value)"
                 >
                   <option value="">{{ capLoading[selectedNode.type] ? '加载中…' : '请选择…' }}</option>
+                  <option
+                    v-if="selectedNode.data.node.capability && !selectedCaps.some((c) => c.name === selectedNode.data.node.capability)"
+                    :value="selectedNode.data.node.capability"
+                  >{{ selectedNode.data.node.capability }}（当前）</option>
                   <option v-for="cap in selectedCaps" :key="cap.id" :value="cap.name">
                     {{ cap.name }} · v{{ cap.version }}
                   </option>
@@ -870,7 +876,7 @@ function stateLabel(state) {
             </div>
           </template>
 
-          <div class="insp-sec">参数</div>
+          <div v-if="formFields.length || selectedNode.type === 'tool'" class="insp-sec">参数</div>
           <div v-for="f in formFields" :key="f.key" class="field">
             <label>{{ f.label }}</label>
 
@@ -1112,11 +1118,22 @@ function stateLabel(state) {
       <div class="flex-between flex-wrap">
         <h3 style="margin: 0">
           试运行结果
-          <span class="badge" :class="execution.state === 'succeeded' ? 'badge-success' : execution.state === 'running' ? 'badge-warning' : 'badge-danger'">
-            {{ { pending: '等待', running: '执行中', succeeded: '成功', failed: '失败', canceled: '已取消' }[execution.state] || execution.state }}
+          <span
+            class="badge"
+            :class="{
+              'badge-success': execution.state === 'succeeded',
+              'badge-warning': ['running', 'waiting'].includes(execution.state),
+              'badge-danger': ['failed', 'canceled'].includes(execution.state)
+            }"
+          >
+            {{ { pending: '等待', running: '执行中', waiting: '待审批', succeeded: '成功', failed: '失败', canceled: '已取消' }[execution.state] || execution.state }}
           </span>
         </h3>
         <span class="muted" style="font-size: 12px">{{ formatDate(execution.updated_at) }}</span>
+      </div>
+      <div v-if="execution.state === 'waiting'" class="wf-wait-hint">
+        <span>流程已暂停在「人工审批」节点，等待决定。</span>
+        <router-link to="/approvals" class="btn btn-sm btn-primary">去审批中心</router-link>
       </div>
       <div v-if="execution.error" class="alert alert-error mt-16">{{ execution.error }}</div>
       <div class="wf-result-grid mt-16">
@@ -1171,38 +1188,58 @@ function stateLabel(state) {
 .wf-main {
   flex: 1;
   display: grid;
-  grid-template-columns: 210px 1fr 330px;
+  grid-template-columns: 224px 1fr 344px;
   min-height: 0;
 }
 .wf-palette {
   border-right: 1px solid var(--border);
   background: var(--panel);
-  padding: 14px;
+  padding: 14px 12px;
   overflow: auto;
 }
 .wf-panel-title {
+  position: sticky;
+  top: -14px;
+  z-index: 6;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
   font-weight: 600;
   font-size: 14px;
-  margin-bottom: 12px;
+  margin: 0 0 6px;
+  padding: 12px 0 10px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
 }
-.wf-close { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 14px; }
+.wf-title-text { font-weight: 600; }
+.wf-type-chip {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--primary);
+  background: var(--primary-soft, #eef3ff);
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+.wf-close { margin-left: auto; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 14px; }
 .wf-close:hover { color: var(--text); }
 .wf-palette-item {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px;
-  margin-bottom: 8px;
+  padding: 9px 10px;
+  margin-bottom: 7px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--panel-2);
   cursor: grab;
-  transition: border-color 0.15s ease;
+  transition: border-color 0.15s ease, transform 0.12s ease, box-shadow 0.15s ease;
 }
-.wf-palette-item:hover { border-color: var(--primary); }
+.wf-palette-item:hover {
+  border-color: var(--primary);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(47, 107, 255, 0.12);
+}
+.wf-palette-item:active { cursor: grabbing; }
 .wf-palette-icon {
   width: 34px; height: 34px; border-radius: 9px;
   display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0;
@@ -1274,7 +1311,8 @@ function stateLabel(state) {
 }
 .chip:hover { border-color: var(--primary); }
 .chip-up { color: #7ce3ab; }
-.checkbox { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); padding-top: 9px; }
+.checkbox { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); margin-top: 8px; cursor: pointer; }
+.checkbox input { margin: 0; }
 .code { font-family: 'Cascadia Code', Consolas, monospace; font-size: 12px; }
 .btn-block { width: 100%; }
 .wf-result {
@@ -1326,6 +1364,19 @@ function stateLabel(state) {
   border-bottom: 1px solid var(--border);
 }
 .insp-sec:first-child { margin-top: 4px; }
+.wf-wait-hint {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  color: #b7791f;
+  background: rgba(245, 165, 36, 0.12);
+  border: 1px solid #f5dfb0;
+}
 .cap-select-row { display: flex; gap: 8px; align-items: center; }
 .cap-select-row .select { flex: 1; min-width: 0; }
 .cap-ver { flex: none; width: 84px; }

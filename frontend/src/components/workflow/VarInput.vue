@@ -1,6 +1,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
 
+
 const props = defineProps({
   modelValue: { type: String, default: '' },
   multiline: { type: Boolean, default: false },
@@ -12,6 +13,9 @@ const emit = defineEmits(['update:modelValue'])
 
 const el = ref(null)
 const open = ref(false)
+const menuStyle = ref({})
+const MENU_WIDTH = 290
+const MENU_MAX_H = 320
 
 const grouped = computed(() => {
   const map = new Map()
@@ -28,12 +32,32 @@ function onInput(e) {
 }
 
 function onDocClick(e) {
-  if (!e.target.closest('.var-input')) close()
+  if (!e.target.closest('.var-input') && !e.target.closest('.var-menu')) close()
+}
+
+function positionMenu() {
+  const node = el.value
+  if (!node) return
+  const r = node.getBoundingClientRect()
+  const left = Math.max(8, Math.min(r.right - MENU_WIDTH, window.innerWidth - MENU_WIDTH - 8))
+  const top = Math.min(r.bottom + 6, window.innerHeight - MENU_MAX_H - 8)
+  menuStyle.value = {
+    position: 'fixed',
+    top: `${Math.max(8, top)}px`,
+    left: `${left}px`,
+    width: `${MENU_WIDTH}px`
+  }
+}
+
+function onScrollResize() {
+  if (open.value) positionMenu()
 }
 
 function close() {
   open.value = false
   document.removeEventListener('click', onDocClick, true)
+  window.removeEventListener('scroll', onScrollResize, true)
+  window.removeEventListener('resize', onScrollResize)
 }
 
 function toggle() {
@@ -43,7 +67,10 @@ function toggle() {
     return
   }
   open.value = true
+  nextTick(positionMenu)
   document.addEventListener('click', onDocClick, true)
+  window.addEventListener('scroll', onScrollResize, true)
+  window.addEventListener('resize', onScrollResize)
 }
 
 function pick(value) {
@@ -62,7 +89,7 @@ function pick(value) {
   close()
 }
 
-onBeforeUnmount(() => document.removeEventListener('click', onDocClick, true))
+onBeforeUnmount(() => close())
 </script>
 
 <template>
@@ -88,7 +115,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick, true))
     />
     <button type="button" class="var-btn" :disabled="disabled" title="插入变量" @click="toggle">{x}</button>
 
-    <div v-if="open" class="var-menu">
+    <div v-if="open" class="var-menu" :style="menuStyle">
       <div v-for="g in grouped" :key="g.label" class="var-group">
         <div class="var-group-title">{{ g.label }}</div>
         <button
@@ -124,11 +151,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick, true))
 }
 .var-btn:hover { border-color: var(--primary); color: var(--primary); }
 .var-menu {
-  position: absolute;
-  right: 0;
-  top: calc(100% + 4px);
-  z-index: 60;
-  width: 290px;
+  z-index: 200;
   max-height: 320px;
   overflow: auto;
   background: var(--panel, #fff);
