@@ -13,7 +13,7 @@ IT_ALERT_WORKFLOW: dict = {
         {
             "id": "start",
             "type": "start",
-            "params": {"fields": ["alert_id", "host", "severity", "message", "source"]},
+            "params": {"fields": ["alert_id", "host", "severity", "message", "source", "to_userid"]},
             "position": {"x": 40, "y": 200},
         },
         {
@@ -78,8 +78,12 @@ IT_ALERT_WORKFLOW: dict = {
             "capability": "dingtalk",
             "params": {
                 "op": "call",
-                "tool": "dingtalk_send_message",
-                "args": {"text": "告警 {{#start.alert_id#}}（{{#start.host#}}）：\n{{#diag.text#}}\n工单：{{#ticket.text#}}"},
+                "tool": "dingtalk_send_markdown_single",
+                "args": {
+                    "dingtalk_userids": ["{{#start.to_userid#}}"],
+                    "title": "IT 告警 {{#start.alert_id#}}",
+                    "text": "告警 {{#start.alert_id#}}（{{#start.host#}}）：\n{{#diag.text#}}\n工单：{{#ticket.text#}}",
+                },
             },
             "position": {"x": 1360, "y": 220},
         },
@@ -132,7 +136,7 @@ CHANGE_APPROVAL_WORKFLOW: dict = {
         {
             "id": "start",
             "type": "start",
-            "params": {"fields": ["change_id", "target", "action"]},
+            "params": {"fields": ["change_id", "target", "action", "to_userid"]},
             "position": {"x": 40, "y": 180},
         },
         {
@@ -161,8 +165,12 @@ CHANGE_APPROVAL_WORKFLOW: dict = {
             "capability": "dingtalk",
             "params": {
                 "op": "call",
-                "tool": "dingtalk_send_message",
-                "args": {"text": "变更 {{#start.change_id#}} 已批准执行：\n{{#plan.text#}}"},
+                "tool": "dingtalk_send_markdown_single",
+                "args": {
+                    "dingtalk_userids": ["{{#start.to_userid#}}"],
+                    "title": "变更审批 {{#start.change_id#}}",
+                    "text": "变更 {{#start.change_id#}} 已批准执行：\n{{#plan.text#}}",
+                },
             },
             "position": {"x": 700, "y": 100},
         },
