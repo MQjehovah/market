@@ -5,6 +5,7 @@ import BrowseView from '../views/BrowseView.vue'
 import CapabilityDetailView from '../views/CapabilityDetailView.vue'
 import WorkflowEditorView from '../views/WorkflowEditorView.vue'
 import WorkflowChatView from '../views/WorkflowChatView.vue'
+import ApprovalsView from '../views/ApprovalsView.vue'
 import MyCapabilitiesView from '../views/MyCapabilitiesView.vue'
 import MySecretsView from '../views/MySecretsView.vue'
 import ProfileView from '../views/ProfileView.vue'
@@ -36,6 +37,7 @@ const router = createRouter({
     { path: '/workflows/new', component: WorkflowEditorView, meta: { title: '新建能力编排', auth: true, full: true } },
     { path: '/workflows/:id/edit', component: WorkflowEditorView, props: true, meta: { title: '能力编排', auth: true, full: true } },
     { path: '/workflows/:id/chat', component: WorkflowChatView, props: true, meta: { title: '会话调试', auth: true } },
+    { path: '/approvals', component: ApprovalsView, meta: { title: '审批中心', auth: true } },
     { path: '/login', component: LoginView, meta: { title: '登录', blank: true } },
     { path: '/capabilities/:id', component: CapabilityDetailView, props: true, meta: { title: '能力详情' } },
     { path: '/my', component: MyCapabilitiesView, meta: { title: '我的能力', auth: true } },

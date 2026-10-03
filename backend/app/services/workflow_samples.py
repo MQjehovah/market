@@ -122,6 +122,80 @@ IT_ALERT_WORKFLOW: dict = {
 }
 
 
+# 带人工审批闸门：LLM 出方案 → 审批（暂停等待）→ 通过则通知、驳回则记录。
+CHANGE_APPROVAL_WORKFLOW: dict = {
+    "name": "变更审批",
+    "description": "变更申请 → LLM 生成方案 → 人工审批（暂停）→ 通过执行通知 / 驳回记录",
+    "on_error": "continue",
+    "timeout_seconds": 0,
+    "nodes": [
+        {
+            "id": "start",
+            "type": "start",
+            "params": {"fields": ["change_id", "target", "action"]},
+            "position": {"x": 40, "y": 180},
+        },
+        {
+            "id": "plan",
+            "type": "llm",
+            "params": {
+                "system": "你是变更评审助手，输出简洁的中文变更方案与风险。",
+                "prompt": "目标系统：{{#start.target#}}\n操作：{{#start.action#}}\n请给出变更步骤与风险。",
+            },
+            "position": {"x": 260, "y": 180},
+        },
+        {
+            "id": "approval",
+            "type": "approval",
+            "params": {
+                "title": "审批变更执行：{{#start.change_id#}}",
+                "description": "{{#plan.text#}}",
+                "assignee": "ops",
+                "timeout_seconds": 86400,
+            },
+            "position": {"x": 480, "y": 180},
+        },
+        {
+            "id": "notify",
+            "type": "mcp",
+            "capability": "dingtalk",
+            "params": {
+                "op": "call",
+                "tool": "dingtalk_send_message",
+                "args": {"text": "变更 {{#start.change_id#}} 已批准执行：\n{{#plan.text#}}"},
+            },
+            "position": {"x": 700, "y": 100},
+        },
+        {
+            "id": "rejected",
+            "type": "template",
+            "params": {"template": "变更 {{#start.change_id#}} 被驳回：{{#approval.comment#}}"},
+            "position": {"x": 700, "y": 280},
+        },
+        {
+            "id": "end",
+            "type": "end",
+            "params": {
+                "outputs": {
+                    "approved": "{{#approval.approved#}}",
+                    "plan": "{{#plan.text#}}",
+                    "result": "{{#notify.result#}}{{#rejected.text#}}",
+                }
+            },
+            "position": {"x": 920, "y": 180},
+        },
+    ],
+    "edges": [
+        {"id": "a1", "from": "start", "to": "plan"},
+        {"id": "a2", "from": "plan", "to": "approval"},
+        {"id": "a3", "from": "approval", "to": "notify", "condition": "true"},
+        {"id": "a4", "from": "approval", "to": "rejected", "condition": "false"},
+        {"id": "a5", "from": "notify", "to": "end"},
+        {"id": "a6", "from": "rejected", "to": "end"},
+    ],
+}
+
+
 # 会话式（chatflow）：多轮历史 + 知识库检索 + 会话变量记录主题 → answer 节点回复。
 KNOWLEDGE_QA_CHATFLOW: dict = {
     "name": "制度问答",

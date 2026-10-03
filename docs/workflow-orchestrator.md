@@ -10,7 +10,7 @@ market 的工作流能力是一个 Dify 式编排器：**DAG 并行调度 + 条�
 |---|---|---|
 | 基础 | `start` / `end` / `answer` | 入口 / 汇总输出 / 直接回复 |
 | LLM | `llm` / `agent` / `parameter-extractor` / `knowledge-retrieval` | 大模型 / A2A 专家 / 结构化抽取 / 知识库检索 |
-| 逻辑 | `if-else` / `question-classifier` / `iteration` / `loop` / `variable-aggregator` / `variable-assigner` | 条件 / 分类分流 / 迭代 / 循环 / 聚合 / 赋值 |
+| 逻辑 | `if-else` / `question-classifier` / `iteration` / `loop` / `variable-aggregator` / `variable-assigner` / `approval` | 条件 / 分类分流 / 迭代 / 循环 / 聚合 / 赋值 / 人工审批 |
 | 数据 | `code` / `http-request` / `template-transform` / `doc-extractor` / `list-operator` | 沙箱代码 / HTTP / 模板 / 文档抽取 / 列表操作 |
 | 市场能力 | `tool` / `skill` / `mcp` | 市场工具 / 技能 / 连接器（安装或调用） |
 
@@ -72,6 +72,21 @@ start → knowledge-retrieval → question-classifier
   - 删除：`DELETE /api/runtime/workflows/conversations/{id}`。
 - 前端：发布版工作流详情页「对话调试」→ `/workflows/{id}/chat`。
 - 内置模板 `制度问答`（`KNOWLEDGE_QA_CHATFLOW`）。
+
+## 人工审批（human-in-the-loop）
+
+`approval` 节点在执行到此处时**暂停工作流**（`state="waiting"`），记录待审批项（含节点输出入
+`runtime.pending`），等人工决定后再**断点续跑**（已完成节点不重跑）。
+
+- 声明：节点 `params` 可含 `title` / `description` / `assignee` / `timeout_seconds`。
+- 输出/分支：`{ approved, comment, approver, decision_at }`；下游按 `true`（通过）/`false`（驳回）分支。
+- 接口：
+  - 待审批列表：`GET /api/runtime/workflows/approvals`（管理员全部；否则本人发起或被指派）。
+  - 决定并发续跑：`POST /api/runtime/workflows/executions/{exec_id}/approve`，body `{ "node_id": "...", "approved": true, "comment": "..." }`。
+- 可见性：执行拥有者、`assignee` 命中（用户名/角色/部门）或管理员可审批。
+- 前端：`/approvals` 审批中心；编辑器节点面板「逻辑 → 人工审批」（通过/驳回双出口）。
+- 内置模板 `变更审批`（`CHANGE_APPROVAL_WORKFLOW`）。
+- 说明：进程内暂停（非独立 worker 持久恢复）；多 worker 下审批列表以 DB 为准，续跑由处理请求的进程执行。
 
 ## 环境变量
 

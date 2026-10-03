@@ -768,10 +768,28 @@ class WorkflowExecutionOut(BaseModel):
     input_data: dict[str, Any]
     outputs: dict[str, Any]
     node_states: dict[str, Any]
+    pending: list[dict[str, Any]] = Field(default_factory=list)
     error: str = ""
     created_by: str
     created_at: datetime
     updated_at: datetime
+
+
+class WorkflowApprovalRequest(BaseModel):
+    node_id: str = Field(min_length=1, max_length=128)
+    approved: bool
+    comment: str = Field(default="", max_length=2000)
+
+
+class WorkflowApprovalOut(BaseModel):
+    execution_id: str
+    workflow_name: str = ""
+    node_id: str
+    title: str = ""
+    description: str = ""
+    assignee: str = ""
+    created_by: str = ""
+    created_at: datetime | None = None
 
 
 class MCPGatewayServerIn(BaseModel):

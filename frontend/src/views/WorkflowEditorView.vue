@@ -20,7 +20,7 @@ const { screenToFlowCoordinate } = useVueFlow()
 const ALL_TYPES = [
   'start', 'end', 'answer', 'llm', 'agent', 'parameter-extractor', 'knowledge-retrieval',
   'if-else', 'question-classifier', 'iteration', 'loop', 'variable-aggregator', 'variable-assigner',
-  'code', 'http-request', 'template-transform', 'doc-extractor', 'list-operator',
+  'code', 'http-request', 'template-transform', 'doc-extractor', 'list-operator', 'approval',
   'tool', 'skill', 'mcp'
 ]
 const nodeTypes = Object.fromEntries(ALL_TYPES.map((t) => [t, WorkflowNode]))
@@ -39,6 +39,7 @@ const PALETTE = [
   { group: '逻辑', type: 'loop', label: '循环', desc: '条件循环', color: '#e2a93b', icon: 'LP' },
   { group: '逻辑', type: 'variable-aggregator', label: '变量聚合', desc: '多路汇聚', color: '#e2a93b', icon: 'AGG' },
   { group: '逻辑', type: 'variable-assigner', label: '变量赋值', desc: '写会话变量', color: '#e2a93b', icon: 'ASN' },
+  { group: '逻辑', type: 'approval', label: '人工审批', desc: '暂停等待审批', color: '#e2a93b', icon: 'APR' },
   { group: '数据', type: 'code', label: '代码', desc: '沙箱执行', color: '#4f8cff', icon: '</>' },
   { group: '数据', type: 'http-request', label: 'HTTP', desc: 'HTTP 请求', color: '#4f8cff', icon: 'HTTP' },
   { group: '数据', type: 'template-transform', label: '模板', desc: '文本/JSON 变换', color: '#4f8cff', icon: 'TPL' },

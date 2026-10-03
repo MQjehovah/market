@@ -169,6 +169,10 @@ async def _auto_migrate(conn) -> None:
                 sync_conn.exec_driver_sql(
                     "ALTER TABLE workflow_executions ADD COLUMN conversation_id VARCHAR(36) DEFAULT ''"
                 )
+            if "runtime" not in wf_cols:
+                sync_conn.exec_driver_sql(
+                    "ALTER TABLE workflow_executions ADD COLUMN runtime JSON DEFAULT '{}'"
+                )
         if "users" in tables:
             user_cols = {c["name"] for c in inspector.get_columns("users")}
             if "department" not in user_cols:

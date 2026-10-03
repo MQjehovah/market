@@ -135,6 +135,13 @@ watch(isAdmin, loadAdminBadge)
           >
             我的能力
           </router-link>
+          <router-link
+            to="/approvals"
+            class="nav-item"
+            :class="{ active: route.path === '/approvals' }"
+          >
+            审批中心
+          </router-link>
         </template>
         <router-link v-else to="/login" class="nav-item">登录后管理</router-link>
       </div>

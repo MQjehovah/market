@@ -23,6 +23,8 @@ from app.permissions import can_view, require_runtime_access
 from app.schemas import (
     CapabilityOut,
     MessageOut,
+    WorkflowApprovalOut,
+    WorkflowApprovalRequest,
     WorkflowChatOut,
     WorkflowChatRequest,
     WorkflowConversationOut,
@@ -34,7 +36,12 @@ from app.schemas import (
 )
 from app.services.capabilities import ensure_name_ownership, normalize_cap_name, to_capability_out
 from app.services.marketplace import resolve_capability
-from app.services.workflows import execute_workflow, load_workflow_definition, validate_definition
+from app.services.workflows import (
+    execute_workflow,
+    load_workflow_definition,
+    resume_workflow,
+    validate_definition,
+)
 from app.storage import get_storage
 
 router = APIRouter(prefix="/api", tags=["workflows"])
@@ -128,9 +135,13 @@ def _load_workflow(cap: Capability) -> dict:
 @router.get("/workflows/templates")
 async def workflow_templates():
     """内置示例工作流模板（Dify 对齐），供「从模板新建」。"""
-    from app.services.workflow_samples import IT_ALERT_WORKFLOW, KNOWLEDGE_QA_CHATFLOW
+    from app.services.workflow_samples import (
+        CHANGE_APPROVAL_WORKFLOW,
+        IT_ALERT_WORKFLOW,
+        KNOWLEDGE_QA_CHATFLOW,
+    )
 
-    samples = [IT_ALERT_WORKFLOW, KNOWLEDGE_QA_CHATFLOW]
+    samples = [IT_ALERT_WORKFLOW, KNOWLEDGE_QA_CHATFLOW, CHANGE_APPROVAL_WORKFLOW]
     return [
         {
             "name": w.get("name", ""),
@@ -206,6 +217,7 @@ def _to_out(ex: WorkflowExecution, cap: Capability | None) -> WorkflowExecutionO
         input_data=ex.input_data or {},
         outputs=ex.outputs or {},
         node_states=ex.node_states or {},
+        pending=(ex.runtime or {}).get("pending") or [],
         error=ex.error or "",
         created_by=ex.created_by,
         created_at=ex.created_at,
@@ -365,6 +377,88 @@ async def delete_conversation(conversation_id: str, db: DbSession, user: Current
     await db.delete(conv)
     await db.commit()
     return MessageOut(message="会话已删除")
+
+
+def _can_approve(execution: WorkflowExecution, item: dict, user) -> bool:
+    if user.role == "admin" or execution.created_by == user.id:
+        return True
+    assignee = str(item.get("assignee") or "")
+    if not assignee:
+        return False
+    return assignee in {user.username, user.role, getattr(user, "department", "")}
+
+
+@router.get("/runtime/workflows/approvals", response_model=list[WorkflowApprovalOut])
+async def list_approvals(db: DbSession, user: CurrentUser):
+    """当前用户可见的待审批项（管理员全部；否则本人发起或指派给我的）。"""
+    rows = list(
+        (
+            await db.scalars(
+                select(WorkflowExecution).where(WorkflowExecution.state == "waiting")
+            )
+        ).all()
+    )
+    out: list[WorkflowApprovalOut] = []
+    for ex in rows:
+        pending = (ex.runtime or {}).get("pending") or []
+        if not pending:
+            continue
+        cap = await db.get(Capability, ex.workflow_id)
+        for item in pending:
+            if not _can_approve(ex, item, user):
+                continue
+            out.append(
+                WorkflowApprovalOut(
+                    execution_id=ex.id,
+                    workflow_name=cap.name if cap else "",
+                    node_id=str(item.get("node_id") or ""),
+                    title=str(item.get("title") or ""),
+                    description=str(item.get("description") or ""),
+                    assignee=str(item.get("assignee") or ""),
+                    created_by=ex.created_by,
+                    created_at=ex.created_at,
+                )
+            )
+    return out
+
+
+@router.post(
+    "/runtime/workflows/executions/{exec_id}/approve",
+    response_model=WorkflowExecutionOut,
+)
+async def approve_execution(
+    exec_id: str, data: WorkflowApprovalRequest, db: DbSession, user: CurrentUser
+):
+    """对等待中的审批节点做出通过/驳回决定，并续跑工作流。"""
+    execution = await db.get(WorkflowExecution, exec_id)
+    if execution is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "执行记录不存在")
+    if execution.state != "waiting":
+        raise HTTPException(status.HTTP_409_CONFLICT, "该执行当前不在等待审批")
+    pending = (execution.runtime or {}).get("pending") or []
+    item = next((p for p in pending if str(p.get("node_id")) == data.node_id), None)
+    if item is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "该节点不在待审批列表")
+    if not _can_approve(execution, item, user):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "无权审批该节点")
+    cap = await db.scalar(
+        select(Capability)
+        .options(selectinload(Capability.artifacts))
+        .where(Capability.id == execution.workflow_id)
+    )
+    if cap is None or cap.type != "workflow":
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "工作流能力缺失")
+    result = await resume_workflow(
+        db,
+        user,
+        cap,
+        execution,
+        data.node_id,
+        data.approved,
+        data.comment,
+        approver=user.username,
+    )
+    return _to_out(result, cap)
 
 
 @router.get("/runtime/workflows/executions/{exec_id}", response_model=WorkflowExecutionOut)

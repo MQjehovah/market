@@ -50,6 +50,7 @@ _NODE_TYPES = _MARKET_TYPES | {
     "start", "end", "llm", "http", "if_else", "iteration", "template",
     "question_classifier", "parameter_extractor", "list_operator", "doc_extractor",
     "variable_aggregator", "variable_assigner", "loop", "answer", "knowledge_retrieval", "code",
+    "approval",
 }
 # Dify 节点名(连字符) → 内部名(下划线)；对齐 Dify 同时不改内部实现
 _TYPE_ALIASES = {
@@ -63,6 +64,7 @@ _TYPE_ALIASES = {
     "variable-aggregator": "variable_aggregator",
     "variable-assigner": "variable_assigner",
     "knowledge-retrieval": "knowledge_retrieval",
+    "human-approval": "approval",
 }
 _MAX_PARALLEL = 4
 
@@ -591,6 +593,17 @@ async def _execute_node(
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"code 执行失败: {exc}")
         return {"output": res}
+    if ntype == "approval":
+        p = node.get("params") or {}
+        return {
+            "wait": {
+                "node_id": node["id"],
+                "title": str(render_value(p.get("title") or "待审批", ctx) or "待审批"),
+                "description": str(render_value(p.get("description") or "", ctx) or ""),
+                "assignee": str(p.get("assignee") or ""),
+                "timeout_seconds": int(p.get("timeout_seconds") or 0),
+            }
+        }
 
     raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"未知节点类型 {ntype}")
 
@@ -629,102 +642,114 @@ async def _load_conversation_history(
     return turns
 
 
-async def execute_workflow(
-    db: AsyncSession,
-    user: User,
-    cap: Capability,
-    input_data: dict[str, Any],
-    conversation: WorkflowConversation | None = None,
-) -> WorkflowExecution:
-    definition = load_workflow_definition(cap)
-    validate_definition(definition)
-    nodes = {n["id"]: n for n in definition["nodes"]}
-    edges = definition.get("edges") or []
-
+def _index_edges(
+    nodes: dict[str, Any], edges: list[dict[str, Any]]
+) -> tuple[dict[str, list[int]], dict[str, list[int]]]:
     incoming: dict[str, list[int]] = {nid: [] for nid in nodes}
     outgoing: dict[str, list[int]] = {nid: [] for nid in nodes}
     for i, e in enumerate(edges):
         incoming[e["to"]].append(i)
         outgoing[e["from"]].append(i)
-    edge_active: list[bool] = [True] * len(edges)
+    return incoming, outgoing
 
-    node_states: dict[str, Any] = {nid: "pending" for nid in nodes}
-    outputs: dict[str, Any] = {}
-    history: list[dict[str, str]] = []
-    if conversation is not None:
-        conv_cfg = definition.get("conversation") or {}
-        history = await _load_conversation_history(
-            db, conversation, int(conv_cfg.get("history_turns") or 10) * 2
-        )
-    ctx: dict[str, Any] = {
+
+def _build_ctx(
+    input_data: dict[str, Any],
+    history: list[dict[str, str]],
+    conv_vars: dict[str, Any],
+    conversation_id: str = "",
+) -> dict[str, Any]:
+    return {
         "input": input_data,
         "sys": {
             "query": input_data.get("query") if isinstance(input_data, dict) else "",
             "now": time.strftime("%Y-%m-%d %H:%M:%S"),
             "history": history,
-            "conversation_id": conversation.id if conversation is not None else "",
+            "conversation_id": conversation_id,
         },
         "history": history,
+        "conversation": dict(conv_vars or {}),
     }
-    if conversation is not None:
-        ctx["conversation"] = dict(conversation.variables or {})
-    on_error = definition.get("on_error", "fail")
-    overall_timeout = int(definition.get("timeout_seconds") or 0)
 
-    execution = WorkflowExecution(
-        workflow_id=cap.id,
-        state="running",
-        input_data=input_data,
-        node_states=node_states,
-        conversation_id=conversation.id if conversation is not None else "",
-        created_by=user.id,
-    )
-    db.add(execution)
-    await db.flush()
-    if cap.status in ("published", "deprecated", "reviewing"):
-        await record_usage(db, user, cap, "workflow_execute", {"input": input_data})
-    await db.commit()
+
+async def _run_schedule(
+    db: AsyncSession,
+    user: User,
+    nodes: dict[str, Any],
+    edges: list[dict[str, Any]],
+    incoming: dict[str, list[int]],
+    outgoing: dict[str, list[int]],
+    ctx: dict[str, Any],
+    state: dict[str, Any],
+    execution: WorkflowExecution,
+    overall_timeout: int = 0,
+    on_error: str = "fail",
+) -> None:
+    """推进 DAG 直到完成 / 失败 / 出现审批等待；就地更新 state。
+
+    出现审批等待时把对应节点置 'waiting' 并记录 pending、execution.state='waiting'，
+    之后可经 resume_workflow 续跑。
+    """
+    node_states = state["node_states"]
+    edge_active = state["edge_active"]
+    outputs = state["outputs"]
+    pending: list[dict[str, Any]] = state.setdefault("pending", [])
 
     def _skip_downstream() -> None:
         for nid, st in node_states.items():
             if st == "pending":
                 node_states[nid] = "skipped"
 
-    async def _run_one(nid: str) -> None:
+    async def _run_one(nid: str) -> dict[str, Any]:
         node = nodes[nid]
         node_timeout = int(node.get("timeout_seconds") or 120)
         retries = int(node.get("retries") or 0)
         attempt = 0
         while True:
             try:
-                result = await asyncio.wait_for(_execute_node(db, user, node, ctx), timeout=node_timeout)
+                result = await asyncio.wait_for(
+                    _execute_node(db, user, node, ctx), timeout=node_timeout
+                )
                 break
             except asyncio.TimeoutError:
                 node_states[nid] = "timeout"
                 if attempt >= retries:
-                    raise HTTPException(status.HTTP_504_GATEWAY_TIMEOUT, f"节点 {nid} 执行超时（>{node_timeout}s）")
+                    raise HTTPException(
+                        status.HTTP_504_GATEWAY_TIMEOUT,
+                        f"节点 {nid} 执行超时（>{node_timeout}s）",
+                    )
             except HTTPException:
                 node_states[nid] = "failed"
                 if attempt >= retries:
                     raise
             attempt += 1
+        if isinstance(result, dict) and result.get("wait"):
+            node_states[nid] = "waiting"
+            await db.commit()
+            return {"nid": nid, "wait": result["wait"], "exc": None}
         node_output = result.get("output") or {}
         outputs[nid] = node_output
         ctx[nid] = node_output
         node_states[nid] = "succeeded"
         if _canon_type(node["type"]) in ("if_else", "question_classifier"):
-            branch = str(result.get("branch") or ("true" if _canon_type(node["type"]) == "if_else" else "")).strip().lower()
+            branch = str(
+                result.get("branch")
+                or ("true" if _canon_type(node["type"]) == "if_else" else "")
+            ).strip().lower()
             for ei in outgoing[nid]:
                 cond = str(edges[ei].get("condition") or "").strip().lower()
                 edge_active[ei] = (cond == "") or (cond == branch)
         await db.commit()
+        return {"nid": nid, "wait": None, "exc": None}
 
     try:
         while True:
             if execution.state == "canceled":
                 break
             if overall_timeout:
-                elapsed = (execution.updated_at.astimezone() - execution.created_at.astimezone()).total_seconds()
+                elapsed = (
+                    execution.updated_at.astimezone() - execution.created_at.astimezone()
+                ).total_seconds()
                 if elapsed >= overall_timeout:
                     execution.state = "failed"
                     execution.error = f"工作流超时（>{overall_timeout}s）"
@@ -765,24 +790,35 @@ async def execute_workflow(
 
             sem = asyncio.Semaphore(_MAX_PARALLEL)
 
-            async def _guarded(nid: str) -> tuple[str, Exception | None]:
+            async def _guarded(nid: str) -> dict[str, Any]:
                 async with sem:
                     try:
-                        await _run_one(nid)
-                        return nid, None
+                        return await _run_one(nid)
                     except Exception as exc:  # noqa: BLE001
-                        return nid, exc
+                        return {"nid": nid, "wait": None, "exc": exc}
 
             results = await asyncio.gather(*[_guarded(nid) for nid in ready])
             fatal = False
-            for nid, exc in results:
+            for res in results:
+                nid = res["nid"]
+                if res.get("wait"):
+                    info = dict(res["wait"])
+                    info.setdefault("execution_id", execution.id)
+                    info.setdefault("created_at", time.strftime("%Y-%m-%d %H:%M:%S"))
+                    pending.append(info)
+                    continue
+                exc = res.get("exc")
                 if exc is None:
                     continue
                 if node_states.get(nid) not in ("failed", "timeout"):
                     node_states[nid] = "failed"
                 for ei in outgoing[nid]:
                     edge_active[ei] = False
-                msg = exc.detail if isinstance(exc, HTTPException) else f"{type(exc).__name__}: {exc}"
+                msg = (
+                    exc.detail
+                    if isinstance(exc, HTTPException)
+                    else f"{type(exc).__name__}: {exc}"
+                )
                 if on_error != "continue":
                     execution.error = f"节点 {nid} 失败：{msg}"
                     fatal = True
@@ -792,14 +828,25 @@ async def execute_workflow(
                 _skip_downstream()
                 break
 
-        if execution.state == "running":
+        waiting = [nid for nid, st in node_states.items() if st == "waiting"]
+        if waiting:
+            execution.state = "waiting"
+        elif execution.state == "running":
             execution.state = "succeeded"
     except Exception as exc:  # noqa: BLE001
         execution.state = "failed"
         execution.error = f"{type(exc).__name__}: {exc}"
         _skip_downstream()
 
-    # 若存在 end 节点，以 end 输出作为最终结果
+
+def _finalize_execution(
+    execution: WorkflowExecution,
+    nodes: dict[str, Any],
+    state: dict[str, Any],
+    conversation: WorkflowConversation | None,
+    ctx: dict[str, Any],
+) -> None:
+    outputs = state["outputs"]
     end_outputs = {
         nid: outputs[nid]
         for nid in nodes
@@ -810,9 +857,165 @@ async def execute_workflow(
     if answer:
         final_outputs["_answer"] = answer
     execution.outputs = final_outputs
-    execution.node_states = node_states
+    execution.node_states = state["node_states"]
+    execution.runtime = {
+        "edge_active": state["edge_active"],
+        "pending": state.get("pending") or [],
+        "conversation": dict(ctx.get("conversation") or {}),
+    }
     if conversation is not None:
         conversation.variables = dict(ctx.get("conversation") or {})
+
+
+async def execute_workflow(
+    db: AsyncSession,
+    user: User,
+    cap: Capability,
+    input_data: dict[str, Any],
+    conversation: WorkflowConversation | None = None,
+) -> WorkflowExecution:
+    definition = load_workflow_definition(cap)
+    validate_definition(definition)
+    nodes = {n["id"]: n for n in definition["nodes"]}
+    edges = definition.get("edges") or []
+    incoming, outgoing = _index_edges(nodes, edges)
+
+    history: list[dict[str, str]] = []
+    conv_vars: dict[str, Any] = {}
+    if conversation is not None:
+        conv_cfg = definition.get("conversation") or {}
+        history = await _load_conversation_history(
+            db, conversation, int(conv_cfg.get("history_turns") or 10) * 2
+        )
+        conv_vars = dict(conversation.variables or {})
+    ctx = _build_ctx(
+        input_data,
+        history,
+        conv_vars,
+        conversation.id if conversation is not None else "",
+    )
+    state: dict[str, Any] = {
+        "outputs": {},
+        "node_states": {nid: "pending" for nid in nodes},
+        "edge_active": [True] * len(edges),
+        "pending": [],
+    }
+    execution = WorkflowExecution(
+        workflow_id=cap.id,
+        state="running",
+        input_data=input_data,
+        node_states=state["node_states"],
+        conversation_id=conversation.id if conversation is not None else "",
+        created_by=user.id,
+    )
+    db.add(execution)
+    await db.flush()
+    if cap.status in ("published", "deprecated", "reviewing"):
+        await record_usage(db, user, cap, "workflow_execute", {"input": input_data})
+    await db.commit()
+
+    await _run_schedule(
+        db,
+        user,
+        nodes,
+        edges,
+        incoming,
+        outgoing,
+        ctx,
+        state,
+        execution,
+        overall_timeout=int(definition.get("timeout_seconds") or 0),
+        on_error=definition.get("on_error", "fail"),
+    )
+    _finalize_execution(execution, nodes, state, conversation, ctx)
+    await db.commit()
+    await db.refresh(execution)
+    return execution
+
+
+async def resume_workflow(
+    db: AsyncSession,
+    user: User,
+    cap: Capability,
+    execution: WorkflowExecution,
+    node_id: str,
+    approved: bool,
+    comment: str = "",
+    approver: str = "",
+) -> WorkflowExecution:
+    """审批决定后续跑被暂停的工作流（durable resume）。"""
+    definition = load_workflow_definition(cap)
+    validate_definition(definition)
+    nodes = {n["id"]: n for n in definition["nodes"]}
+    edges = definition.get("edges") or []
+    incoming, outgoing = _index_edges(nodes, edges)
+
+    rt = dict(execution.runtime or {})
+    edge_active = list(rt.get("edge_active") or [])
+    if len(edge_active) != len(edges):
+        edge_active = [True] * len(edges)
+    node_states: dict[str, Any] = dict(
+        execution.node_states or {nid: "pending" for nid in nodes}
+    )
+    outputs: dict[str, Any] = dict(execution.outputs or {})
+    outputs.pop("_answer", None)
+    if node_states.get(node_id) != "waiting":
+        raise HTTPException(status.HTTP_409_CONFLICT, f"节点 {node_id} 不在等待审批")
+
+    branch = "true" if approved else "false"
+    outputs[node_id] = {
+        "approved": bool(approved),
+        "comment": comment,
+        "approver": approver,
+        "decision_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    node_states[node_id] = "succeeded"
+    for ei in outgoing[node_id]:
+        cond = str(edges[ei].get("condition") or "").strip().lower()
+        edge_active[ei] = (cond == "") or (cond == branch)
+    pending = [p for p in (rt.get("pending") or []) if p.get("node_id") != node_id]
+
+    conversation = None
+    if execution.conversation_id:
+        conversation = await db.get(WorkflowConversation, execution.conversation_id)
+    input_data = execution.input_data or {}
+    history: list[dict[str, str]] = []
+    if conversation is not None:
+        conv_cfg = definition.get("conversation") or {}
+        history = await _load_conversation_history(
+            db, conversation, int(conv_cfg.get("history_turns") or 10) * 2
+        )
+    conv_vars = dict(
+        rt.get("conversation") or (conversation.variables if conversation else {}) or {}
+    )
+    ctx = _build_ctx(input_data, history, conv_vars, execution.conversation_id or "")
+    for nid, out in outputs.items():
+        ctx[nid] = out
+
+    state: dict[str, Any] = {
+        "outputs": outputs,
+        "node_states": node_states,
+        "edge_active": edge_active,
+        "pending": pending,
+    }
+    execution.state = "running"
+    execution.error = ""
+    await db.commit()
+
+    await _run_schedule(
+        db,
+        user,
+        nodes,
+        edges,
+        incoming,
+        outgoing,
+        ctx,
+        state,
+        execution,
+        overall_timeout=0,
+        on_error=definition.get("on_error", "fail"),
+    )
+    _finalize_execution(execution, nodes, state, conversation, ctx)
     await db.commit()
     await db.refresh(execution)
     return execution

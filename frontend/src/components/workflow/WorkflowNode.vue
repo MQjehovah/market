@@ -22,6 +22,7 @@ const TYPE_META = {
   loop: { label: '循环', color: '#e2a93b' },
   'variable-aggregator': { label: '变量聚合', color: '#e2a93b' },
   'variable-assigner': { label: '变量赋值', color: '#e2a93b' },
+  approval: { label: '人工审批', color: '#e2a93b' },
   code: { label: '代码', color: '#4f8cff' },
   'http-request': { label: 'HTTP', color: '#4f8cff' },
   'template-transform': { label: '模板', color: '#4f8cff' },
@@ -48,6 +49,7 @@ const subtitle = computed(() => {
   if (n.type === 'knowledge-retrieval') return '知识库检索'
   if (n.type === 'if-else') return 'true / false 分流'
   if (n.type === 'question-classifier') return `${(p.classes || []).length} 个类别`
+  if (n.type === 'approval') return p.title || '人工审批'
   if (n.type === 'code') return String(p.language || 'python')
   if (n.type === 'mcp') return p.op === 'call' ? `调用 ${p.tool || '…'}` : (n.capability || '连接器')
   return meta.value.label
@@ -64,6 +66,12 @@ const branchHandles = computed(() => {
   if (t === 'question-classifier' || t === 'question_classifier') {
     const cls = node.value.params?.classes
     return Array.isArray(cls) ? cls.map((c) => ({ id: String(c.id), label: c.name || String(c.id) })) : []
+  }
+  if (t === 'approval' || t === 'human-approval') {
+    return [
+      { id: 'true', label: '通过' },
+      { id: 'false', label: '驳回' }
+    ]
   }
   return null
 })

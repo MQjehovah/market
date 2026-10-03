@@ -286,6 +286,7 @@ class WorkflowExecution(Base):
     node_states: Mapped[dict] = mapped_column(MutableDict.as_mutable(JSON), default=MutableDict)
     error: Mapped[str] = mapped_column(Text, default="")
     conversation_id: Mapped[str] = mapped_column(String(36), default="", index=True)
+    runtime: Mapped[dict] = mapped_column(MutableDict.as_mutable(JSON), default=MutableDict)
     created_by: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
