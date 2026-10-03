@@ -102,6 +102,40 @@ async def test_consumer_can_download_published_package(client, publisher_headers
 
 
 @pytest.mark.asyncio
+async def test_publish_artifact_download_chinese_filename(client, publisher_headers):
+    """中文能力名 → 工件文件名含中文；下载头不能用 latin-1 编码（回归 500）。"""
+    name = "中文下载测试"
+    r = await client.post(
+        "/api/publish/capabilities",
+        headers=publisher_headers,
+        json={
+            "name": name,
+            "description": "regression",
+            "type": "tool",
+            "version": "1.0.0",
+            "category": "测试",
+            "tags": [],
+            "visibility": "internal",
+        },
+    )
+    assert r.status_code == 201, r.text
+    cap_id = r.json()["id"]
+    r = await client.post(
+        f"/api/publish/capabilities/{cap_id}/artifact",
+        headers=publisher_headers,
+        files={"file": ("tool.zip", _tool_package(name), "application/zip")},
+    )
+    assert r.status_code == 200, r.text
+
+    r = await client.get(
+        f"/api/publish/capabilities/{cap_id}/artifact/download", headers=publisher_headers
+    )
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("application/zip")
+    assert "filename*=UTF-8''" in r.headers["content-disposition"]
+
+
+@pytest.mark.asyncio
 async def test_download_unknown_or_without_artifact_returns_404(client):
     r = await client.get("/api/capabilities/不存在的能力/download")
     assert r.status_code == 404

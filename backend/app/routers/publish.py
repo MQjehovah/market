@@ -3,6 +3,7 @@
 import io
 import json
 import zipfile
+from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
@@ -394,7 +395,13 @@ async def download_artifact(cap_id: str, db: DbSession, user: CurrentUser):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "该能力尚未上传能力包")
     artifact = cap.artifacts[-1]
     content = get_storage().open(artifact.uri)
-    return StreamingResponse(content, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{artifact.filename}"'})
+    filename = getattr(artifact, "filename", "") or "package.zip"
+    # 文件名可能含中文：用 RFC 5987 filename*，避免 latin-1 头编码报错
+    return StreamingResponse(
+        content,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
 
 
 @router.delete("/capabilities/{cap_id}", response_model=MessageOut)
