@@ -143,6 +143,8 @@ const jsonText = ref('')
 const testInput = ref('{\n  "query": ""\n}')
 const execution = ref(null)
 const templates = ref([])
+const runOpen = ref(false)
+const runForm = reactive({})
 
 const error = ref('')
 const notice = ref('')
@@ -164,6 +166,11 @@ const canTest = computed(() => isOwner.value)
 const selectedNode = computed(() =>
   flowNodes.value.find((n) => n.id === selectedNodeId.value)
 )
+const startFields = computed(() => {
+  const start = flowNodes.value.find((n) => (n.data?.node?.type || n.type) === 'start')
+  const fields = start?.data?.node?.params?.fields
+  return Array.isArray(fields) ? fields.filter(Boolean) : []
+})
 const selectedCaps = computed(() => capCache[selectedNode.value?.type] || [])
 const MARKET_NODE_TYPES = ['tool', 'agent', 'skill', 'mcp']
 const isMarketNode = computed(() => MARKET_NODE_TYPES.includes(selectedNode.value?.type))
@@ -708,19 +715,21 @@ async function save() {
   }
 }
 
-async function run() {
+async function run(inputArg) {
   error.value = ''
   notice.value = ''
   if (!meta.id) {
     const ok = await save()
     if (!ok) return
   }
-  let input = {}
-  try {
-    input = JSON.parse(testInput.value || '{}')
-  } catch (e) {
-    error.value = `测试入参不是合法 JSON：${e.message}`
-    return
+  let input = inputArg
+  if (input === undefined) {
+    try {
+      input = JSON.parse(testInput.value || '{}')
+    } catch (e) {
+      error.value = `测试入参不是合法 JSON：${e.message}`
+      return
+    }
   }
   if (!flowNodes.value.length) {
     error.value = '画布还没有节点，请先添加节点'
@@ -735,6 +744,30 @@ async function run() {
   } finally {
     running.value = false
   }
+}
+
+function startRun() {
+  error.value = ''
+  let base = {}
+  try {
+    base = JSON.parse(testInput.value || '{}')
+  } catch {
+    base = {}
+  }
+  for (const k of Object.keys(runForm)) delete runForm[k]
+  const fields = startFields.value
+  if (!fields.length) {
+    run(undefined)
+    return
+  }
+  for (const f of fields) runForm[f] = base[f] !== undefined && base[f] !== null ? base[f] : ''
+  runOpen.value = true
+}
+
+async function confirmRun() {
+  const input = { ...runForm }
+  runOpen.value = false
+  await run(input)
 }
 
 function nodeState(id) {
@@ -775,7 +808,7 @@ function stateLabel(state) {
         <button v-if="canEdit" class="btn btn-sm btn-primary" :disabled="busy" @click="save">
           {{ busy ? '保存中…' : '保存草稿' }}
         </button>
-        <button v-if="canTest" class="btn btn-sm btn-success" :disabled="running" @click="run">
+        <button v-if="canTest" class="btn btn-sm btn-success" :disabled="running" @click="startRun">
           {{ running ? '运行中…' : '▶ 试运行' }}
         </button>
       </div>
@@ -1171,6 +1204,34 @@ function stateLabel(state) {
           <div class="flex">
             <button class="btn" @click="jsonOpen = false">取消</button>
             <button class="btn btn-primary" @click="applyJson">应用 JSON</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="runOpen" class="modal-mask" @click.self="runOpen = false">
+      <div class="modal panel" style="width: 560px">
+        <div class="modal-header">
+          <h3 style="margin: 0">试运行 · 输入参数</h3>
+          <button class="modal-close" @click="runOpen = false">✕</button>
+        </div>
+        <div class="muted" style="font-size: 12px; margin-bottom: 12px">
+          按「开始」节点声明的输入字段填写（在流程里以 ${input.字段} 引用）。
+        </div>
+        <div v-for="f in startFields" :key="f" class="field">
+          <label>{{ f }}</label>
+          <input v-model="runForm[f]" class="input" :placeholder="f" />
+        </div>
+        <div v-if="!startFields.length" class="muted" style="font-size: 12px">
+          开始节点未声明输入字段，将按空参运行。
+        </div>
+        <div class="modal-foot">
+          <span class="muted" style="font-size: 12px">留空即传入空字符串</span>
+          <div class="flex">
+            <button class="btn" type="button" @click="runOpen = false">取消</button>
+            <button class="btn btn-primary" type="button" :disabled="running" @click="confirmRun">
+              {{ running ? '运行中…' : '▶ 运行' }}
+            </button>
           </div>
         </div>
       </div>
