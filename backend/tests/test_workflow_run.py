@@ -130,3 +130,78 @@ async def test_app_admin_only_denied(client, publisher_headers, admin_headers, u
     await _publish(client, publisher_headers, admin_headers, _wf(name, access_policy="admin_only"))
     r = await client.get(f"/api/runtime/workflows/{name}/run-meta", headers=user_headers)
     assert r.status_code == 403
+
+
+def test_validate_workflow_node_requires_capability():
+    from app.services.workflows import validate_definition
+
+    with pytest.raises(Exception):
+        validate_definition({"nodes": [{"id": "w", "type": "workflow"}]})
+
+
+def _child_wf(name: str) -> dict:
+    return {
+        "name": name,
+        "nodes": [
+            {"id": "start", "type": "start", "params": {"fields": ["msg"]}},
+            {"id": "t", "type": "template", "params": {"template": "child:${start.msg}"}},
+            {"id": "end", "type": "end", "params": {"outputs": {"text": "${t.text}"}}},
+        ],
+        "edges": [{"from": "start", "to": "t"}, {"from": "t", "to": "end"}],
+    }
+
+
+def _parent_wf(name: str, child: str) -> dict:
+    return {
+        "name": name,
+        "nodes": [
+            {"id": "start", "type": "start", "params": {"fields": ["msg"]}},
+            {"id": "wn", "type": "workflow", "capability": child, "params": {"input": {"msg": "${start.msg}"}}},
+            {
+                "id": "end",
+                "type": "end",
+                "params": {"outputs": {"child_text": "${wn.outputs.end.text}", "child_state": "${wn.state}"}},
+            },
+        ],
+        "edges": [{"from": "start", "to": "wn"}, {"from": "wn", "to": "end"}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_workflow_as_tool(client, publisher_headers, admin_headers):
+    child, parent = "wft-child", "wft-parent"
+    await _publish(client, publisher_headers, admin_headers, _child_wf(child))
+    await _publish(client, publisher_headers, admin_headers, _parent_wf(parent, child))
+
+    r = await client.post(
+        f"/api/runtime/workflows/{parent}/run", headers=admin_headers, json={"input": {"msg": "hi"}}
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["state"] == "succeeded", body
+    assert body["outputs"]["end"]["child_text"] == "child:hi"
+    assert body["outputs"]["end"]["child_state"] == "succeeded"
+    assert body["node_outputs"]["wn"]["state"] == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_workflow_recursion_guard(client, publisher_headers):
+    name = "wft-self"
+    wf = {
+        "name": name,
+        "nodes": [
+            {"id": "start", "type": "start"},
+            {"id": "wn", "type": "workflow", "capability": name, "params": {}},
+        ],
+        "edges": [{"from": "start", "to": "wn"}],
+    }
+    r = await client.post(
+        "/api/workflows", headers=publisher_headers, json={"name": name, "version": "1.0.0", "workflow": wf}
+    )
+    assert r.status_code == 201, r.text
+    cap_id = r.json()["id"]
+    r = await client.post(f"/api/workflows/{cap_id}/test", headers=publisher_headers, json={"input": {}})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["state"] == "failed"
+    assert "递归" in (body.get("error") or "")

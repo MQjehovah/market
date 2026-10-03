@@ -16,6 +16,7 @@
 """
 
 import asyncio
+import contextvars
 import io
 import json
 import os
@@ -46,11 +47,13 @@ _TEMPLATE_RE = re.compile(r"\$\{([^}]+)\}")
 # Dify 变量语法 {{#node.field#}}：统一转成内部 ${node.field}
 _DIFY_RE = re.compile(r"\{\{#([^#]+)#\}\}")
 _MARKET_TYPES = {"tool", "agent", "skill", "mcp"}
+# 需要 node["capability"] 的节点类型（含工作流互调节点）
+_REQUIRE_CAPABILITY = _MARKET_TYPES | {"workflow"}
 _NODE_TYPES = _MARKET_TYPES | {
     "start", "end", "llm", "http", "if_else", "iteration", "template",
     "question_classifier", "parameter_extractor", "list_operator", "doc_extractor",
     "variable_aggregator", "variable_assigner", "loop", "answer", "knowledge_retrieval", "code",
-    "approval",
+    "approval", "workflow",
 }
 # Dify 节点名(连字符) → 内部名(下划线)；对齐 Dify 同时不改内部实现
 _TYPE_ALIASES = {
@@ -67,6 +70,11 @@ _TYPE_ALIASES = {
     "human-approval": "approval",
 }
 _MAX_PARALLEL = 4
+# 工作流嵌套调用（workflow 节点 / workflow-as-tool）的调用栈与深度上限
+_MAX_WORKFLOW_DEPTH = 5
+_WF_STACK: contextvars.ContextVar[tuple[str, ...]] = contextvars.ContextVar(
+    "wf_call_stack", default=()
+)
 
 
 def _canon_type(t: Any) -> str:
@@ -101,7 +109,7 @@ def _validate_nodes(nodes: list, require_capability: bool = True) -> list[str]:
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
                 f"节点 {node['id']} 类型未知：{ntype}（可选 {sorted(_NODE_TYPES)}）",
             )
-        if ntype in _MARKET_TYPES and not node.get("capability"):
+        if ntype in _REQUIRE_CAPABILITY and not node.get("capability"):
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_ENTITY, f"节点 {node['id']}（{ntype}）缺少 capability"
             )
@@ -490,6 +498,27 @@ async def _execute_node(
             if str(p.get("op") or "").lower() == "call" or p.get("tool"):
                 return {"output": await _call_mcp(db, user, cap, params)}
             return {"output": await install_mcp(db, user, cap, params.get("config") or {})}
+
+    if ntype == "workflow":
+        sub_cap = await resolve_capability(
+            db, user, node["capability"], node.get("version") or None
+        )
+        if sub_cap.type != "workflow":
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, f"{node['capability']} 不是工作流"
+            )
+        sub_input = render_value((node.get("params") or {}).get("input") or {}, ctx)
+        if not isinstance(sub_input, dict):
+            sub_input = {"input": sub_input}
+        sub = await execute_workflow(db, user, sub_cap, sub_input)
+        return {
+            "output": {
+                "execution_id": sub.id,
+                "state": sub.state,
+                "outputs": sub.outputs,
+                "error": sub.error or "",
+            }
+        }
 
     if ntype == "start":
         fields = (node.get("params") or {}).get("fields")
@@ -956,6 +985,31 @@ def _finalize_execution(
 
 
 async def execute_workflow(
+    db: AsyncSession,
+    user: User,
+    cap: Capability,
+    input_data: dict[str, Any],
+    conversation: WorkflowConversation | None = None,
+) -> WorkflowExecution:
+    """执行工作流（含嵌套调用的递归/深度防护）。"""
+    stack = _WF_STACK.get()
+    if cap.name in stack:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, f"检测到工作流递归调用：{cap.name}"
+        )
+    if len(stack) >= _MAX_WORKFLOW_DEPTH:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"工作流嵌套层级过深（>{_MAX_WORKFLOW_DEPTH}）",
+        )
+    token = _WF_STACK.set(stack + (cap.name,))
+    try:
+        return await _execute_workflow_body(db, user, cap, input_data, conversation)
+    finally:
+        _WF_STACK.reset(token)
+
+
+async def _execute_workflow_body(
     db: AsyncSession,
     user: User,
     cap: Capability,

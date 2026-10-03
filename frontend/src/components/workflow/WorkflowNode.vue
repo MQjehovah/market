@@ -30,14 +30,15 @@ const TYPE_META = {
   'list-operator': { label: '列表操作', color: '#4f8cff' },
   tool: { label: '工具', color: '#4f8cff' },
   skill: { label: '技能', color: '#2fbf71' },
-  mcp: { label: '连接器', color: '#e2a93b' }
+  mcp: { label: '连接器', color: '#e2a93b' },
+  workflow: { label: '工作流', color: '#0ea5e9' }
 }
 
 const node = computed(() => props.data?.node || {})
 const meta = computed(() => TYPE_META[node.value.type] || { label: node.value.type, color: '#4f8cff' })
 const isStart = computed(() => node.value.type === 'start')
 const isEnd = computed(() => node.value.type === 'end')
-const isMarket = computed(() => ['tool', 'agent', 'skill', 'mcp'].includes(node.value.type))
+const isMarket = computed(() => ['tool', 'agent', 'skill', 'mcp', 'workflow'].includes(node.value.type))
 const valid = computed(() => (isMarket.value ? Boolean(node.value.capability) : true))
 
 const subtitle = computed(() => {

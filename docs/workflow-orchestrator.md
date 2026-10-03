@@ -39,6 +39,18 @@ market 的工作流能力是一个 Dify 式编排器：**DAG 并行调度 + 条�
   ```
   连接经 `MCPBridge`（复用云端 MCP 桥接）建立，密钥走平台托管。
 
+## 工作流互调（workflow-as-tool）
+
+- **`workflow` 节点**：在工作流里调用另一个已发布工作流。
+  ```jsonc
+  { "id": "sub", "type": "workflow", "capability": "子工作流名", "version": "可选",
+    "params": { "input": { "msg": "${start.msg}" } } }
+  ```
+  输出：`{ execution_id, state, outputs, error }`（`outputs` 为子工作流最终输出）。
+- **防护**：调用栈记录（`contextvars`），**同名递归**直接报错、**嵌套深度 > 5** 报错。
+- **agent 节点内联绑定**：`params.skills[] / tools[] / mcps[]` 会并入该专家的依赖后执行（`run_agent` 合并），
+  让同一专家按节点临时装配技能/工具/连接器。
+
 ## 示例：IT 告警处置
 
 内置模板 `IT告警处置`（`GET /api/workflows/templates`；编辑器「从模板新建」一键载入）：

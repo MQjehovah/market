@@ -22,7 +22,7 @@ const ALL_TYPES = [
   'start', 'end', 'answer', 'llm', 'agent', 'parameter-extractor', 'knowledge-retrieval',
   'if-else', 'question-classifier', 'iteration', 'loop', 'variable-aggregator', 'variable-assigner',
   'code', 'http-request', 'template-transform', 'doc-extractor', 'list-operator', 'approval',
-  'tool', 'skill', 'mcp'
+  'tool', 'skill', 'mcp', 'workflow'
 ]
 const nodeTypes = Object.fromEntries(ALL_TYPES.map((t) => [t, WorkflowNode]))
 
@@ -48,7 +48,8 @@ const PALETTE = [
   { group: '数据', type: 'list-operator', label: '列表操作', desc: '过滤/排序/取首', color: '#4f8cff', icon: 'LST' },
   { group: '市场能力', type: 'tool', label: '工具', desc: '调用市场工具', color: '#4f8cff', icon: 'TL' },
   { group: '市场能力', type: 'skill', label: '技能', desc: '激活执行技能', color: '#2fbf71', icon: 'SK' },
-  { group: '市场能力', type: 'mcp', label: '连接器', desc: '调用/安装 MCP', color: '#e2a93b', icon: 'MCP' }
+  { group: '市场能力', type: 'mcp', label: '连接器', desc: '调用/安装 MCP', color: '#e2a93b', icon: 'MCP' },
+  { group: '市场能力', type: 'workflow', label: '工作流', desc: '调用其它工作流', color: '#0ea5e9', icon: 'WF' }
 ]
 const PALETTE_GROUPS = ['基础', 'LLM', '逻辑', '数据', '市场能力']
 
@@ -182,7 +183,7 @@ const startFields = computed(() => {
   return Array.isArray(fields) ? fields.filter(Boolean) : []
 })
 const selectedCaps = computed(() => capCache[selectedNode.value?.type] || [])
-const MARKET_NODE_TYPES = ['tool', 'agent', 'skill', 'mcp']
+const MARKET_NODE_TYPES = ['tool', 'agent', 'skill', 'mcp', 'workflow']
 const isMarketNode = computed(() => MARKET_NODE_TYPES.includes(selectedNode.value?.type))
 const selectedTypeLabel = computed(
   () =>
@@ -292,6 +293,9 @@ const FORMS = {
     { key: 'op', label: '操作', kind: 'select', options: ['call', 'install'] },
     { key: 'tool', label: '工具名（op=call）', kind: 'text', ph: '如 dingtalk_send_message' },
     { key: 'args', label: '参数', kind: 'map', phKey: '参数名', phVal: '值，支持变量' }
+  ],
+  workflow: [
+    { key: 'input', label: '输入参数（子工作流入参）', kind: 'map', phKey: '字段名', phVal: '值/变量' }
   ],
   'knowledge-retrieval': [
     { key: 'query', label: '检索词', kind: 'textarea', ph: '支持变量' },
