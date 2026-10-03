@@ -938,6 +938,64 @@ function stateLabel(state) {
             工具入参请用下方「高级 JSON」（依该工具 schema 填写）。
           </div>
 
+          <template v-if="selectedNode.type === 'start'">
+            <div class="field-label-strong">触发器</div>
+            <div class="field">
+              <label>触发方式</label>
+              <select v-model="trigger.type" class="select" :disabled="!canEdit">
+                <option v-for="(label, key) in TRIGGER_LABELS" :key="key" :value="key">{{ label }}</option>
+              </select>
+            </div>
+
+            <template v-if="trigger.type === 'webhook' || trigger.type === 'gitlab'">
+              <div class="field">
+                <label>{{ trigger.type === 'gitlab' ? 'GitLab Secret Token' : 'Webhook Token' }}</label>
+                <div class="kv-row">
+                  <input v-model="trigger.token" class="input" :disabled="!canEdit" placeholder="点击生成或自定义" />
+                  <button v-if="canEdit" class="btn btn-sm" type="button" @click="trigger.token = genToken()">生成</button>
+                </div>
+              </div>
+              <div v-if="triggerUrl" class="field">
+                <label>回调地址</label>
+                <div class="trigger-url">{{ triggerUrl }}</div>
+                <div v-if="trigger.type === 'gitlab'" class="muted" style="font-size: 11px; margin-top: 4px">
+                  GitLab 项目 Settings → Webhooks 填此 URL，Secret token 填上方值，勾选 Push / Merge request events。
+                </div>
+                <div v-else class="muted" style="font-size: 11px; margin-top: 4px">
+                  POST 此地址，请求头 X-Workflow-Token，body {"input": {...}}。
+                </div>
+              </div>
+            </template>
+
+            <template v-else-if="trigger.type === 'schedule'">
+              <div class="field">
+                <label>调度（cron：分 时 日 月 周）</label>
+                <div class="kv-row">
+                  <input v-model="trigger.cron" class="input" :disabled="!canEdit" placeholder="0 9 * * *" />
+                  <label class="checkbox"><input v-model="trigger.enabled" type="checkbox" :disabled="!canEdit" /> 启用</label>
+                </div>
+                <div class="var-chips" style="margin-top: 6px">
+                  <button
+                    v-for="c in CRON_PRESETS"
+                    :key="c.value"
+                    class="chip"
+                    type="button"
+                    :disabled="!canEdit"
+                    @click="trigger.cron = c.value"
+                  >{{ c.label }}</button>
+                </div>
+              </div>
+              <div class="field">
+                <label>触发入参（JSON）</label>
+                <CodeEditor v-model="trigger.inputText" language="json" compact :height="120" :readonly="!canEdit" />
+              </div>
+            </template>
+
+            <div v-if="trigger.type !== 'none'" class="muted" style="font-size: 11px; margin: -6px 0 10px">
+              触发仅对「已发布」版本生效。
+            </div>
+          </template>
+
           <details class="json-adv" @toggle="(e) => e.target.open && syncParamsText()">
             <summary>高级：直接编辑 JSON</summary>
             <div class="field" style="margin-top: 8px">
@@ -1023,61 +1081,6 @@ function stateLabel(state) {
               <label>整体超时（秒，0=不限）</label>
               <input v-model.number="wfSettings.timeout_seconds" type="number" class="input" :disabled="!canEdit" min="0" />
             </div>
-          </div>
-
-          <div class="field">
-            <label>触发方式</label>
-            <select v-model="trigger.type" class="select" :disabled="!canEdit">
-              <option v-for="(label, key) in TRIGGER_LABELS" :key="key" :value="key">{{ label }}</option>
-            </select>
-          </div>
-
-          <template v-if="trigger.type === 'webhook' || trigger.type === 'gitlab'">
-            <div class="field">
-              <label>{{ trigger.type === 'gitlab' ? 'GitLab Secret Token' : 'Webhook Token' }}</label>
-              <div class="kv-row">
-                <input v-model="trigger.token" class="input" :disabled="!canEdit" placeholder="点击生成或自定义" />
-                <button v-if="canEdit" class="btn btn-sm" type="button" @click="trigger.token = genToken()">生成</button>
-              </div>
-            </div>
-            <div v-if="triggerUrl" class="field">
-              <label>回调地址</label>
-              <div class="trigger-url">{{ triggerUrl }}</div>
-              <div v-if="trigger.type === 'gitlab'" class="muted" style="font-size: 11px; margin-top: 4px">
-                在 GitLab 项目 Settings → Webhooks 填此 URL，Secret token 填上方值，勾选 Push / Merge request events。
-              </div>
-              <div v-else class="muted" style="font-size: 11px; margin-top: 4px">
-                POST 此地址，请求头 X-Workflow-Token，body {"input": {...}}。
-              </div>
-            </div>
-          </template>
-
-          <template v-else-if="trigger.type === 'schedule'">
-            <div class="field">
-              <label>调度（cron：分 时 日 月 周）</label>
-              <div class="kv-row">
-                <input v-model="trigger.cron" class="input" :disabled="!canEdit" placeholder="0 9 * * *" />
-                <label class="checkbox"><input v-model="trigger.enabled" type="checkbox" :disabled="!canEdit" /> 启用</label>
-              </div>
-              <div class="var-chips" style="margin-top: 6px">
-                <button
-                  v-for="c in CRON_PRESETS"
-                  :key="c.value"
-                  class="chip"
-                  type="button"
-                  :disabled="!canEdit"
-                  @click="trigger.cron = c.value"
-                >{{ c.label }}</button>
-              </div>
-            </div>
-            <div class="field">
-              <label>触发入参（JSON）</label>
-              <CodeEditor v-model="trigger.inputText" language="json" compact :height="120" :readonly="!canEdit" />
-            </div>
-          </template>
-
-          <div v-if="trigger.type !== 'none'" class="muted" style="font-size: 11px; margin: -6px 0 10px">
-            触发仅对「已发布」版本生效。
           </div>
 
           <div v-if="canTest" class="field">
@@ -1311,6 +1314,14 @@ function stateLabel(state) {
   user-select: none;
 }
 .json-adv[open] > summary { color: var(--text); }
+.field-label-strong {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 4px 0 8px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+}
 .trigger-url {
   font-family: 'Cascadia Code', Consolas, monospace;
   font-size: 11px;
