@@ -1347,8 +1347,9 @@ function stateLabel(state) {
 .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
 .modal-close { background: none; border: none; color: var(--muted); font-size: 16px; cursor: pointer; }
 .modal-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 14px; }
-.kv-row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
-.kv-row .input, .kv-row .select { flex: 1; min-width: 0; }
+.kv-row { display: flex; gap: 6px; align-items: flex-start; margin-bottom: 6px; }
+.kv-row .input, .kv-row .select { flex: 1 1 0; min-width: 0; width: auto; }
+.kv-row .var-input { flex: 1 1 0; min-width: 0; width: auto; }
 .kv-row .btn-sm { flex: none; padding: 4px 8px; }
 .json-adv { margin-top: 14px; }
 .json-adv > summary {
