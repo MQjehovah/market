@@ -138,12 +138,164 @@ watch(
   () => selectedNodeId.value,
   () => {
     if (selectedNode.value) {
+      ensureNodeParams(selectedNode.value.data.node)
       paramsText.value = JSON.stringify(selectedNode.value.data.node.params || {}, null, 2)
       paramsError.value = ''
       if (isMarketNode.value) ensureCaps(selectedNode.value.type)
     }
   }
 )
+
+// ---- 节点参数表单（按类型） ----
+const SEL_OPS = ['eq', 'ne', 'contains', 'not_empty', 'empty', 'regex', 'gt', 'lt', 'ge', 'le']
+const LIST_OPS = ['head', 'tail', 'length', 'unique', 'filter', 'sort']
+const FORMS = {
+  start: [{ key: 'fields', label: '输入字段', kind: 'strlist', ph: '字段名，如 alert_id' }],
+  end: [{ key: 'outputs', label: '输出映射', kind: 'map', phKey: '输出名', phVal: '变量，如 ${input.x}' }],
+  answer: [{ key: 'answer', label: '回复内容', kind: 'textarea', ph: '支持 ${节点.字段} 变量' }],
+  llm: [
+    { key: 'system', label: 'System', kind: 'textarea', ph: '角色设定' },
+    { key: 'prompt', label: 'Prompt', kind: 'textarea', ph: '提示词，支持变量' }
+  ],
+  agent: [{ key: 'task', label: '任务', kind: 'textarea', ph: '交给该专家处理的任务描述' }],
+  skill: [{ key: 'context', label: '上下文', kind: 'textarea', ph: '传给技能的上下文' }],
+  tool: [],
+  mcp: [
+    { key: 'op', label: '操作', kind: 'select', options: ['call', 'install'] },
+    { key: 'tool', label: '工具名（op=call）', kind: 'text', ph: '如 dingtalk_send_message' },
+    { key: 'args', label: '参数', kind: 'map', phKey: '参数名', phVal: '值，支持变量' }
+  ],
+  'knowledge-retrieval': [
+    { key: 'query', label: '检索词', kind: 'textarea', ph: '支持变量' },
+    { key: 'top_k', label: 'Top K', kind: 'number' }
+  ],
+  'if-else': [
+    { key: 'logic', label: '条件关系', kind: 'select', options: ['and', 'or'] },
+    {
+      key: 'conditions', label: '条件', kind: 'rows',
+      rowFields: [
+        { key: 'left', ph: '左值/变量' },
+        { key: 'operator', kind: 'select', options: SEL_OPS },
+        { key: 'right', ph: '右值' }
+      ],
+      newRow: () => ({ left: '', operator: 'eq', right: '' })
+    }
+  ],
+  'question-classifier': [
+    { key: 'query', label: '待分类文本', kind: 'textarea', ph: '支持变量' },
+    {
+      key: 'classes', label: '类别', kind: 'rows',
+      rowFields: [
+        { key: 'id', ph: 'id' },
+        { key: 'name', ph: '名称' },
+        { key: 'description', ph: '描述' }
+      ],
+      newRow: () => ({ id: '', name: '', description: '' })
+    }
+  ],
+  'parameter-extractor': [
+    { key: 'query', label: '来源文本', kind: 'textarea', ph: '支持变量' },
+    {
+      key: 'parameters', label: '参数', kind: 'rows',
+      rowFields: [
+        { key: 'name', ph: '参数名' },
+        { key: 'type', ph: '类型', def: 'string' },
+        { key: 'description', ph: '说明' }
+      ],
+      newRow: () => ({ name: '', type: 'string', description: '' })
+    }
+  ],
+  iteration: [{ key: 'items', label: '数组（变量）', kind: 'text', ph: '${节点.列表}' }],
+  loop: [{ key: 'max_iterations', label: '最大次数', kind: 'number' }],
+  'variable-aggregator': [
+    { key: 'mode', label: '聚合方式', kind: 'select', options: ['first', 'append', 'concat'] },
+    { key: 'variables', label: '变量', kind: 'strlist', ph: '${节点.字段}' }
+  ],
+  'variable-assigner': [{ key: 'assignments', label: '赋值', kind: 'map', phKey: '变量名', phVal: '值/变量' }],
+  code: [
+    { key: 'language', label: '语言', kind: 'select', options: ['python'] },
+    { key: 'code', label: '代码', kind: 'code' },
+    { key: 'inputs', label: '输入变量', kind: 'map', phKey: '参数名', phVal: '变量' }
+  ],
+  'http-request': [
+    { key: 'method', label: '方法', kind: 'select', options: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'] },
+    { key: 'url', label: 'URL', kind: 'text', ph: 'https://…' },
+    { key: 'headers', label: 'Headers', kind: 'map', phKey: '头', phVal: '值' }
+  ],
+  'template-transform': [{ key: 'template', label: '模板', kind: 'textarea', ph: '文本/JSON，支持变量' }],
+  'doc-extractor': [{ key: 'text', label: '文本', kind: 'textarea', ph: '待解析文本' }],
+  'list-operator': [
+    { key: 'list', label: '列表', kind: 'text', ph: '${节点.列表}' },
+    { key: 'operation', label: '操作', kind: 'select', options: LIST_OPS },
+    { key: 'count', label: '数量', kind: 'number' },
+    { key: 'key', label: '字段名（sort/filter）', kind: 'text' },
+    { key: 'value', label: '匹配值（filter）', kind: 'text' },
+    { key: 'order', label: '排序', kind: 'select', options: ['asc', 'desc'] }
+  ],
+  approval: [
+    { key: 'title', label: '标题', kind: 'text', ph: '待审批标题' },
+    { key: 'description', label: '说明', kind: 'textarea' },
+    { key: 'assignee', label: '指派给', kind: 'text', ph: '用户名/角色（留空=执行拥有者）' },
+    { key: 'timeout_seconds', label: '等待超时（秒）', kind: 'number' }
+  ]
+}
+
+function defaultParams(type) {
+  const out = {}
+  for (const f of FORMS[type] || []) {
+    if (f.kind === 'strlist') out[f.key] = []
+    else if (f.kind === 'map') out[f.key] = {}
+    else if (f.kind === 'rows') out[f.key] = []
+    else if (f.kind === 'number') out[f.key] = 0
+    else if (f.kind === 'select') out[f.key] = (f.options || [''])[0]
+    else out[f.key] = ''
+  }
+  return out
+}
+
+function ensureNodeParams(node) {
+  if (!node) return
+  if (!node.params || typeof node.params !== 'object') node.params = {}
+  const d = defaultParams(node.type)
+  for (const [k, v] of Object.entries(d)) {
+    if (!(k in node.params)) node.params[k] = v
+  }
+}
+
+const p = computed(() => selectedNode.value?.data?.node?.params || {})
+const formFields = computed(() => (selectedNode.value ? FORMS[selectedNode.value.type] || [] : []))
+
+function addRow(key, row) {
+  if (!Array.isArray(p.value[key])) p.value[key] = []
+  p.value[key].push(row ?? '')
+}
+
+function delRow(key, i) {
+  if (Array.isArray(p.value[key])) p.value[key].splice(i, 1)
+}
+
+function addMap(key) {
+  if (!p.value[key] || typeof p.value[key] !== 'object') p.value[key] = {}
+  let k = `key${Object.keys(p.value[key]).length + 1}`
+  while (k in p.value[key]) k += '_'
+  p.value[key][k] = ''
+}
+
+function delMap(key, k) {
+  if (p.value[key] && k in p.value[key]) delete p.value[key][k]
+}
+
+function renameMap(key, oldK, newK) {
+  const m = p.value[key]
+  if (!m || !newK || oldK === newK) return
+  m[newK] = m[oldK]
+  delete m[oldK]
+}
+
+function syncParamsText() {
+  if (!selectedNode.value) return
+  paramsText.value = JSON.stringify(selectedNode.value.data.node.params || {}, null, 2)
+}
 
 onMounted(() => {
   if (props.id) {
@@ -268,7 +420,7 @@ function addNode(type, position) {
         type,
         capability: '',
         version: '',
-        params: {},
+        params: defaultParams(type),
         timeout_seconds: 120,
         retries: 0
       }
@@ -641,19 +793,100 @@ function stateLabel(state) {
             </div>
           </div>
 
-          <div class="field">
-            <label>参数（JSON，支持变量引用）</label>
-            <CodeEditor
-              ref="paramsEditor"
-              v-model="paramsText"
-              language="json"
-              compact
-              :height="240"
-              :readonly="!canEdit"
-              @update:model-value="applyParams"
+          <div v-for="f in formFields" :key="f.key" class="field">
+            <label>{{ f.label }}</label>
+
+            <input
+              v-if="f.kind === 'text'"
+              v-model="p[f.key]"
+              class="input"
+              :disabled="!canEdit"
+              :placeholder="f.ph || ''"
             />
-            <div v-if="paramsError" class="muted" style="color: var(--warning); font-size: 12px">{{ paramsError }}</div>
+            <textarea
+              v-else-if="f.kind === 'textarea'"
+              v-model="p[f.key]"
+              class="textarea"
+              rows="3"
+              :disabled="!canEdit"
+              :placeholder="f.ph || ''"
+            ></textarea>
+            <input
+              v-else-if="f.kind === 'number'"
+              v-model.number="p[f.key]"
+              type="number"
+              class="input"
+              :disabled="!canEdit"
+            />
+            <select v-else-if="f.kind === 'select'" v-model="p[f.key]" class="select" :disabled="!canEdit">
+              <option v-for="o in f.options" :key="o" :value="o">{{ o }}</option>
+            </select>
+
+            <div v-else-if="f.kind === 'strlist'">
+              <div v-for="i in (p[f.key] || []).length" :key="i" class="kv-row">
+                <input v-model="p[f.key][i - 1]" class="input" :disabled="!canEdit" :placeholder="f.ph || ''" />
+                <button v-if="canEdit" class="btn btn-sm" type="button" @click="delRow(f.key, i - 1)">×</button>
+              </div>
+              <button v-if="canEdit" class="btn btn-sm" type="button" @click="addRow(f.key, '')">+ 新增</button>
+            </div>
+
+            <div v-else-if="f.kind === 'map'">
+              <div v-for="k in Object.keys(p[f.key] || {})" :key="k" class="kv-row">
+                <input
+                  class="input"
+                  :value="k"
+                  :disabled="!canEdit"
+                  :placeholder="f.phKey || '键'"
+                  @change="renameMap(f.key, k, $event.target.value)"
+                />
+                <input v-model="p[f.key][k]" class="input" :disabled="!canEdit" :placeholder="f.phVal || '值'" />
+                <button v-if="canEdit" class="btn btn-sm" type="button" @click="delMap(f.key, k)">×</button>
+              </div>
+              <button v-if="canEdit" class="btn btn-sm" type="button" @click="addMap(f.key)">+ 新增</button>
+            </div>
+
+            <div v-else-if="f.kind === 'rows'">
+              <div v-for="(row, i) in (p[f.key] || [])" :key="i" class="kv-row">
+                <template v-for="rf in f.rowFields" :key="rf.key">
+                  <select v-if="rf.kind === 'select'" v-model="row[rf.key]" class="select" :disabled="!canEdit">
+                    <option v-for="o in rf.options" :key="o" :value="o">{{ o }}</option>
+                  </select>
+                  <input v-else v-model="row[rf.key]" class="input" :disabled="!canEdit" :placeholder="rf.ph || rf.key" />
+                </template>
+                <button v-if="canEdit" class="btn btn-sm" type="button" @click="delRow(f.key, i)">×</button>
+              </div>
+              <button v-if="canEdit" class="btn btn-sm" type="button" @click="addRow(f.key, f.newRow())">+ 新增</button>
+            </div>
+
+            <CodeEditor
+              v-else-if="f.kind === 'code'"
+              :model-value="p[f.key]"
+              language="python"
+              compact
+              :height="220"
+              :readonly="!canEdit"
+              @update:model-value="(v) => (p[f.key] = v)"
+            />
           </div>
+          <div v-if="selectedNode.type === 'tool'" class="muted" style="font-size: 12px">
+            工具入参请用下方「高级 JSON」（依该工具 schema 填写）。
+          </div>
+
+          <details class="json-adv" @toggle="(e) => e.target.open && syncParamsText()">
+            <summary>高级：直接编辑 JSON</summary>
+            <div class="field" style="margin-top: 8px">
+              <CodeEditor
+                ref="paramsEditor"
+                v-model="paramsText"
+                language="json"
+                compact
+                :height="220"
+                :readonly="!canEdit"
+                @update:model-value="applyParams"
+              />
+              <div v-if="paramsError" class="muted" style="color: var(--warning); font-size: 12px">{{ paramsError }}</div>
+            </div>
+          </details>
 
           <div class="field">
             <div class="muted" style="font-size: 12px; margin-bottom: 6px">可用变量（点击插入）</div>
@@ -945,4 +1178,16 @@ function stateLabel(state) {
 .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
 .modal-close { background: none; border: none; color: var(--muted); font-size: 16px; cursor: pointer; }
 .modal-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 14px; }
+.kv-row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+.kv-row .input, .kv-row .select { flex: 1; min-width: 0; }
+.kv-row .btn-sm { flex: none; padding: 4px 8px; }
+.json-adv { margin-top: 14px; }
+.json-adv > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+  padding: 4px 0;
+  user-select: none;
+}
+.json-adv[open] > summary { color: var(--text); }
 </style>
