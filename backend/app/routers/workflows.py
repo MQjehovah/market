@@ -217,6 +217,7 @@ def _to_out(ex: WorkflowExecution, cap: Capability | None) -> WorkflowExecutionO
         state=ex.state,
         input_data=ex.input_data or {},
         outputs=ex.outputs or {},
+        node_outputs=(ex.runtime or {}).get("node_outputs") or (ex.outputs or {}),
         node_states=ex.node_states or {},
         pending=(ex.runtime or {}).get("pending") or [],
         error=ex.error or "",

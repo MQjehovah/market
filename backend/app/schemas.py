@@ -767,6 +767,7 @@ class WorkflowExecutionOut(BaseModel):
     state: str
     input_data: dict[str, Any]
     outputs: dict[str, Any]
+    node_outputs: dict[str, Any] = Field(default_factory=dict)
     node_states: dict[str, Any]
     pending: list[dict[str, Any]] = Field(default_factory=list)
     error: str = ""

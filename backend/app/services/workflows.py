@@ -862,6 +862,8 @@ def _finalize_execution(
         "edge_active": state["edge_active"],
         "pending": state.get("pending") or [],
         "conversation": dict(ctx.get("conversation") or {}),
+        # 全量节点输出（end 存在时 outputs 只含 end，面板逐节点查看需此份）
+        "node_outputs": dict(outputs),
     }
     if conversation is not None:
         conversation.variables = dict(ctx.get("conversation") or {})

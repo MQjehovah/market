@@ -741,6 +741,12 @@ function nodeState(id) {
   return execution.value?.node_states?.[id] || '-'
 }
 
+function nodeOutput(id) {
+  const ex = execution.value
+  if (!ex) return undefined
+  return ex.node_outputs?.[id] ?? ex.outputs?.[id]
+}
+
 function stateLabel(state) {
   return {
     pending: '等待',
@@ -1147,7 +1153,7 @@ function stateLabel(state) {
             <strong>{{ n.data.node.capability || n.id }}</strong>
             <span class="muted" style="font-size: 11px">{{ n.id }}</span>
           </div>
-          <pre v-if="execution.outputs?.[n.id]" class="wf-json">{{ JSON.stringify(execution.outputs[n.id], null, 2) }}</pre>
+          <pre v-if="nodeOutput(n.id) !== undefined" class="wf-json">{{ JSON.stringify(nodeOutput(n.id), null, 2) }}</pre>
           <div v-else class="muted" style="font-size: 12px; padding: 6px 0">无输出</div>
         </div>
       </div>
