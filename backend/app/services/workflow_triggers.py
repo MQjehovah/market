@@ -8,11 +8,14 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import os
 from datetime import datetime
 
+import httpx
+from fastapi import HTTPException, status
 from sqlalchemy import select
 
 from app.config import get_settings
@@ -96,6 +99,101 @@ def cron_due(expr: str, now: datetime) -> bool:
         and _field_match(fields[3], now.month)
         and _field_match(fields[4], _cron_dow(now))
     )
+
+
+async def _gitlab_diff(db, body: dict, mr: dict | None = None) -> str:
+    """经 `gitlab` 能力平台密钥拉取 MR changes / commit compare 的 diff 文本。"""
+    try:
+        from app.services.capability_secrets import resolve_capability_env
+
+        env = await resolve_capability_env(db, "gitlab")
+    except Exception:  # noqa: BLE001
+        env = {}
+    base = (env.get("GITLAB_URL") or os.environ.get("GITLAB_URL") or "").rstrip("/")
+    token = (
+        env.get("GITLAB_TOKEN")
+        or env.get("GITLAB_PASSWORD")
+        or os.environ.get("GITLAB_TOKEN")
+        or ""
+    )
+    pid = (body.get("project") or {}).get("id")
+    if not base or not token or not pid:
+        return ""
+    headers = {"PRIVATE-TOKEN": token}
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            if mr is not None and mr.get("iid"):
+                url = f"{base}/api/v4/projects/{pid}/merge_requests/{mr['iid']}/changes"
+                resp = await client.get(url, headers=headers)
+                if resp.status_code >= 400:
+                    return ""
+                changes = (resp.json() or {}).get("changes") or []
+                return "\n".join(
+                    f"--- {c.get('old_path')} -> {c.get('new_path')}\n{c.get('diff', '')}"
+                    for c in changes
+                )[:200000]
+            before, after = body.get("before"), body.get("after")
+            if before and after and set(str(before)) != {"0"}:
+                url = (
+                    f"{base}/api/v4/projects/{pid}/repository/compare"
+                    f"?from={before}&to={after}"
+                )
+                resp = await client.get(url, headers=headers)
+                if resp.status_code >= 400:
+                    return ""
+                diffs = (resp.json() or {}).get("diffs") or []
+                return "\n".join(
+                    f"--- {c.get('old_path')} -> {c.get('new_path')}\n{c.get('diff', '')}"
+                    for c in diffs
+                )[:200000]
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[gitlab] 拉取 diff 失败: {e}")
+    return ""
+
+
+async def gitlab_trigger_input(db, trigger: dict, headers: dict, body: dict) -> dict:
+    """校验 GitLab webhook（X-Gitlab-Token）并把 payload 映射为工作流入参。"""
+    token = str((trigger or {}).get("token") or "")
+    provided = str((headers or {}).get("x-gitlab-token") or "")
+    if not token or not hmac.compare_digest(token, provided):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "无效的 X-Gitlab-Token")
+    body = body or {}
+    kind = str(body.get("object_kind") or "").lower()
+    proj = body.get("project") or {}
+    inp: dict = {
+        "project": proj.get("path_with_namespace") or proj.get("name") or "",
+        "project_id": proj.get("id"),
+        "event": kind,
+        "event_header": str((headers or {}).get("x-gitlab-event") or ""),
+        "author": body.get("user_name") or (body.get("user") or {}).get("name") or "",
+        "diff": "",
+    }
+    if "merge_request" in kind:
+        oa = body.get("object_attributes") or {}
+        inp.update(
+            {
+                "mr_iid": str(oa.get("iid") or ""),
+                "title": oa.get("title") or "",
+                "description": oa.get("description") or "",
+                "source_branch": oa.get("source_branch") or "",
+                "target_branch": oa.get("target_branch") or "",
+                "action": oa.get("action") or "",
+                "web_url": oa.get("url") or "",
+            }
+        )
+        inp["diff"] = await _gitlab_diff(db, body, mr=oa)
+    elif "push" in kind:
+        commits = body.get("commits") or []
+        inp.update(
+            {
+                "ref": body.get("ref") or "",
+                "commit": (commits[-1].get("id") if commits else body.get("after") or ""),
+                "commit_message": (commits[-1].get("message") if commits else ""),
+                "commits": [c.get("id") for c in commits][:50],
+            }
+        )
+        inp["diff"] = await _gitlab_diff(db, body)
+    return inp
 
 
 async def _run_due() -> int:

@@ -36,6 +36,7 @@ from app.schemas import (
 )
 from app.services.capabilities import ensure_name_ownership, normalize_cap_name, to_capability_out
 from app.services.marketplace import resolve_capability
+from app.services.workflow_triggers import gitlab_trigger_input
 from app.services.workflows import (
     execute_workflow,
     load_workflow_definition,
@@ -237,9 +238,11 @@ async def run_workflow(name: str, data: WorkflowExecuteRequest, db: DbSession, u
 
 @router.post("/runtime/workflows/{name}/trigger", response_model=WorkflowExecutionOut)
 async def trigger_workflow(name: str, request: Request, db: DbSession):
-    """webhook 触发：按 workflow.json 的 `trigger.token` 校验请求头 `X-Workflow-Token`。"""
+    """webhook / GitLab 触发：按 workflow.json 的 `trigger` 校验并映射入参。"""
     cap = await db.scalar(
-        select(Capability).where(
+        select(Capability)
+        .options(selectinload(Capability.artifacts))
+        .where(
             Capability.name == name,
             Capability.type == "workflow",
             Capability.status == "published",
@@ -249,20 +252,28 @@ async def trigger_workflow(name: str, request: Request, db: DbSession):
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"工作流 {name} 不存在或未发布")
     definition = load_workflow_definition(cap)
     trig = definition.get("trigger") or {}
-    if trig.get("type") != "webhook":
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "该工作流未启用 webhook 触发")
-    token = str(trig.get("token") or "")
-    provided = request.headers.get("x-workflow-token") or ""
-    if not token or not hmac.compare_digest(token, provided):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "无效的 X-Workflow-Token")
+    ttype = str(trig.get("type") or "")
     try:
         body = await request.json()
     except Exception:  # noqa: BLE001
         body = {}
+    if not isinstance(body, dict):
+        body = {}
+    headers = {k.lower(): v for k, v in request.headers.items()}
+    if ttype == "gitlab":
+        input_data = await gitlab_trigger_input(db, trig, headers, body)
+    elif ttype == "webhook":
+        token = str(trig.get("token") or "")
+        provided = headers.get("x-workflow-token") or ""
+        if not token or not hmac.compare_digest(token, provided):
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "无效的 X-Workflow-Token")
+        input_data = body.get("input") or {}
+    else:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "该工作流未启用触发")
     author = await db.get(User, cap.author_id)
     if author is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "工作流作者缺失")
-    execution = await execute_workflow(db, author, cap, (body or {}).get("input") or {})
+    execution = await execute_workflow(db, author, cap, input_data)
     return _to_out(execution, cap)
 
 

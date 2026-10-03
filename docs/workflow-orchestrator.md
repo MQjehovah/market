@@ -58,6 +58,29 @@ start → knowledge-retrieval → question-classifier
 - 正式执行：`POST /api/runtime/workflows/{name}/executions`。
 - 执行记录：`GET /api/runtime/workflows/executions/{exec_id}`；取消：`.../cancel`。
 
+## 触发方式（trigger）
+
+`workflow.json` 顶层 `trigger` 声明工作流如何被自动唤起（**触发仅对已发布版本生效**）。
+
+- `{"type":"webhook","token":"..."}`：`POST /api/runtime/workflows/{name}/trigger`，头 `X-Workflow-Token`，body `{"input":{...}}`。
+- `{"type":"schedule","cron":"30 8 * * *","enabled":true,"input":{}}`：market 后台每 60s 扫描执行（多 worker 需 `WORKERS=1`）。
+- `{"type":"gitlab","token":"<GitLab Secret Token>"}`：直接接收 GitLab Webhook（Push / Merge Request），校验 `X-Gitlab-Token` 并映射入参：
+  - MR：`project` / `mr_iid` / `title` / `source_branch` / `target_branch` / `action` / `web_url`；`diff` 经 `gitlab` 能力平台密钥调 `/merge_requests/{iid}/changes` 拉取。
+  - Push：`project` / `ref` / `commit` / `commit_message` / `commits`；`diff` 经 `/repository/compare` 拉取。
+  - 需给市场 `gitlab` 能力配置平台密钥 `GITLAB_URL` + `GITLAB_TOKEN`（未配置则 `diff` 为空）。
+
+### 让 GitLab 回调驱动「代码评审助手」
+
+1. 编辑工作流「代码评审助手」，把 `trigger` 设为 `{"type":"gitlab","token":"<自定密钥>"}`；**提交审核并发布**（触发仅对已发布版本生效）。
+2. GitLab 项目 **Settings → Webhooks**：
+   - URL：`http://<market-host>:8093/api/runtime/workflows/<工作流名>/trigger`（中文名需 URL 编码，或改用英文名工作流）。
+   - Secret token：与上面 `token` 一致。
+   - 勾选 **Push events** 与 **Merge request events**。
+3. 市场后台给 `gitlab` 能力配置平台密钥 `GITLAB_URL`（如 `https://gitlab.company.com`）与 `GITLAB_TOKEN`（`api` 只读令牌）。
+4. 触发后到「运行记录 / 审批中心」查看：命中“阻断”会停在『人工审批』节点，需在 `/approvals` 通过/驳回后续跑。
+
+> 试运行时停在 `waiting` 是到达『人工审批』节点等待决定，**并非失败**；去 `/approvals` 审批后会续跑。
+
 ## 会话模式（chatflow）
 
 同一工作流可作会话式应用：`answer` 节点作为回复，`conversation` 变量跨轮持久化。
