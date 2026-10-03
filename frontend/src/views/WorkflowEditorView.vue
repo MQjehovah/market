@@ -64,6 +64,16 @@ const meta = reactive({
   author_id: ''
 })
 const wfSettings = reactive({ on_error: 'fail', timeout_seconds: 0 })
+const presentation = reactive({ mode: 'auto' })
+const PRESENTATION_OPTIONS = [
+  { value: 'auto', label: '自动（按形态推断）' },
+  { value: 'form', label: '表单' },
+  { value: 'chat', label: '对话' },
+  { value: 'automation', label: '自动化' }
+]
+function setPresentation(p) {
+  presentation.mode = ['auto', 'form', 'chat', 'automation'].includes(p?.mode) ? p.mode : 'auto'
+}
 const trigger = reactive({
   type: 'none',
   token: '',
@@ -249,7 +259,21 @@ watch(
 const SEL_OPS = ['eq', 'ne', 'contains', 'not_empty', 'empty', 'regex', 'gt', 'lt', 'ge', 'le']
 const LIST_OPS = ['head', 'tail', 'length', 'unique', 'filter', 'sort']
 const FORMS = {
-  start: [{ key: 'fields', label: '输入字段', kind: 'strlist', ph: '字段名，如 alert_id' }],
+  start: [
+    {
+      key: 'fields',
+      label: '输入字段',
+      kind: 'rows',
+      rowFields: [
+        { key: 'key', ph: '字段名，如 alert_id' },
+        { key: 'label', ph: '显示名' },
+        { key: 'type', kind: 'select', options: ['text', 'number', 'date', 'select', 'textarea'] },
+        { key: 'required', kind: 'bool' },
+        { key: 'default', ph: '默认值' }
+      ],
+      newRow: () => ({ key: '', label: '', type: 'text', required: false, default: '' })
+    }
+  ],
   end: [{ key: 'outputs', label: '输出映射', kind: 'map', phKey: '输出名', phVal: '变量，如 ${input.x}' }],
   answer: [{ key: 'answer', label: '回复内容', kind: 'textarea', ph: '支持 ${节点.字段} 变量' }],
   llm: [
@@ -359,6 +383,20 @@ function ensureNodeParams(node) {
   for (const [k, v] of Object.entries(d)) {
     if (!(k in node.params)) node.params[k] = v
   }
+  // start 输入字段：兼容旧格式（字符串）→ 富字段对象
+  if (node.type === 'start' && Array.isArray(node.params.fields)) {
+    node.params.fields = node.params.fields.map((f) =>
+      typeof f === 'string'
+        ? { key: f, label: f, type: 'text', required: false, default: '' }
+        : {
+            key: f?.key || '',
+            label: f?.label || f?.key || '',
+            type: f?.type || 'text',
+            required: !!f?.required,
+            default: f?.default ?? ''
+          }
+    )
+  }
 }
 
 const p = computed(() => selectedNode.value?.data?.node?.params || {})
@@ -448,6 +486,7 @@ async function load(id) {
     wfSettings.on_error = wf.on_error || 'fail'
     wfSettings.timeout_seconds = Number(wf.timeout_seconds) || 0
     setTrigger(wf.trigger || {})
+    setPresentation(wf.presentation || {})
     markWorkflowClean()
   } catch (e) {
     error.value = e.message
@@ -477,6 +516,7 @@ function toEngineWorkflow() {
     })),
     on_error: wfSettings.on_error,
     timeout_seconds: Number(wfSettings.timeout_seconds) || 0,
+    presentation: { mode: presentation.mode },
     ...triggerToJson()
   }
 }
@@ -641,6 +681,7 @@ function applyWorkflow(wf) {
   if (wf.on_error) wfSettings.on_error = wf.on_error
   if (wf.timeout_seconds !== undefined) wfSettings.timeout_seconds = wf.timeout_seconds
   setTrigger(wf.trigger || {})
+  setPresentation(wf.presentation || {})
   selectedNodeId.value = ''
 }
 
@@ -988,6 +1029,9 @@ function stateLabel(state) {
                   <select v-if="rf.kind === 'select'" v-model="row[rf.key]" class="select" :disabled="!canEdit">
                     <option v-for="o in rf.options" :key="o" :value="o">{{ o }}</option>
                   </select>
+                  <label v-else-if="rf.kind === 'bool'" class="checkbox" style="margin-top: 0; flex: none">
+                    <input v-model="row[rf.key]" type="checkbox" :disabled="!canEdit" /> 必填
+                  </label>
                   <VarInput v-else v-model="row[rf.key]" :disabled="!canEdit" :placeholder="rf.ph || rf.key" :variables="flatVars" />
                 </template>
                 <button v-if="canEdit" class="btn btn-sm" type="button" @click="delRow(f.key, i)">×</button>
@@ -1126,6 +1170,16 @@ function stateLabel(state) {
                 <option value="team">团队</option>
                 <option value="private">私有（仅自己）</option>
               </select>
+            </div>
+          </div>
+
+          <div class="field">
+            <label>对外形态</label>
+            <select v-model="presentation.mode" class="select" :disabled="!canEdit">
+              <option v-for="o in PRESENTATION_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
+            </select>
+            <div class="muted" style="font-size: 11px; margin-top: 4px">
+              决定能力详情页「使用」区块以 表单 / 对话 / 自动化 呈现。
             </div>
           </div>
 

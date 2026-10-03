@@ -203,6 +203,76 @@ def _stringify(v: Any) -> str:
     return json.dumps(v, ensure_ascii=False)
 
 
+def normalize_start_fields(fields: Any) -> list[dict[str, Any]]:
+    """把 start 节点 fields 统一成富字段列表（兼容纯字符串与对象混用）。"""
+    out: list[dict[str, Any]] = []
+    if not isinstance(fields, list):
+        return out
+    for f in fields:
+        if isinstance(f, str):
+            key = f.strip()
+            if key:
+                out.append(
+                    {"key": key, "label": key, "type": "text", "required": False, "default": ""}
+                )
+        elif isinstance(f, dict):
+            key = str(f.get("key") or f.get("name") or "").strip()
+            if not key:
+                continue
+            out.append(
+                {
+                    "key": key,
+                    "label": str(f.get("label") or key),
+                    "type": str(f.get("type") or "text"),
+                    "required": bool(f.get("required", False)),
+                    "default": f.get("default", ""),
+                    "options": f.get("options") if isinstance(f.get("options"), list) else [],
+                    "placeholder": str(f.get("placeholder") or ""),
+                }
+            )
+    return out
+
+
+def extract_run_meta(definition: dict[str, Any]) -> dict[str, Any]:
+    """从 workflow 定义提取"对外运行"元信息：形态 / 输入字段 / 输出 / 触发。"""
+    nodes = definition.get("nodes") or []
+    start = next((n for n in nodes if _canon_type(n.get("type")) == "start"), None)
+    fields = (
+        normalize_start_fields((start.get("params") or {}).get("fields")) if start else []
+    )
+    outputs: dict[str, str] = {}
+    for n in nodes:
+        if _canon_type(n.get("type")) == "end":
+            outs = (n.get("params") or {}).get("outputs")
+            if isinstance(outs, dict):
+                outputs = {str(k): _stringify(v) for k, v in outs.items()}
+            break
+    presentation = definition.get("presentation")
+    explicit = (
+        str((presentation or {}).get("mode") or "auto").lower()
+        if isinstance(presentation, dict)
+        else "auto"
+    )
+    engine_mode = str(definition.get("mode") or "").lower()
+    if explicit in ("chat", "form", "automation"):
+        shape = explicit
+    elif engine_mode == "chat":
+        shape = "chat"
+    elif fields:
+        shape = "form"
+    elif definition.get("trigger"):
+        shape = "automation"
+    else:
+        shape = "form"
+    return {
+        "shape": shape,
+        "engine_mode": engine_mode,
+        "input_fields": fields,
+        "outputs": outputs,
+        "trigger": definition.get("trigger") or {},
+    }
+
+
 def collect_answers(nodes: dict[str, Any], outputs: dict[str, Any]) -> str:
     """汇总 answer 节点输出为会话回复（按节点声明顺序）。"""
     parts: list[str] = []
@@ -409,8 +479,9 @@ async def _execute_node(
     if ntype == "start":
         fields = (node.get("params") or {}).get("fields")
         data = ctx.get("input") or {}
-        if isinstance(fields, list) and fields:
-            return {"output": {str(k): data.get(k) for k in fields}}
+        keys = [f["key"] for f in normalize_start_fields(fields)]
+        if keys:
+            return {"output": {k: data.get(k) for k in keys}}
         return {"output": data}
     if ntype == "end":
         mapping = (node.get("params") or {}).get("outputs") or {}

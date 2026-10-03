@@ -111,6 +111,21 @@ start → knowledge-retrieval → question-classifier
 - 内置模板 `变更审批`（`CHANGE_APPROVAL_WORKFLOW`）。
 - 说明：进程内暂停（非独立 worker 持久恢复）；多 worker 下审批列表以 DB 为准，续跑由处理请求的进程执行。
 
+## 作为应用运行（能力详情页「使用」）
+
+已发布的工作流可直接在**能力详情页 → 使用**里运行（面向内部员工，`access_policy=open` 时任意登录用户可运行）：
+
+- 形态由 `workflow.json` 顶层 `presentation.mode` 决定：`auto`（默认，推断）/ `form` / `chat` / `automation`。
+  - `chat`：对话界面（要求引擎 `mode=chat`），复用会话存储/历史。
+  - `form`：由 `start.fields` 渲染表单 → 运行 → 展示 `end` 输出。
+  - `automation`：展示触发信息 + 手动运行 + 最近运行记录。
+- `start.fields` 支持**富字段**（向后兼容纯字符串）：`{"key","label","type":"text|number|date|select|textarea","required","default","options"}`。
+- 接口：
+  - `GET /api/runtime/workflows/{name}/run-meta`（形态/输入字段/输出/触发）
+  - `POST /api/runtime/workflows/{name}/run`（按字段校验必填/补默认后运行）
+  - `GET /api/runtime/workflows/{name}/executions?limit=`（近期执行，本人；admin 全量）
+- 准入：`require_workflow_run`（admin / 作者 / 角色具备 `capability.invoke` / 统一访问谓词通过；`admin_only`、`restricted` 仍拦截）。
+
 ## 环境变量
 
 - `MARKET_RAG_URL` / `MARKET_RAG_TOKEN`：`knowledge-retrieval` 节点调 RAG `/api/search`（未配置则返回空并提示）。

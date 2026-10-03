@@ -928,3 +928,15 @@ class RuntimeSettingsOut(BaseModel):
 class RuntimeSettingsUpdate(BaseModel):
     agent_max_iterations: int | None = Field(default=None, ge=1, le=1000)
 
+
+class WorkflowRunMetaOut(BaseModel):
+    shape: str = "form"
+    engine_mode: str = ""
+    input_fields: list[dict[str, Any]] = Field(default_factory=list)
+    outputs: dict[str, str] = Field(default_factory=dict)
+    trigger: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkflowRunRequest(BaseModel):
+    input: dict[str, Any] = Field(default_factory=dict)
+

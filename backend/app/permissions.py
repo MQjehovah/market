@@ -148,3 +148,31 @@ async def require_runtime_access(user: User, cap: Capability, db: AsyncSession) 
         status.HTTP_403_FORBIDDEN,
         "没有调用该能力的权限：仅管理员、能力作者或已加入「我的能力」的调用方可用",
     )
+
+
+async def require_workflow_run(user: User, cap: Capability, db: AsyncSession) -> None:
+    """工作流"作为应用"运行的准入（面向内部员工，比严格 runtime 准入更宽松）。
+
+    满足任一即可：
+    1. 已发布/弃用 + 可见 + 统一访问谓词通过（``open`` 默认即任意登录员工可用）；
+    2. 角色拥有 ``capability.invoke``（默认 Admin，含 runtime_access_roles 追加）；
+    3. 能力作者本人（草稿/试运行场景）。
+    """
+    if user.role == "admin" or cap.author_id == user.id:
+        return
+    if not is_capability_visible(cap, user):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
+    if cap.status not in ("published", "deprecated"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "该应用尚未发布")
+    roles = {
+        r.strip()
+        for r in get_settings().runtime_access_roles.split(",")
+        if r.strip()
+    }
+    if role_has_permission(user.role, "capability.invoke", granted_roles=roles):
+        return
+    if capability_access_ok(cap, user):
+        return
+    raise HTTPException(
+        status.HTTP_403_FORBIDDEN, f"没有使用该应用的权限（{access_deny_reason(cap, user)}）"
+    )

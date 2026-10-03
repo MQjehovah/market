@@ -19,7 +19,7 @@ from app.models import (
     WorkflowConversation,
     WorkflowExecution,
 )
-from app.permissions import can_view, require_runtime_access
+from app.permissions import can_view, require_workflow_run
 from app.schemas import (
     CapabilityOut,
     MessageOut,
@@ -32,6 +32,8 @@ from app.schemas import (
     WorkflowExecuteRequest,
     WorkflowExecutionOut,
     WorkflowMessageOut,
+    WorkflowRunMetaOut,
+    WorkflowRunRequest,
     WorkflowUpdate,
 )
 from app.services.capabilities import ensure_name_ownership, normalize_cap_name, to_capability_out
@@ -39,6 +41,7 @@ from app.services.marketplace import resolve_capability
 from app.services.workflow_triggers import gitlab_trigger_input
 from app.services.workflows import (
     execute_workflow,
+    extract_run_meta,
     load_workflow_definition,
     resume_workflow,
     validate_definition,
@@ -230,11 +233,68 @@ def _to_out(ex: WorkflowExecution, cap: Capability | None) -> WorkflowExecutionO
 @router.post("/runtime/workflows/{name}/executions", response_model=WorkflowExecutionOut)
 async def run_workflow(name: str, data: WorkflowExecuteRequest, db: DbSession, user: CurrentUser):
     cap = await resolve_capability(db, user, name)
-    await require_runtime_access(user, cap, db)
+    await require_workflow_run(user, cap, db)
     if cap.type != "workflow":
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"能力 {name} 不是工作流")
     execution = await execute_workflow(db, user, cap, data.input)
     return _to_out(execution, cap)
+
+
+@router.get("/runtime/workflows/{name}/run-meta", response_model=WorkflowRunMetaOut)
+async def workflow_run_meta(name: str, db: DbSession, user: CurrentUser):
+    """工作流"作为应用"的对外运行元信息（形态/输入字段/输出/触发）。"""
+    cap = await resolve_capability(db, user, name)
+    await require_workflow_run(user, cap, db)
+    if cap.type != "workflow":
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"能力 {name} 不是工作流")
+    definition = load_workflow_definition(cap, require_nodes=False)
+    meta = extract_run_meta(definition)
+    return WorkflowRunMetaOut(**meta)
+
+
+@router.post("/runtime/workflows/{name}/run", response_model=WorkflowExecutionOut)
+async def run_workflow_app(name: str, data: WorkflowRunRequest, db: DbSession, user: CurrentUser):
+    """按对外输入字段校验并补默认后运行（表单/手动触发用）。"""
+    cap = await resolve_capability(db, user, name)
+    await require_workflow_run(user, cap, db)
+    if cap.type != "workflow":
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"能力 {name} 不是工作流")
+    definition = load_workflow_definition(cap, require_nodes=False)
+    fields = extract_run_meta(definition)["input_fields"]
+    payload = dict(data.input or {})
+    for f in fields:
+        key = f["key"]
+        if payload.get(key) in (None, ""):
+            if f.get("default") not in (None, ""):
+                payload[key] = f["default"]
+            elif f.get("required"):
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY, f"缺少必填输入：{f.get('label') or key}"
+                )
+    execution = await execute_workflow(db, user, cap, payload)
+    return _to_out(execution, cap)
+
+
+@router.get(
+    "/runtime/workflows/{name}/executions", response_model=list[WorkflowExecutionOut]
+)
+async def list_workflow_executions(
+    name: str, db: DbSession, user: CurrentUser, limit: int = 20
+):
+    """近期执行记录（本人；admin 全量）。"""
+    cap = await resolve_capability(db, user, name)
+    await require_workflow_run(user, cap, db)
+    stmt = select(WorkflowExecution).where(WorkflowExecution.workflow_id == cap.id)
+    if user.role != "admin":
+        stmt = stmt.where(WorkflowExecution.created_by == user.id)
+    rows = list(
+        (
+            await db.scalars(
+                stmt.order_by(WorkflowExecution.created_at.desc()).limit(max(1, min(limit, 100)))
+            )
+        ).all()
+    )
+    return [_to_out(ex, cap) for ex in rows]
 
 
 @router.post("/runtime/workflows/{name}/trigger", response_model=WorkflowExecutionOut)
@@ -294,7 +354,7 @@ def _conv_out(conv: WorkflowConversation, workflow_name: str = "") -> WorkflowCo
 async def chat_workflow(name: str, data: WorkflowChatRequest, db: DbSession, user: CurrentUser):
     """会话模式（chatflow）：按 conversation_id 持久化会话变量与多轮历史。"""
     cap = await resolve_capability(db, user, name)
-    await require_runtime_access(user, cap, db)
+    await require_workflow_run(user, cap, db)
     if cap.type != "workflow":
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"能力 {name} 不是工作流")
     conv: WorkflowConversation | None = None

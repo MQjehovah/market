@@ -41,6 +41,7 @@ import DebugCapabilityModal from '../components/DebugCapabilityModal.vue'
 import ConfirmActionModal from '../components/ConfirmActionModal.vue'
 import AskTrialPanel from '../components/AskTrialPanel.vue'
 import MultiSelect from '../components/MultiSelect.vue'
+import WorkflowChat from '../components/WorkflowChat.vue'
 
 const __API_BASE__ = (import.meta.env.BASE_URL || '/').replace(/\/$/, '') + '/api'
 
@@ -345,6 +346,65 @@ const exampleList = computed(() => {
   return items
 })
 const contentTab = ref('intro')
+// ── 工作流"作为应用"运行 ──
+const runMeta = ref(null)
+const runForm = reactive({})
+const runBusy = ref(false)
+const runError = ref('')
+const runResult = ref('')
+const runExecutions = ref([])
+const runLoading = ref(false)
+const isRunnableApp = computed(() => isWorkflow.value && isPublished.value)
+
+async function loadRunMeta() {
+  if (!isRunnableApp.value) {
+    runMeta.value = null
+    return
+  }
+  runLoading.value = true
+  runError.value = ''
+  try {
+    const meta = await api.get(`/runtime/workflows/${cap.value.name}/run-meta`)
+    runMeta.value = meta
+    for (const k of Object.keys(runForm)) delete runForm[k]
+    for (const f of meta.input_fields || []) {
+      runForm[f.key] = f.default !== undefined && f.default !== null ? f.default : ''
+    }
+    if (meta.shape !== 'chat') await loadExecutions()
+  } catch (e) {
+    runError.value = e?.message || '加载运行信息失败'
+  } finally {
+    runLoading.value = false
+  }
+}
+
+async function loadExecutions() {
+  if (!cap.value) return
+  try {
+    runExecutions.value = await api.get(`/runtime/workflows/${cap.value.name}/executions`)
+  } catch {
+    runExecutions.value = []
+  }
+}
+
+async function submitRun() {
+  if (!cap.value) return
+  runBusy.value = true
+  runError.value = ''
+  runResult.value = ''
+  try {
+    const ex = await api.post(`/runtime/workflows/${cap.value.name}/run`, { input: { ...runForm } })
+    const outs = ex.outputs || {}
+    const endOut = outs.end || outs
+    runResult.value = JSON.stringify(endOut, null, 2)
+    if (ex.state === 'failed') runError.value = ex.error || '运行失败'
+    await loadExecutions()
+  } catch (e) {
+    runError.value = e?.message || '运行失败'
+  } finally {
+    runBusy.value = false
+  }
+}
 const mcpConnection = ref(null)
 const mcpTools = ref([])
 const mcpMetaLoading = ref(false)
@@ -681,6 +741,7 @@ const mcpClientConfigJson = computed(() => {
 const contentTabs = computed(() => {
   if (!cap.value) return []
   const tabs = [{ key: 'intro', label: '介绍' }]
+  if (isRunnableApp.value) tabs.push({ key: 'run', label: '使用' })
   if (isMcp.value && mcpToolRows.value.length) {
     tabs.push({ key: 'tools', label: `工具（${mcpToolRows.value.length}）` })
   }
@@ -733,6 +794,7 @@ watch(cap, () => {
   iconFailed.value = false
   const keys = contentTabs.value.map((t) => t.key)
   if (!keys.includes(contentTab.value)) contentTab.value = 'intro'
+  loadRunMeta()
 })
 
 // 切换能力时立即重置头像加载失败态（cap 尚未加载完成也会先生效）
@@ -1479,6 +1541,76 @@ onMounted(() => {
             {{ t.label }}
           </button>
         </div>
+
+        <section v-show="contentTab === 'run'" class="panel">
+          <h2 class="detail-section-title">使用</h2>
+          <div v-if="runLoading" class="muted">加载中…</div>
+          <div v-else-if="runError && !runMeta" class="error">{{ runError }}</div>
+          <template v-else-if="runMeta">
+            <WorkflowChat v-if="runMeta.shape === 'chat'" :id="props.id" />
+            <template v-else>
+              <div v-if="runMeta.shape === 'automation' && runMeta.trigger && runMeta.trigger.type" class="guide-block">
+                <h3 class="guide-title">触发方式</h3>
+                <div class="muted" style="font-size: 12px">
+                  类型：{{ runMeta.trigger.type }}
+                  <span v-if="runMeta.trigger.cron">｜ cron：{{ runMeta.trigger.cron }}</span>
+                </div>
+              </div>
+              <div v-for="f in runMeta.input_fields" :key="f.key" class="field">
+                <label>
+                  {{ f.label }}
+                  <span v-if="f.required" style="color: var(--danger)">*</span>
+                </label>
+                <select v-if="f.type === 'select'" v-model="runForm[f.key]" class="select">
+                  <option v-for="o in f.options" :key="o" :value="o">{{ o }}</option>
+                </select>
+                <textarea
+                  v-else-if="f.type === 'textarea'"
+                  v-model="runForm[f.key]"
+                  class="textarea"
+                  rows="3"
+                  :placeholder="f.placeholder || ''"
+                ></textarea>
+                <input
+                  v-else
+                  v-model="runForm[f.key]"
+                  class="input"
+                  :type="f.type === 'number' ? 'number' : f.type === 'date' ? 'date' : 'text'"
+                  :placeholder="f.placeholder || ''"
+                />
+              </div>
+              <div v-if="!runMeta.input_fields.length" class="muted" style="font-size: 12px">
+                该应用无输入参数。
+              </div>
+              <div class="flex mt-12">
+                <button class="btn btn-primary" type="button" :disabled="runBusy" @click="submitRun">
+                  {{ runBusy ? '运行中…' : runMeta.shape === 'automation' ? '手动运行' : '运行' }}
+                </button>
+                <button class="btn" type="button" @click="loadExecutions">刷新记录</button>
+              </div>
+              <div v-if="runError" class="error mt-12">{{ runError }}</div>
+              <div v-if="runResult" class="guide-block mt-16">
+                <h3 class="guide-title">结果</h3>
+                <pre class="run-output">{{ runResult }}</pre>
+              </div>
+              <div class="guide-block mt-16">
+                <h3 class="guide-title">最近运行</h3>
+                <div v-for="ex in runExecutions" :key="ex.id" class="run-exec">
+                  <span
+                    class="badge"
+                    :class="{
+                      'badge-success': ex.state === 'succeeded',
+                      'badge-danger': ['failed', 'canceled'].includes(ex.state),
+                      'badge-warning': ['running', 'waiting'].includes(ex.state)
+                    }"
+                  >{{ ex.state }}</span>
+                  <span class="muted" style="font-size: 12px">{{ formatDate(ex.updated_at) }}</span>
+                </div>
+                <div v-if="!runExecutions.length" class="muted" style="font-size: 12px">暂无运行记录</div>
+              </div>
+            </template>
+          </template>
+        </section>
 
         <div v-show="['intro', 'config'].includes(contentTab)">
           <section v-show="contentTab === 'intro'" class="panel">
@@ -2621,6 +2753,20 @@ onMounted(() => {
   font-size: 12px; color: #2451c7; word-break: break-all;
 }
 .row-current td { background: rgba(79, 140, 255, 0.06); }
+.run-output {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow: auto;
+}
+.run-exec { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.run-exec:last-child { border-bottom: none; }
 .mt-8 { margin-top: 8px; } .mt-12 { margin-top: 12px; } .mt-16 { margin-top: 16px; } .mt-24 { margin-top: 24px; }
 h3 { margin: 0 0 12px; }
 @media (max-width: 960px) {
