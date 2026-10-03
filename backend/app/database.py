@@ -163,6 +163,12 @@ async def _auto_migrate(conn) -> None:
                 sync_conn.exec_driver_sql(
                     "ALTER TABLE mcp_gateway_servers ADD COLUMN capability_id VARCHAR(36) DEFAULT ''"
                 )
+        if "workflow_executions" in tables:
+            wf_cols = {c["name"] for c in inspector.get_columns("workflow_executions")}
+            if "conversation_id" not in wf_cols:
+                sync_conn.exec_driver_sql(
+                    "ALTER TABLE workflow_executions ADD COLUMN conversation_id VARCHAR(36) DEFAULT ''"
+                )
         if "users" in tables:
             user_cols = {c["name"] for c in inspector.get_columns("users")}
             if "department" not in user_cols:

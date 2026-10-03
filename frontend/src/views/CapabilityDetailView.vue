@@ -2128,6 +2128,12 @@ onMounted(() => {
                 @click="goEdit"
               >{{ cap.type === 'workflow' ? '查看编排' : '在线编辑' }}</button>
               <button
+                v-if="isWorkflow && ['published', 'deprecated'].includes(cap.status)"
+                class="btn"
+                type="button"
+                @click="router.push(`/workflows/${props.id}/chat`)"
+              >对话调试</button>
+              <button
                 v-if="canSubmit"
                 class="btn btn-success"
                 type="button"

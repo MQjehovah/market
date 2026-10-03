@@ -582,6 +582,42 @@ class WorkflowExecuteRequest(BaseModel):
     input: dict[str, Any] = Field(default_factory=dict)
 
 
+class WorkflowChatRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=20000)
+    conversation_id: str = Field(default="", max_length=36, description="留空则新建会话")
+    inputs: dict[str, Any] = Field(default_factory=dict, description="start 节点的额外入参")
+
+
+class WorkflowChatOut(BaseModel):
+    conversation_id: str
+    execution_id: str
+    state: str
+    answer: str = ""
+    outputs: dict[str, Any] = Field(default_factory=dict)
+    variables: dict[str, Any] = Field(default_factory=dict)
+    error: str = ""
+
+
+class WorkflowConversationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    workflow_id: str
+    workflow_name: str = ""
+    title: str = ""
+    variables: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+
+
+class WorkflowMessageOut(BaseModel):
+    role: str
+    content: str = ""
+    execution_id: str = ""
+    state: str = ""
+    created_at: datetime | None = None
+
+
 class RuntimeInstantiateRequest(BaseModel):
     task: str = "执行任务"
     binding: str = Field(default="", description="绑定名称或 ID，留空用默认绑定")

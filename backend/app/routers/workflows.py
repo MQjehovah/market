@@ -12,13 +12,24 @@ from sqlalchemy import and_, select
 from sqlalchemy.orm import joinedload, selectinload
 
 from app.auth import CurrentUser, DbSession
-from app.models import Capability, CapabilityArtifact, User, WorkflowExecution
+from app.models import (
+    Capability,
+    CapabilityArtifact,
+    User,
+    WorkflowConversation,
+    WorkflowExecution,
+)
 from app.permissions import can_view, require_runtime_access
 from app.schemas import (
     CapabilityOut,
+    MessageOut,
+    WorkflowChatOut,
+    WorkflowChatRequest,
+    WorkflowConversationOut,
     WorkflowCreate,
     WorkflowExecuteRequest,
     WorkflowExecutionOut,
+    WorkflowMessageOut,
     WorkflowUpdate,
 )
 from app.services.capabilities import ensure_name_ownership, normalize_cap_name, to_capability_out
@@ -117,14 +128,17 @@ def _load_workflow(cap: Capability) -> dict:
 @router.get("/workflows/templates")
 async def workflow_templates():
     """内置示例工作流模板（Dify 对齐），供「从模板新建」。"""
-    from app.services.workflow_samples import IT_ALERT_WORKFLOW
+    from app.services.workflow_samples import IT_ALERT_WORKFLOW, KNOWLEDGE_QA_CHATFLOW
 
+    samples = [IT_ALERT_WORKFLOW, KNOWLEDGE_QA_CHATFLOW]
     return [
         {
-            "name": IT_ALERT_WORKFLOW.get("name", ""),
-            "description": IT_ALERT_WORKFLOW.get("description", ""),
-            "workflow": IT_ALERT_WORKFLOW,
+            "name": w.get("name", ""),
+            "description": w.get("description", ""),
+            "mode": w.get("mode", "workflow"),
+            "workflow": w,
         }
+        for w in samples
     ]
 
 
@@ -238,6 +252,119 @@ async def trigger_workflow(name: str, request: Request, db: DbSession):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "工作流作者缺失")
     execution = await execute_workflow(db, author, cap, (body or {}).get("input") or {})
     return _to_out(execution, cap)
+
+
+def _conv_out(conv: WorkflowConversation, workflow_name: str = "") -> WorkflowConversationOut:
+    return WorkflowConversationOut(
+        id=conv.id,
+        workflow_id=conv.workflow_id,
+        workflow_name=workflow_name,
+        title=conv.title or "",
+        variables=dict(conv.variables or {}),
+        created_at=conv.created_at,
+        updated_at=conv.updated_at,
+    )
+
+
+@router.post("/runtime/workflows/{name}/chat", response_model=WorkflowChatOut)
+async def chat_workflow(name: str, data: WorkflowChatRequest, db: DbSession, user: CurrentUser):
+    """会话模式（chatflow）：按 conversation_id 持久化会话变量与多轮历史。"""
+    cap = await resolve_capability(db, user, name)
+    await require_runtime_access(user, cap, db)
+    if cap.type != "workflow":
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"能力 {name} 不是工作流")
+    conv: WorkflowConversation | None = None
+    if data.conversation_id:
+        conv = await db.get(WorkflowConversation, data.conversation_id)
+        if conv is None or conv.workflow_id != cap.id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "会话不存在")
+        if user.role != "admin" and conv.created_by != user.id:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "无权访问该会话")
+    if conv is None:
+        conv = WorkflowConversation(workflow_id=cap.id, created_by=user.id, title=data.query[:60])
+        db.add(conv)
+        await db.flush()
+    input_data = {"query": data.query, **(data.inputs or {})}
+    execution = await execute_workflow(db, user, cap, input_data, conversation=conv)
+    raw_outputs = execution.outputs or {}
+    return WorkflowChatOut(
+        conversation_id=conv.id,
+        execution_id=execution.id,
+        state=execution.state,
+        answer=str(raw_outputs.get("_answer") or ""),
+        outputs={k: v for k, v in raw_outputs.items() if k != "_answer"},
+        variables=dict(conv.variables or {}),
+        error=execution.error or "",
+    )
+
+
+@router.get(
+    "/runtime/workflows/{name}/conversations",
+    response_model=list[WorkflowConversationOut],
+)
+async def list_conversations(name: str, db: DbSession, user: CurrentUser):
+    cap = await resolve_capability(db, user, name)
+    stmt = select(WorkflowConversation).where(WorkflowConversation.workflow_id == cap.id)
+    if user.role != "admin":
+        stmt = stmt.where(WorkflowConversation.created_by == user.id)
+    rows = list(
+        (await db.scalars(stmt.order_by(WorkflowConversation.updated_at.desc()))).all()
+    )
+    return [_conv_out(r, cap.name) for r in rows]
+
+
+@router.get(
+    "/runtime/workflows/conversations/{conversation_id}/messages",
+    response_model=list[WorkflowMessageOut],
+)
+async def conversation_messages(conversation_id: str, db: DbSession, user: CurrentUser):
+    conv = await db.get(WorkflowConversation, conversation_id)
+    if conv is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "会话不存在")
+    if user.role != "admin" and conv.created_by != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "无权访问该会话")
+    rows = list(
+        (
+            await db.scalars(
+                select(WorkflowExecution)
+                .where(WorkflowExecution.conversation_id == conv.id)
+                .order_by(WorkflowExecution.created_at.asc())
+            )
+        ).all()
+    )
+    messages: list[WorkflowMessageOut] = []
+    for ex in rows:
+        query = str((ex.input_data or {}).get("query") or "")
+        answer = str((ex.outputs or {}).get("_answer") or "")
+        if query:
+            messages.append(
+                WorkflowMessageOut(
+                    role="user", content=query, execution_id=ex.id,
+                    state=ex.state, created_at=ex.created_at,
+                )
+            )
+        if answer:
+            messages.append(
+                WorkflowMessageOut(
+                    role="assistant", content=answer, execution_id=ex.id,
+                    state=ex.state, created_at=ex.created_at,
+                )
+            )
+    return messages
+
+
+@router.delete(
+    "/runtime/workflows/conversations/{conversation_id}", response_model=MessageOut
+)
+async def delete_conversation(conversation_id: str, db: DbSession, user: CurrentUser):
+    conv = await db.get(WorkflowConversation, conversation_id)
+    if conv is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "会话不存在")
+    if user.role != "admin" and conv.created_by != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "无权删除该会话")
+    await db.delete(conv)
+    await db.commit()
+    return MessageOut(message="会话已删除")
 
 
 @router.get("/runtime/workflows/executions/{exec_id}", response_model=WorkflowExecutionOut)

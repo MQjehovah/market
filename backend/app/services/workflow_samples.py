@@ -120,3 +120,62 @@ IT_ALERT_WORKFLOW: dict = {
         {"id": "e12", "from": "agg", "to": "end"},
     ],
 }
+
+
+# 会话式（chatflow）：多轮历史 + 知识库检索 + 会话变量记录主题 → answer 节点回复。
+KNOWLEDGE_QA_CHATFLOW: dict = {
+    "name": "制度问答",
+    "description": "会话式知识问答：多轮历史 + 知识库检索 + 会话变量（记录最近问题）",
+    "mode": "chat",
+    "conversation": {"history_turns": 10},
+    "on_error": "fail",
+    "timeout_seconds": 180,
+    "nodes": [
+        {
+            "id": "start",
+            "type": "start",
+            "params": {"fields": ["query"]},
+            "position": {"x": 40, "y": 160},
+        },
+        {
+            "id": "kb",
+            "type": "knowledge-retrieval",
+            "params": {"query": "{{#sys.query#}}", "top_k": 5},
+            "position": {"x": 260, "y": 160},
+        },
+        {
+            "id": "llm",
+            "type": "llm",
+            "params": {
+                "system": (
+                    "你是企业制度与 IT 支持助手，基于知识库片段用简洁中文回答；"
+                    "片段不足时明确说明并给出建议。"
+                ),
+                "prompt": (
+                    "历史对话：{{#sys.history#}}\n"
+                    "知识库片段：{{#kb.hits#}}\n"
+                    "用户问题：{{#sys.query#}}"
+                ),
+            },
+            "position": {"x": 480, "y": 160},
+        },
+        {
+            "id": "assign",
+            "type": "variable-assigner",
+            "params": {"assignments": {"last_question": "{{#sys.query#}}"}},
+            "position": {"x": 700, "y": 160},
+        },
+        {
+            "id": "answer",
+            "type": "answer",
+            "params": {"answer": "{{#llm.text#}}"},
+            "position": {"x": 920, "y": 160},
+        },
+    ],
+    "edges": [
+        {"id": "c1", "from": "start", "to": "kb"},
+        {"id": "c2", "from": "kb", "to": "llm"},
+        {"id": "c3", "from": "llm", "to": "assign"},
+        {"id": "c4", "from": "assign", "to": "answer"},
+    ],
+}

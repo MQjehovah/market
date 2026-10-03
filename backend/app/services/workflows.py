@@ -26,12 +26,13 @@ from typing import Any
 
 import httpx
 from fastapi import HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.a2a.protocol import extract_text
 from app.a2a.service import send_task
 from app.config import get_settings
-from app.models import Capability, User, WorkflowExecution
+from app.models import Capability, User, WorkflowConversation, WorkflowExecution
 from app.services.marketplace import (
     activate_skill,
     install_mcp,
@@ -198,6 +199,19 @@ def _stringify(v: Any) -> str:
     if isinstance(v, (str, int, float, bool)):
         return str(v)
     return json.dumps(v, ensure_ascii=False)
+
+
+def collect_answers(nodes: dict[str, Any], outputs: dict[str, Any]) -> str:
+    """汇总 answer 节点输出为会话回复（按节点声明顺序）。"""
+    parts: list[str] = []
+    for nid, node in nodes.items():
+        if _canon_type(node.get("type")) != "answer":
+            continue
+        out = outputs.get(nid)
+        val = out.get("answer") if isinstance(out, dict) else out
+        if val not in (None, ""):
+            parts.append(_stringify(val))
+    return "\n".join(parts)
 
 
 def _eval_condition(cond: dict[str, Any], ctx: dict[str, Any]) -> bool:
@@ -581,11 +595,46 @@ async def _execute_node(
     raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"未知节点类型 {ntype}")
 
 
+async def _load_conversation_history(
+    db: AsyncSession, conversation: WorkflowConversation, limit: int
+) -> list[dict[str, str]]:
+    """按会话载入最近 history（user 提问 + assistant 回复），从旧到新。"""
+    if limit <= 0:
+        return []
+    rows = list(
+        (
+            await db.scalars(
+                select(WorkflowExecution)
+                .where(
+                    WorkflowExecution.conversation_id == conversation.id,
+                    WorkflowExecution.workflow_id == conversation.workflow_id,
+                )
+                .order_by(WorkflowExecution.created_at.desc())
+                .limit(limit)
+            )
+        ).all()
+    )
+    turns: list[dict[str, str]] = []
+    for ex in reversed(rows):
+        query = ""
+        if isinstance(ex.input_data, dict):
+            query = str(ex.input_data.get("query") or "")
+        answer = ""
+        if isinstance(ex.outputs, dict):
+            answer = str(ex.outputs.get("_answer") or "")
+        if query:
+            turns.append({"role": "user", "content": query})
+        if answer:
+            turns.append({"role": "assistant", "content": answer})
+    return turns
+
+
 async def execute_workflow(
     db: AsyncSession,
     user: User,
     cap: Capability,
     input_data: dict[str, Any],
+    conversation: WorkflowConversation | None = None,
 ) -> WorkflowExecution:
     definition = load_workflow_definition(cap)
     validate_definition(definition)
@@ -601,13 +650,24 @@ async def execute_workflow(
 
     node_states: dict[str, Any] = {nid: "pending" for nid in nodes}
     outputs: dict[str, Any] = {}
+    history: list[dict[str, str]] = []
+    if conversation is not None:
+        conv_cfg = definition.get("conversation") or {}
+        history = await _load_conversation_history(
+            db, conversation, int(conv_cfg.get("history_turns") or 10) * 2
+        )
     ctx: dict[str, Any] = {
         "input": input_data,
         "sys": {
             "query": input_data.get("query") if isinstance(input_data, dict) else "",
             "now": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "history": history,
+            "conversation_id": conversation.id if conversation is not None else "",
         },
+        "history": history,
     }
+    if conversation is not None:
+        ctx["conversation"] = dict(conversation.variables or {})
     on_error = definition.get("on_error", "fail")
     overall_timeout = int(definition.get("timeout_seconds") or 0)
 
@@ -616,6 +676,7 @@ async def execute_workflow(
         state="running",
         input_data=input_data,
         node_states=node_states,
+        conversation_id=conversation.id if conversation is not None else "",
         created_by=user.id,
     )
     db.add(execution)
@@ -651,8 +712,8 @@ async def execute_workflow(
         outputs[nid] = node_output
         ctx[nid] = node_output
         node_states[nid] = "succeeded"
-        if node["type"] == "if_else":
-            branch = result.get("branch") or "true"
+        if _canon_type(node["type"]) in ("if_else", "question_classifier"):
+            branch = str(result.get("branch") or ("true" if _canon_type(node["type"]) == "if_else" else "")).strip().lower()
             for ei in outgoing[nid]:
                 cond = str(edges[ei].get("condition") or "").strip().lower()
                 edge_active[ei] = (cond == "") or (cond == branch)
@@ -739,9 +800,19 @@ async def execute_workflow(
         _skip_downstream()
 
     # 若存在 end 节点，以 end 输出作为最终结果
-    end_outputs = {nid: outputs[nid] for nid in nodes if nodes[nid]["type"] == "end" and nid in outputs}
-    execution.outputs = end_outputs if end_outputs else outputs
+    end_outputs = {
+        nid: outputs[nid]
+        for nid in nodes
+        if _canon_type(nodes[nid]["type"]) == "end" and nid in outputs
+    }
+    final_outputs: dict[str, Any] = dict(end_outputs) if end_outputs else dict(outputs)
+    answer = collect_answers(nodes, outputs)
+    if answer:
+        final_outputs["_answer"] = answer
+    execution.outputs = final_outputs
     execution.node_states = node_states
+    if conversation is not None:
+        conversation.variables = dict(ctx.get("conversation") or {})
     await db.commit()
     await db.refresh(execution)
     return execution

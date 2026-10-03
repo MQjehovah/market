@@ -285,7 +285,26 @@ class WorkflowExecution(Base):
     outputs: Mapped[dict] = mapped_column(MutableDict.as_mutable(JSON), default=MutableDict)
     node_states: Mapped[dict] = mapped_column(MutableDict.as_mutable(JSON), default=MutableDict)
     error: Mapped[str] = mapped_column(Text, default="")
+    conversation_id: Mapped[str] = mapped_column(String(36), default="", index=True)
     created_by: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class WorkflowConversation(Base):
+    """工作流会话（chatflow）：跨轮持久化会话变量，绑定某个 workflow 能力与用户。"""
+
+    __tablename__ = "workflow_conversations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    workflow_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("capabilities.id"), index=True
+    )
+    created_by: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    title: Mapped[str] = mapped_column(String(255), default="")
+    variables: Mapped[dict] = mapped_column(MutableDict.as_mutable(JSON), default=MutableDict)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()

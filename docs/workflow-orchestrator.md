@@ -58,6 +58,21 @@ start → knowledge-retrieval → question-classifier
 - 正式执行：`POST /api/runtime/workflows/{name}/executions`。
 - 执行记录：`GET /api/runtime/workflows/executions/{exec_id}`；取消：`.../cancel`。
 
+## 会话模式（chatflow）
+
+同一工作流可作会话式应用：`answer` 节点作为回复，`conversation` 变量跨轮持久化。
+
+- 声明：`workflow.json` 顶层 `"mode": "chat"` 与 `"conversation": { "history_turns": 10 }`。
+- 会话变量：`variable-assigner` 写入 `ctx["conversation"]`，执行结束时持久化；引用 `${conversation.变量}`。
+- 多轮历史：`${sys.history}`（最近若干轮 user/assistant），供 `llm` 节点拼接上下文。
+- 接口：
+  - 发送：`POST /api/runtime/workflows/{name}/chat`，body `{ "query": "...", "conversation_id": "可选" }`，返回 `{ conversation_id, answer, outputs, variables }`。
+  - 会话列表：`GET /api/runtime/workflows/{name}/conversations`。
+  - 消息回溯：`GET /api/runtime/workflows/conversations/{id}/messages`。
+  - 删除：`DELETE /api/runtime/workflows/conversations/{id}`。
+- 前端：发布版工作流详情页「对话调试」→ `/workflows/{id}/chat`。
+- 内置模板 `制度问答`（`KNOWLEDGE_QA_CHATFLOW`）。
+
 ## 环境变量
 
 - `MARKET_RAG_URL` / `MARKET_RAG_TOKEN`：`knowledge-retrieval` 节点调 RAG `/api/search`（未配置则返回空并提示）。
