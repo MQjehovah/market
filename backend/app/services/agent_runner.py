@@ -4,6 +4,7 @@
 后 mode=llm，即为真实使用。
 """
 
+import contextvars
 import json
 import logging
 from typing import Any
@@ -27,6 +28,11 @@ from app.services.marketplace import (
 logger = logging.getLogger("market.agent_runner")
 
 DEFAULT_MAX_ITERATIONS = 10
+
+# 试用传入个人网关密钥时，本轮 chat 调用用这组 (base, key, model)，不再用进程级 LLM_API_KEY。
+_llm_ctx: contextvars.ContextVar[tuple[str, str, str] | None] = contextvars.ContextVar(
+    "llm_ctx", default=None
+)
 TRACE_CLIP = 3000
 
 
@@ -44,16 +50,21 @@ def is_llm_configured() -> bool:
 
 async def _chat_completion(messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> dict:
     """调用 OpenAI 兼容 chat/completions（非流式）。"""
-    s = get_settings()
-    payload: dict[str, Any] = {"model": s.llm_model, "messages": messages}
+    override = _llm_ctx.get()
+    if override:
+        base, api_key, model = override
+    else:
+        s = get_settings()
+        base, api_key, model = s.llm_base_url, s.llm_api_key, s.llm_model
+    payload: dict[str, Any] = {"model": model, "messages": messages}
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
     async with httpx.AsyncClient(timeout=300) as client:
         resp = await client.post(
-            f"{s.llm_base_url.rstrip('/')}/chat/completions",
+            f"{base.rstrip('/')}/chat/completions",
             headers={
-                "Authorization": f"Bearer {s.llm_api_key}",
+                "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
             json=payload,
@@ -171,9 +182,11 @@ async def run_agent(
     *,
     max_iterations: int | None = None,
     extra_deps: list[dict[str, str]] | None = None,
+    credentials: tuple[str, str, str] | None = None,
 ) -> dict[str, Any]:
-    """真实执行 agent：加载人设与绑定能力，LLM 工具调用循环；未配置 LLM 时模拟。"""
-    if not is_llm_configured():
+    """真实执行 agent。credentials 为 (网关根, 密钥, 模型) 时按这组调用。
+    都没有时仍返回模拟结果，供 A2A 等旧入口使用。网页试用不走这条。"""
+    if credentials is None and not is_llm_configured():
         return {
             "mode": "simulated",
             "output": (
@@ -186,6 +199,30 @@ async def run_agent(
             "tool_calls": 0,
         }
 
+    ctx_token = _llm_ctx.set(credentials) if credentials else None
+    try:
+        return await _run_agent_llm(
+            db,
+            user,
+            cap,
+            task_text,
+            max_iterations=max_iterations,
+            extra_deps=extra_deps,
+        )
+    finally:
+        if ctx_token is not None:
+            _llm_ctx.reset(ctx_token)
+
+
+async def _run_agent_llm(
+    db: AsyncSession,
+    user: User,
+    cap: Capability,
+    task_text: str,
+    *,
+    max_iterations: int | None = None,
+    extra_deps: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
     prompt, deps = read_prompt_deps(cap)
     runtime = await _resolve_manifest(db, user, deps or [])
     # 工作流 agent 节点内联绑定的额外能力（并入专家包依赖）

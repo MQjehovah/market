@@ -420,7 +420,7 @@ const askCanRun = computed(() => {
   return joined.value || Boolean(usedByAgents.value[0]?.capability_id)
 })
 const askBlockedHint = computed(() => {
-  if (!authState.token) return '登录后才能试用。'
+  if (!authState.token) return '用企业统一登录后才能试用。'
   if (askCanRun.value) return ''
   return '先「加入」授权，再试用。'
 })

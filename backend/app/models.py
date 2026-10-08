@@ -41,6 +41,8 @@ class User(Base):
     team: Mapped[str] = mapped_column(String(100), default="")
     department: Mapped[str] = mapped_column(String(100), default="")  # 部门(唯一来源)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # 企业登录时换到的个人网关密钥（Fernet 密文）。试用按这把密钥计费。
+    router_key_ciphertext: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     capabilities: Mapped[list["Capability"]] = relationship(back_populates="author")

@@ -28,8 +28,10 @@ const chips = computed(() =>
   (props.suggestions || []).map(String).filter(Boolean).slice(0, 4)
 )
 
+const payload = computed(() => result.value?.result || result.value || {})
+
 const toolNames = computed(() => {
-  const steps = result.value?.steps || []
+  const steps = payload.value?.steps || []
   const names = []
   for (const s of steps) {
     if (s.kind && s.kind !== 'call') continue
@@ -95,6 +97,7 @@ async function ask() {
     <p class="guide-lead muted">
       <template v-if="subjectLabel">通过专家「{{ agentName }}」验证「{{ subjectLabel }}」。</template>
       <template v-else>向「{{ agentName }}」发一句自然语言，看它怎么答{{ agentVersion ? `（v${agentVersion}）` : '' }}。</template>
+      提问记在你自己的模型额度上。
     </p>
     <div v-if="chips.length" class="ask-chips">
       <button
@@ -124,12 +127,12 @@ async function ask() {
     <div v-if="error" class="alert alert-error mt-12">{{ error }}</div>
     <div v-if="result" class="ask-result mt-12">
       <div class="ask-meta muted">
-        <span>{{ result.mode === 'simulated' ? '模拟' : '真实' }}执行</span>
+        <span>{{ payload.mode === 'simulated' ? '模拟执行' : '已回答' }}</span>
         <span>·</span>
-        <span>工具调用 {{ result.tool_calls || 0 }} 次</span>
+        <span>工具调用 {{ payload.tool_calls || 0 }} 次</span>
         <span v-if="toolNames.length"> · {{ toolNames.join('、') }}</span>
       </div>
-      <pre class="ask-output">{{ result.output }}</pre>
+      <pre class="ask-output">{{ payload.output }}</pre>
     </div>
   </div>
 </template>

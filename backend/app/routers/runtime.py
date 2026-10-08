@@ -283,8 +283,9 @@ async def health():
 
 @router.post("/agents/{name}/tasks", response_model=RuntimeResult)
 async def run_agent_task(name: str, data: RuntimeTaskRequest, db: DbSession, user: RuntimeUser):
-    """直接向 Agent 发送任务：LLM 已配置时真实执行（工具沙箱 + 工具调用循环），否则模拟。"""
+    """网页试用：用该员工自己的网关密钥真实执行。没有密钥时说明要重新企业登录，不返回模拟回答。"""
     from app.services.agent_runner import run_agent
+    from app.services.router_key import personal_gateway_credentials, trial_unavailable_detail
 
     cap = await resolve_capability(db, user, name)
     await require_runtime_access(user, cap, db)
@@ -299,7 +300,10 @@ async def run_agent_task(name: str, data: RuntimeTaskRequest, db: DbSession, use
         await require_runtime_access(user, cap, db)
     if cap.type != "agent":
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{name} 不是 Agent 能力")
-    result = await run_agent(db, user, cap, data.task)
+    credentials = personal_gateway_credentials(user)
+    if credentials is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, trial_unavailable_detail(user))
+    result = await run_agent(db, user, cap, data.task, credentials=credentials)
     await db.refresh(cap)
     payload = RuntimeTaskOut(
         task_id=str(uuid.uuid4()),

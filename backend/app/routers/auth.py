@@ -1,3 +1,4 @@
+import logging
 import time
 import urllib.parse
 from collections import defaultdict, deque
@@ -12,6 +13,9 @@ from app.core import sso_auth
 from app.models import User
 from app.schemas import ChangePasswordRequest, MessageOut, TokenOut, UserLogin, UserOut
 from app.services.install_policy import ensure_default_on_joins
+from app.services.router_key import capture_router_key, store_router_key
+
+logger = logging.getLogger("market.auth")
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -110,6 +114,15 @@ async def oidc_callback(db: DbSession, code: str = "", state: str = ""):
     # 仅新开户时开通一次默认能力（可自行移除且不会被重新加回）
     if getattr(user, "_provision_defaults", False):
         await ensure_default_on_joins(db, user)
+    # id_token 只在这一步还在手里。换个人网关密钥失败不挡登录，下次企业登录再试。
+    try:
+        router_key = await capture_router_key(id_token)
+        if router_key:
+            store_router_key(user, router_key)
+            await db.commit()
+    except Exception:  # noqa: BLE001
+        logger.warning("保存个人模型密钥失败", exc_info=True)
+        await db.rollback()
     token = create_access_token(user)
     target = (get_settings().sso_redirect_target or "/login").strip() or "/login"
     target = _with_query(target, sso_token=token, redirect=next_path)

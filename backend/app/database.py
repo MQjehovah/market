@@ -187,6 +187,10 @@ async def _auto_migrate(conn) -> None:
                 sync_conn.exec_driver_sql(
                     "ALTER TABLE users ADD COLUMN department VARCHAR(100) DEFAULT ''"
                 )
+            if "router_key_ciphertext" not in user_cols:
+                sync_conn.exec_driver_sql(
+                    "ALTER TABLE users ADD COLUMN router_key_ciphertext TEXT DEFAULT ''"
+                )
             # 发布者角色已取消：历史 publisher 统一并入 user
             sync_conn.exec_driver_sql("UPDATE users SET role = 'user' WHERE role = 'publisher'")
             # 组织并入部门：部门为空时用历史 organization 回填

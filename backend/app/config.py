@@ -63,10 +63,14 @@ class Settings(BaseSettings):
     tool_max_output_bytes: int = 2 * 1024 * 1024
     tool_max_extract_bytes: int = 256 * 1024 * 1024
 
-    # Agent 真实执行（OpenAI 兼容网关）
+    # Agent 真实执行（OpenAI 兼容网关）。试用走个人密钥，这两项是网关地址和模型名。
+    # 默认与桌面端一致：管理端 https://ai.xzrobot.com/router ，模型 deepseek-flash。
+    # 桌面端把 /v1 拼在 routerUrl 后面；这里的网关根要自己带上 /v1。
     llm_base_url: str = ""
     llm_api_key: str = ""
-    llm_model: str = ""
+    llm_model: str = "deepseek-flash"
+    router_admin_url: str = "https://ai.xzrobot.com/router"
+    router_base_url: str = "https://ai.xzrobot.com/router/v1"
     agent_max_iterations: int = 100
 
     # runtime 调用授权：只有这些角色可以调用/执行能力（工具调用、Agent 任务、技能激活、
