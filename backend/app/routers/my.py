@@ -44,6 +44,36 @@ _HOST_KINDS = {
 }
 
 
+async def _related_capability_ids(db, capability_id: str) -> list[str]:
+    """与请求能力同源的全部 id: 同名同类型的全部版本 + 各 plugin 版本的组件。
+
+    加入记录写的是当时的版本 id, 而市场列表展示最新版本 id; 发布新版本后按新 id
+    移除/启停会漏掉旧记录。这里统一展开补齐(去重保序)。请求 id 不存在时仅返回自身,
+    由调用方按原语义返回未加入/404。
+    """
+    cap = await db.get(Capability, capability_id)
+    if cap is None:
+        return [capability_id]
+    rows = (
+        await db.scalars(
+            select(Capability).where(Capability.name == cap.name, Capability.type == cap.type)
+        )
+    ).all()
+    ids: list[str] = [capability_id]
+    for row in rows:
+        if row.id not in ids:
+            ids.append(row.id)
+    from app.services.plugins import plugin_component_ids
+
+    for row in rows:
+        if row.type != "plugin":
+            continue
+        for cid in plugin_component_ids(row):
+            if cid not in ids:
+                ids.append(cid)
+    return ids
+
+
 def _out(cap: Capability, *, added: bool, owned: bool, enabled: bool = True) -> dict:
     data = to_capability_out(
         cap, author_name=cap.author.username if cap.author else ""
@@ -287,41 +317,32 @@ async def add_capability(data: MyCapabilityAdd, db: DbSession, user: CurrentUser
 async def patch_capability(
     capability_id: str, data: MyCapabilityPatch, db: DbSession, user: CurrentUser
 ):
-    """legacy：宿主启用状态（本地各记后市场不再提供 UI 开关），保留供宿主兼容。"""
-    row = await db.scalar(
-        select(UserCapability).where(
-            and_(
-                UserCapability.user_id == user.id,
-                UserCapability.capability_id == capability_id,
-            )
-        )
-    )
-    if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "该能力不在你的能力中")
-    cap = await db.get(Capability, capability_id)
-    if data.enabled is False and is_required_policy(cap):
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            f"「{cap.name}」为必装能力（install_policy=required），不能停用",
-        )
-    ids = [capability_id]
-    if cap is not None and cap.type == "plugin":
-        from app.services.plugins import plugin_component_ids
+    """legacy: 宿主启用状态(本地各记后市场不再提供 UI 开关), 保留供宿主兼容。
 
-        ids.extend(plugin_component_ids(cap))
-    updated = 0
-    for cid in ids:
-        link = await db.scalar(
+    按同名版本兜底: 能力发布新版本后旧加入记录 id 漂移, 也能启停到。
+    """
+    cap = await db.get(Capability, capability_id)
+    ids = await _related_capability_ids(db, capability_id)
+    links = (
+        await db.scalars(
             select(UserCapability).where(
                 and_(
                     UserCapability.user_id == user.id,
-                    UserCapability.capability_id == cid,
+                    UserCapability.capability_id.in_(ids),
                 )
             )
         )
-        if link is None:
-            continue
-        child = await db.get(Capability, cid)
+    ).all()
+    if not links:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "该能力不在你的能力中")
+    if data.enabled is False and is_required_policy(cap):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"「{cap.name if cap else capability_id}」为必装能力（install_policy=required），不能停用",
+        )
+    updated = 0
+    for link in links:
+        child = await db.get(Capability, link.capability_id)
         if data.enabled is False and is_required_policy(child):
             continue
         link.enabled = data.enabled
@@ -333,40 +354,30 @@ async def patch_capability(
 
 @router.delete("/capabilities/{capability_id}", response_model=MessageOut)
 async def remove_capability(capability_id: str, db: DbSession, user: CurrentUser):
-    row = await db.scalar(
-        select(UserCapability).where(
-            and_(
-                UserCapability.user_id == user.id,
-                UserCapability.capability_id == capability_id,
+    """移除我的能力(同名版本兜底, 修复版本漂移导致的无法移出)。"""
+    cap = await db.get(Capability, capability_id)
+    ids = await _related_capability_ids(db, capability_id)
+    links = (
+        await db.scalars(
+            select(UserCapability).where(
+                and_(
+                    UserCapability.user_id == user.id,
+                    UserCapability.capability_id.in_(ids),
+                )
             )
         )
-    )
-    if row is None:
+    ).all()
+    if not links:
         return MessageOut(message="该能力不在你的能力中")
-
-    cap = await db.get(Capability, capability_id)
     if is_required_policy(cap):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             f"「{cap.name}」为必装能力（install_policy=required），不能从我的能力中移除",
         )
-    ids = [capability_id]
-    if cap is not None and cap.type == "plugin":
-        from app.services.plugins import plugin_component_ids
-
-        ids.extend(plugin_component_ids(cap))
-
     removed = 0
-    for cid in ids:
-        link = await db.scalar(
-            select(UserCapability).where(
-                and_(
-                    UserCapability.user_id == user.id,
-                    UserCapability.capability_id == cid,
-                )
-            )
-        )
-        if link is None:
+    for link in links:
+        child = await db.get(Capability, link.capability_id)
+        if is_required_policy(child):
             continue
         await db.delete(link)
         removed += 1

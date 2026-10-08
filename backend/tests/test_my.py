@@ -409,3 +409,102 @@ async def test_default_on_follows_name_across_republish(
             )
         ).all()
     assert not rows, "重发布后不应重复加入新版本行"
+
+
+async def _publish_next_version(
+    client, publisher_headers, admin_headers, base_id: str, name: str, version: str = "1.0.1"
+) -> str:
+    """基于已发布能力开新版本并走完上传/提交/审核，返回新版本 id。"""
+    r = await client.post(
+        f"/api/publish/capabilities/{base_id}/versions",
+        headers=publisher_headers,
+        json={"new_version": version, "changelog": "drift"},
+    )
+    assert r.status_code == 201, r.text
+    new_id = r.json()["id"]
+    r = await client.post(
+        f"/api/publish/capabilities/{new_id}/artifact",
+        headers=publisher_headers,
+        files={"file": ("pkg.zip", _tool_zip(name), "application/zip")},
+    )
+    assert r.status_code == 200, r.text
+    r = await client.post(f"/api/publish/capabilities/{new_id}/submit", headers=publisher_headers)
+    assert r.status_code == 200, r.text
+    r = await client.post(
+        f"/api/admin/capabilities/{new_id}/review",
+        headers=admin_headers,
+        json={"action": "approve", "comment": "ok"},
+    )
+    assert r.status_code == 200, r.text
+    return new_id
+
+
+async def _user_links(client, headers) -> list[tuple[str, bool]]:
+    """直接读库返回 (capability_id, enabled) 列表，避免列表接口版本归并干扰断言。"""
+    from sqlalchemy import select
+
+    from app.database import SessionLocal
+    from app.models import UserCapability
+
+    r = await client.get("/api/auth/me", headers=headers)
+    assert r.status_code == 200, r.text
+    uid = r.json()["id"]
+    async with SessionLocal() as db:
+        rows = (
+            await db.scalars(select(UserCapability).where(UserCapability.user_id == uid))
+        ).all()
+        return [(row.capability_id, bool(row.enabled)) for row in rows]
+
+
+@pytest.mark.asyncio
+async def test_remove_capability_falls_back_to_same_name_versions(
+    client, publisher_headers, admin_headers, user_headers
+):
+    name = "drift-remove-tool"
+    await _publish_capability(client, publisher_headers, admin_headers, name, "tool", _tool_zip(name))
+    r = await client.get("/api/capabilities", params={"q": name})
+    v1 = r.json()["items"][0]["id"]
+    r = await client.post("/api/my/capabilities", headers=user_headers, json={"capability_id": v1})
+    assert r.status_code == 201, r.text
+    assert [cid for cid, _enabled in await _user_links(client, user_headers)] == [v1]
+
+    v2 = await _publish_next_version(client, publisher_headers, admin_headers, v1, name)
+    r = await client.delete(f"/api/my/capabilities/{v2}", headers=user_headers)
+    assert r.status_code == 200, r.text
+    assert "已从我的能力移除" in r.json()["message"]
+    assert await _user_links(client, user_headers) == []
+
+
+@pytest.mark.asyncio
+async def test_toggle_capability_falls_back_to_same_name_versions(
+    client, publisher_headers, admin_headers, user_headers
+):
+    name = "drift-toggle-tool"
+    await _publish_capability(client, publisher_headers, admin_headers, name, "tool", _tool_zip(name))
+    r = await client.get("/api/capabilities", params={"q": name})
+    v1 = r.json()["items"][0]["id"]
+    r = await client.post("/api/my/capabilities", headers=user_headers, json={"capability_id": v1})
+    assert r.status_code == 201, r.text
+
+    v2 = await _publish_next_version(client, publisher_headers, admin_headers, v1, name)
+    r = await client.patch(
+        f"/api/my/capabilities/{v2}", headers=user_headers, json={"enabled": False}
+    )
+    assert r.status_code == 200, r.text
+    assert await _user_links(client, user_headers) == [(v1, False)]
+
+
+@pytest.mark.asyncio
+async def test_remove_latest_version_link_by_exact_id(
+    client, publisher_headers, admin_headers, user_headers
+):
+    name = "exact-remove-tool"
+    await _publish_capability(client, publisher_headers, admin_headers, name, "tool", _tool_zip(name))
+    r = await client.get("/api/capabilities", params={"q": name})
+    v1 = r.json()["items"][0]["id"]
+    v2 = await _publish_next_version(client, publisher_headers, admin_headers, v1, name)
+    r = await client.post("/api/my/capabilities", headers=user_headers, json={"capability_id": v2})
+    assert r.status_code == 201, r.text
+    r = await client.delete(f"/api/my/capabilities/{v2}", headers=user_headers)
+    assert r.status_code == 200, r.text
+    assert await _user_links(client, user_headers) == []
