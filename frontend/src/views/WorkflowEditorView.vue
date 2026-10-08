@@ -6,7 +6,7 @@ import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import { api } from '../api'
 import { authState } from '../stores/auth'
-import { TYPE_CATEGORIES, TYPE_LABELS, formatDate } from '../utils/format'
+import { TYPE_CATEGORIES, TYPE_LABELS, formatDate, isOpenDraft } from '../utils/format'
 import StatusBadge from '../components/StatusBadge.vue'
 import WorkflowNode from '../components/workflow/WorkflowNode.vue'
 import VarInput from '../components/workflow/VarInput.vue'
@@ -160,6 +160,7 @@ const runForm = reactive({})
 const error = ref('')
 const notice = ref('')
 const busy = ref(false)
+const submitting = ref(false)
 const running = ref(false)
 
 const isOwner = computed(
@@ -765,6 +766,22 @@ async function save() {
   }
 }
 
+async function submitReview() {
+  if (!meta.id || submitting.value) return
+  submitting.value = true
+  error.value = ''
+  notice.value = ''
+  try {
+    const cap = await api.post(`/publish/capabilities/${meta.id}/submit`)
+    meta.status = cap.status || 'reviewing'
+    notice.value = '已提交审核'
+  } catch (e) {
+    error.value = e.message
+  } finally {
+    submitting.value = false
+  }
+}
+
 async function run(inputArg) {
   error.value = ''
   notice.value = ''
@@ -857,6 +874,15 @@ function stateLabel(state) {
         <button class="btn btn-sm" @click="toggleJson">查看 JSON</button>
         <button v-if="canEdit" class="btn btn-sm btn-primary" :disabled="busy" @click="save">
           {{ busy ? '保存中…' : '保存草稿' }}
+        </button>
+        <button
+          v-if="canEdit && meta.id && isOpenDraft(meta.status)"
+          class="btn btn-sm btn-success"
+          type="button"
+          :disabled="submitting"
+          @click="submitReview"
+        >
+          {{ submitting ? '提交中…' : '提交审核' }}
         </button>
         <button v-if="canTest" class="btn btn-sm btn-success" :disabled="running" @click="startRun">
           {{ running ? '运行中…' : '▶ 试运行' }}
@@ -1224,7 +1250,7 @@ function stateLabel(state) {
             <div>• 从左侧添加节点，拖拽节点底部手柄连接上下游；分支节点（条件/分类）有多个输出口</div>
             <div>• 市场能力节点引用已发布的 tool / agent / skill / mcp；连接器支持 op=call 调用工具</div>
             <div>• 变量：${input.字段} 引用入参；Dify 语法以 #node.field#（双花括号包裹）引用上游输出</div>
-            <div>• 保存后为草稿，可在「我的能力」提交审核</div>
+            <div>• 保存后为草稿，可在上方提交审核，通过后才会上架</div>
           </div>
         </template>
       </aside>

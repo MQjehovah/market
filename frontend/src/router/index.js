@@ -10,6 +10,7 @@ import MyCapabilitiesView from '../views/MyCapabilitiesView.vue'
 import MySecretsView from '../views/MySecretsView.vue'
 import ProfileView from '../views/ProfileView.vue'
 import AdminView from '../views/AdminView.vue'
+import NotFoundView from '../views/NotFoundView.vue'
 import { authState, clearAuth, isTokenExpired } from '../stores/auth'
 
 const ADMIN_TITLES = {
@@ -48,7 +49,8 @@ const router = createRouter({
       path: '/admin/:section',
       component: AdminView,
       meta: { title: '治理后台', auth: true, admin: true }
-    }
+    },
+    { path: '/:pathMatch(.*)*', component: NotFoundView, meta: { title: '找不到页面' } }
   ]
 })
 

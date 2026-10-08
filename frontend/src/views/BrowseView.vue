@@ -10,8 +10,10 @@ import {
   SHELVES,
   TYPE_CATEGORIES,
   TYPE_LABELS,
+  isBrowseTagNoise,
   isLocalInstallKind
 } from '../utils/format'
+import { toast } from '../utils/toast'
 import CapabilityCard from '../components/CapabilityCard.vue'
 
 const router = useRouter()
@@ -29,6 +31,27 @@ const total = ref(0)
 const page = ref(1)
 const pageSize = 12
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
+const pageItems = computed(() => {
+  const n = totalPages.value
+  const cur = page.value
+  if (n <= 7) return Array.from({ length: n }, (_, i) => i + 1)
+  const items = [1]
+  let start = Math.max(2, cur - 1)
+  let end = Math.min(n - 1, cur + 1)
+  if (cur <= 3) {
+    start = 2
+    end = 4
+  }
+  if (cur >= n - 2) {
+    start = n - 3
+    end = n - 1
+  }
+  if (start > 2) items.push('…')
+  for (let i = start; i <= end; i += 1) items.push(i)
+  if (end < n - 1) items.push('…')
+  items.push(n)
+  return items
+})
 
 const emptyTaskGroups = () => ({ agents: [], skills: [], mcps: [], plugins: [], others: [] })
 
@@ -50,17 +73,17 @@ const filters = reactive({
   tab: '' // '', agent, skill, mcp, more
 })
 const myIds = ref(new Set())
+const joiningId = ref('')
 const tagOptions = ref([])
-const notice = ref('')
-const noticeHref = ref('')
+const loadError = ref('')
 
 const browseTabs = [
   { key: '', label: '推荐', hint: '专家与依赖（技能 / 连接器）的精选与热门' },
-  { key: 'all', label: '全部', hint: '全部能力：专家 / 技能 / 连接器 / 更多' },
+  { key: 'all', label: '全部', hint: '全部能力：专家 / 技能 / 连接器 / 编排' },
   { key: 'agent', label: '专家', hint: '场景级问答专家；依赖随专家生效' },
   { key: 'skill', label: '技能', hint: '问答 SOP；装进专家后提问即可按该流程回答' },
   { key: 'mcp', label: '连接器', hint: '给专家接外部系统' },
-  { key: 'more', label: '更多', hint: '能力编排与编排函数' }
+  { key: 'more', label: '编排', hint: '能力编排与编排函数' }
 ]
 
 /** 推荐页：无货架、无类型、无搜索、无其它筛选 */
@@ -97,6 +120,13 @@ const taskEmpty = computed(() => showTaskSearch.value && !loading.value && taskH
 
 const pageContext = computed(() => {
   if (filters.q) {
+    if (taskEmpty.value) {
+      return {
+        eyebrow: '任务匹配',
+        title: '没有匹配的能力',
+        desc: '换个说法试试，或直接去逛技能、专家、连接器。'
+      }
+    }
     return {
       eyebrow: '任务匹配',
       title: '为你找到这些能力',
@@ -115,8 +145,8 @@ const pageContext = computed(() => {
   if (filters.tab === 'more' || MORE_BROWSE_KINDS.includes(filters.type)) {
     return {
       eyebrow: '目录',
-      title: '更多',
-      desc: '能力编排与编排函数等进阶类型。'
+      title: '编排',
+      desc: '能力编排与编排函数。'
     }
   }
   if (filters.shelf && SHELVES[filters.shelf]) {
@@ -124,7 +154,7 @@ const pageContext = computed(() => {
     return { eyebrow: '分类', title: s.label, desc: s.description }
   }
   if (filters.shelf === 'all') {
-    return { eyebrow: '目录', title: '全部能力', desc: '含专家、技能、连接器与更多类型。' }
+    return { eyebrow: '目录', title: '全部能力', desc: '含专家、技能、连接器与编排。' }
   }
   if (filters.sort === 'usage') {
     return { eyebrow: '目录', title: '近期热门', desc: '按使用次数排列。范围仍是当前目录。' }
@@ -252,6 +282,7 @@ async function loadTaskSearch() {
 
 async function load() {
   loading.value = true
+  loadError.value = ''
   try {
     if (showDiscovery.value) {
       caps.value = []
@@ -275,7 +306,8 @@ async function load() {
     caps.value = []
     total.value = 0
     taskResults.value = emptyTaskGroups()
-    notice.value = e.message || '加载目录失败'
+    loadError.value = e.message || '加载目录失败'
+    toast.error(loadError.value)
   } finally {
     loading.value = false
   }
@@ -294,33 +326,38 @@ async function loadMy() {
 async function loadTagOptions() {
   try {
     const body = await api.get('/meta/tags')
-    tagOptions.value = body?.tags || []
+    tagOptions.value = (body?.tags || []).filter((t) => !isBrowseTagNoise(t))
   } catch {
     tagOptions.value = []
   }
 }
 
 async function addToMy(cap) {
-  notice.value = ''
-  noticeHref.value = ''
+  if (!authState.token) {
+    router.push({ path: '/login', query: { redirect: route.fullPath } })
+    return
+  }
+  if (joiningId.value) return
+  joiningId.value = cap.id
   try {
     const r = await api.post('/my/capabilities', { capability_id: cap.id })
     myIds.value = new Set([...myIds.value, cap.id])
-    noticeHref.value = `/capabilities/${cap.id}`
     if (cap.distribution === 'remote') {
       const extra = r?.message && r.message.includes('未加入') ? `；${r.message}` : ''
-      notice.value = `已加入「${cap.name}」。云端能力加入即用，无需安装${extra}`
+      toast.success(`已加入「${cap.name}」。云端能力加入即用${extra}`)
     } else if (r?.message) {
-      notice.value = r.message
+      toast.success(r.message)
     } else if (isLocalInstallKind(cap.type)) {
-      notice.value = `已加入「${cap.name}」。可打开详情本地安装，或在零号员工 / 桌面中安装使用。`
+      toast.success(`已加入「${cap.name}」。可打开详情安装使用。`)
     } else if (cap.type === 'agent' || cap.type === 'mcp') {
-      notice.value = `已加入「${cap.name}」。下一步：打开详情试用，或在零号员工 / 桌面中安装使用。`
+      toast.success(`已加入「${cap.name}」。打开详情即可试用。`)
     } else {
-      notice.value = `已加入「${cap.name}」。`
+      toast.success(`已加入「${cap.name}」。`)
     }
   } catch (e) {
-    notice.value = e.message
+    toast.error(e.message)
+  } finally {
+    joiningId.value = ''
   }
 }
 
@@ -472,14 +509,26 @@ watch(
         </div>
       </div>
       <div class="hero-stats">
-        <div v-if="showDiscovery" class="hero-stat"><strong>{{ hotCaps.length || '—' }}</strong><span>近期热门</span></div>
-        <div v-if="showDiscovery" class="hero-stat"><strong>{{ ratedCaps.length || '—' }}</strong><span>高分精选</span></div>
+        <div v-if="showDiscovery && hotCaps.length" class="hero-stat"><strong>{{ hotCaps.length }}</strong><span>近期热门</span></div>
+        <div v-if="showDiscovery && ratedCaps.length" class="hero-stat"><strong>{{ ratedCaps.length }}</strong><span>高分精选</span></div>
         <div v-if="!showDiscovery" class="hero-stat"><strong>{{ total }}</strong><span>{{ showTaskSearch ? '匹配能力' : '当前结果' }}</span></div>
       </div>
     </section>
-    <div v-if="notice" class="alert alert-success mb-16">
-      {{ notice }}
-      <router-link v-if="noticeHref" :to="noticeHref" style="margin-left: 8px">查看详情</router-link>
+    <div v-if="loadError" class="alert alert-error mb-16">
+      {{ loadError }}
+      <button class="btn btn-sm" type="button" style="margin-left: 8px" @click="load">重试</button>
+    </div>
+
+    <div v-if="showDiscovery && loading" class="grid grid-3 mb-16">
+      <div v-for="i in 6" :key="'sk-' + i" class="skel-card">
+        <div class="skel-row">
+          <div class="skeleton skel-icon"></div>
+          <div class="skeleton skel-title"></div>
+        </div>
+        <div class="skeleton skel-line"></div>
+        <div class="skeleton skel-line w70"></div>
+        <div class="skeleton skel-line w40"></div>
+      </div>
     </div>
 
     <div
@@ -489,7 +538,7 @@ watch(
       <section v-if="featuredCaps.length" class="discover-block">
         <div class="discover-head">
           <h3>精选推荐</h3>
-          <span class="muted">默认安装或高分已上架</span>
+          <span class="muted">可以先看的已上架能力</span>
         </div>
         <div class="grid grid-3">
           <CapabilityCard
@@ -497,6 +546,7 @@ watch(
             :key="'f-' + cap.id"
             :cap="cap"
             :in-my="myIds.has(cap.id)"
+            :joining="joiningId === cap.id"
             @add="addToMy"
           />
         </div>
@@ -512,6 +562,7 @@ watch(
             :key="'h-' + cap.id"
             :cap="cap"
             :in-my="myIds.has(cap.id)"
+            :joining="joiningId === cap.id"
             @add="addToMy"
           />
         </div>
@@ -527,25 +578,28 @@ watch(
             :key="'r-' + cap.id"
             :cap="cap"
             :in-my="myIds.has(cap.id)"
+            :joining="joiningId === cap.id"
             @add="addToMy"
           />
         </div>
       </section>
     </div>
 
-    <div v-if="showDiscovery" class="discover-footer mb-16">
-      <button class="btn" type="button" @click="selectBrowseTab('agent')">专家</button>
-      <button class="btn" type="button" @click="selectBrowseTab('skill')">技能</button>
-      <button class="btn" type="button" @click="selectBrowseTab('mcp')">连接器</button>
-      <button class="btn" type="button" @click="selectBrowseTab('more')">更多</button>
-    </div>
-
     <div v-if="showTaskSearch" class="task-search mb-16">
-      <div v-if="loading" class="muted" style="padding: 24px 0">正在按任务匹配…</div>
+      <div v-if="loading" class="grid grid-3">
+        <div v-for="i in 6" :key="'tsk-' + i" class="skel-card">
+          <div class="skel-row">
+            <div class="skeleton skel-icon"></div>
+            <div class="skeleton skel-title"></div>
+          </div>
+          <div class="skeleton skel-line"></div>
+          <div class="skeleton skel-line w70"></div>
+        </div>
+      </div>
       <template v-else-if="taskEmpty">
-        <div class="panel" style="padding: 28px 24px; text-align: center">
-          <p style="margin: 0 0 8px; font-size: 15px">没找到相关能力</p>
-          <p class="muted" style="margin: 0 0 16px; font-size: 13px">换个说法试试，或直接去逛技能 / 专家目录。</p>
+        <div class="panel empty-guide" style="padding: 28px 24px; text-align: center">
+          <p style="margin: 0; font-size: 15px">没找到相关能力</p>
+          <p class="muted" style="margin: 0; font-size: 13px">换个说法试试，或直接去目录里找。</p>
           <div style="display: flex; gap: 8px; justify-content: center; flex-wrap: wrap">
             <button class="btn btn-primary" type="button" @click="selectBrowseTab('skill')">去逛技能</button>
             <button class="btn" type="button" @click="selectBrowseTab('agent')">去逛专家</button>
@@ -570,6 +624,7 @@ watch(
               :key="sec.key + '-' + cap.id"
               :cap="cap"
               :in-my="myIds.has(cap.id)"
+              :joining="joiningId === cap.id"
               @add="addToMy"
             />
           </div>
@@ -585,6 +640,7 @@ watch(
               :key="'o-' + cap.id"
               :cap="cap"
               :in-my="myIds.has(cap.id)"
+              :joining="joiningId === cap.id"
               @add="addToMy"
             />
           </div>
@@ -658,12 +714,27 @@ watch(
         <span class="muted" style="font-size: 12px">共 {{ total }} 项</span>
       </div>
 
-      <div v-if="loading" class="empty">加载中…</div>
-      <div v-else-if="caps.length === 0" class="empty">
-        没有找到符合条件的能力。
+      <div v-if="loading" class="grid grid-3">
+        <div v-for="i in 9" :key="'cat-' + i" class="skel-card">
+          <div class="skel-row">
+            <div class="skeleton skel-icon"></div>
+            <div class="skeleton skel-title"></div>
+          </div>
+          <div class="skeleton skel-line"></div>
+          <div class="skeleton skel-line w70"></div>
+          <div class="skeleton skel-line w40"></div>
+        </div>
+      </div>
+      <div v-else-if="caps.length === 0" class="empty empty-guide">
+        <p style="margin: 0">没有找到符合条件的能力。</p>
+        <div class="empty-steps">
+          <span>1. 浏览目录</span>
+          <span>2. 加入能力</span>
+          <span>3. 试用</span>
+        </div>
         <button
           v-if="isLoggedIn"
-          class="btn btn-primary btn-sm mt-12"
+          class="btn btn-primary btn-sm"
           type="button"
           @click="goPublish(filters.shelf && filters.shelf !== 'all' ? filters.shelf : '')"
         >
@@ -676,12 +747,24 @@ watch(
           :key="cap.id"
           :cap="cap"
           :in-my="myIds.has(cap.id)"
+          :joining="joiningId === cap.id"
           @add="addToMy"
         />
       </div>
-      <div v-if="total > 0" class="pagination">
+      <div v-if="totalPages > 1" class="pagination">
         <button class="btn btn-sm" type="button" :disabled="page <= 1" @click="goPage(page - 1)">上一页</button>
-        <span class="muted">第 {{ page }} / {{ totalPages }} 页 · 共 {{ total }} 项</span>
+        <div class="pager-pages">
+          <template v-for="(item, i) in pageItems" :key="'p-' + i + '-' + item">
+            <span v-if="item === '…'" class="page-ellipsis">…</span>
+            <button
+              v-else
+              class="page-num"
+              :class="{ active: item === page }"
+              type="button"
+              @click="goPage(item)"
+            >{{ item }}</button>
+          </template>
+        </div>
         <button class="btn btn-sm" type="button" :disabled="page >= totalPages" @click="goPage(page + 1)">下一页</button>
       </div>
     </template>
@@ -695,7 +778,7 @@ watch(
   gap: 8px;
 }
 .shelf-tab {
-  background: #fff;
+  background: var(--panel);
   border: 1px solid var(--border);
   color: var(--muted);
   padding: 8px 14px;
@@ -718,7 +801,7 @@ watch(
   border-radius: 16px;
   background:
     radial-gradient(900px 280px at 0% 0%, rgba(47, 107, 255, 0.1), transparent 55%),
-    linear-gradient(180deg, #ffffff 0%, #f7f9fc 100%);
+    linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%);
   box-shadow: var(--shadow);
 }
 .hero-eyebrow { margin: 0 0 6px; color: var(--primary); font-size: 13px; font-weight: 600; }
@@ -743,7 +826,7 @@ watch(
 .btn-lg { padding: 9px 16px; font-size: 15px; font-weight: 600; }
 .hero-stats { display: grid; gap: 8px; align-content: center; }
 .hero-stat {
-  background: #fff; border: 1px solid var(--border); border-radius: 12px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
   padding: 10px 14px; box-shadow: var(--shadow);
 }
 .hero-stat strong { display: block; font-size: 20px; letter-spacing: -0.02em; }
@@ -751,12 +834,11 @@ watch(
 .hero-stat-link { cursor: pointer; transition: border-color .15s ease; }
 .hero-stat-link:hover { border-color: var(--primary); }
 .hero-stat-link strong { font-size: 18px; color: var(--primary); }
-.discover-footer { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; }
 .pagination { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 24px; }
 .discovery { display: flex; flex-direction: column; gap: 20px; }
 .discover-block {
   padding: 18px 18px 8px; border: 1px solid var(--border); border-radius: 16px;
-  background: #fff; box-shadow: var(--shadow);
+  background: var(--panel); box-shadow: var(--shadow);
 }
 .discover-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .discover-head h3 { margin: 0; font-size: 18px; font-weight: 650; }
@@ -764,4 +846,7 @@ watch(
 .mt-8 { margin-top: 8px; } .mt-12 { margin-top: 12px; } .mt-16 { margin-top: 16px; }
 .mb-8 { margin-bottom: 8px; } .mb-16 { margin-bottom: 16px; }
 @media (max-width: 860px) { .hero { grid-template-columns: 1fr; } }
+@media (max-width: 640px) {
+  .hero-search { flex-direction: column; max-width: none; }
+}
 </style>

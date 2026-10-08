@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import { api } from './api'
 import { authState, setAuth, clearAuth } from './stores/auth'
 import AppHeader from './components/AppHeader.vue'
+import ToastHost from './components/ToastHost.vue'
 
 const route = useRoute()
 
@@ -33,5 +34,6 @@ const mainClass = computed(() => ({
     <main class="app-main" :class="mainClass">
       <router-view :key="viewKey" />
     </main>
+    <ToastHost />
   </div>
 </template>

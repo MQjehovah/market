@@ -7,7 +7,7 @@ import { TYPE_LABELS } from '../utils/format'
 const props = defineProps({
   show: { type: Boolean, default: false },
   cap: { type: Object, default: null },
-  title: { type: String, default: '云端试用' }
+  title: { type: String, default: '试用' }
 })
 const emit = defineEmits(['close'])
 const router = useRouter()

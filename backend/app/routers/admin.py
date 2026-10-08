@@ -21,10 +21,11 @@ from app.models import (
     UserCapability,
     WorkflowExecution,
 )
-from app.permissions import require_admin
+from app.permissions import require_admin, role_has_permission
 from app.schemas import (
     CapabilityOut,
     MessageOut,
+    ReviewOut,
     ReviewRequest,
     ServiceTokenCreate,
     ServiceTokenCreated,
@@ -73,10 +74,69 @@ async def list_capabilities(db: DbSession, user: CurrentUser, status_filter: str
             )
             caps.append(pick)
         caps.sort(key=lambda c: c.created_at, reverse=True)
+    submitted: dict[str, object] = {}
+    live: dict[tuple[str, str], str] = {}
+    if caps:
+        ids = [cap.id for cap in caps]
+        rows = (
+            await db.execute(
+                select(Review.capability_id, func.max(Review.created_at))
+                .where(Review.capability_id.in_(ids), Review.action == "submitted")
+                .group_by(Review.capability_id)
+            )
+        ).all()
+        submitted = {cid: ts for cid, ts in rows}
+        if status_filter == "reviewing":
+            names = {cap.name for cap in caps}
+            published = (
+                await db.scalars(
+                    select(Capability).where(
+                        Capability.status == "published",
+                        Capability.name.in_(names),
+                    )
+                )
+            ).all()
+            for row in published:
+                key = (row.name, row.type)
+                prev = live.get(key)
+                if prev is None or parse_semver(row.version) > parse_semver(prev):
+                    live[key] = row.version
     out = []
     for cap in caps:
-        out.append(to_capability_out(cap))
+        item = to_capability_out(cap)
+        item.submitted_at = submitted.get(cap.id)
+        current = live.get((cap.name, cap.type))
+        if current and current != cap.version:
+            item.live_version = current
+        out.append(item)
     return out
+
+
+@router.get("/capabilities/{cap_id}/reviews", response_model=list[ReviewOut])
+async def list_capability_reviews(cap_id: str, db: DbSession, user: CurrentUser):
+    """审核记录（新到旧）。管理员可看全部，作者可看自己的打回 / 拒绝意见。"""
+    cap = await db.get(Capability, cap_id)
+    if cap is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
+    if not role_has_permission(user.role, "*") and cap.author_id != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "只能查看自己的审核记录")
+    rows = (
+        await db.scalars(
+            select(Review)
+            .where(Review.capability_id == cap_id)
+            .order_by(Review.created_at.desc())
+        )
+    ).all()
+    return [
+        ReviewOut(
+            id=row.id,
+            action=row.action,
+            comment=row.comment or "",
+            reviewer_id=row.reviewer_id,
+            created_at=row.created_at,
+        )
+        for row in rows
+    ]
 
 
 @router.post("/capabilities/{cap_id}/review", response_model=CapabilityOut)
@@ -309,8 +369,7 @@ async def global_stats(db: DbSession, user: CurrentUser):
 
 @router.get("/stats/own", response_model=StatsOut)
 async def own_stats(db: DbSession, user: CurrentUser):
-    if user.role == "user":
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "普通用户无权查看统计")
+    """登录用户查看自己发布的能力统计。全站数字仍只在 /stats。"""
     return await build_stats(db, user, scope="own")
 
 
@@ -334,6 +393,7 @@ async def admin_list_service_tokens(db: DbSession, user: CurrentUser):
             expires_at=r.expires_at,
             last_used_at=r.last_used_at,
             revoked=r.revoked,
+            revoked_at=r.revoked_at,
             created_by=r.created_by,
             created_at=r.created_at,
         )
@@ -390,6 +450,7 @@ async def admin_revoke_service_token(token_id: str, db: DbSession, user: Current
         expires_at=row.expires_at,
         last_used_at=row.last_used_at,
         revoked=row.revoked,
+        revoked_at=row.revoked_at,
         created_by=row.created_by,
         created_at=row.created_at,
     )

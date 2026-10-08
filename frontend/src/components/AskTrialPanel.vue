@@ -95,7 +95,6 @@ async function ask() {
     <p class="guide-lead muted">
       <template v-if="subjectLabel">通过专家「{{ agentName }}」验证「{{ subjectLabel }}」。</template>
       <template v-else>向「{{ agentName }}」发一句自然语言，看它怎么答{{ agentVersion ? `（v${agentVersion}）` : '' }}。</template>
-      未配置 LLM 时为模拟回答。
     </p>
     <div v-if="chips.length" class="ask-chips">
       <button

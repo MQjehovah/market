@@ -151,6 +151,14 @@ async def _auto_migrate(conn) -> None:
                 sync_conn.exec_driver_sql(
                     "ALTER TABLE user_capabilities ADD COLUMN enabled BOOLEAN DEFAULT 1"
                 )
+        if "service_tokens" in tables:
+            st_cols = {c["name"] for c in inspector.get_columns("service_tokens")}
+            if "revoked_at" not in st_cols:
+                # PostgreSQL 没有 DATETIME，对应类型是 TIMESTAMP
+                ts_type = "TIMESTAMP" if sync_conn.dialect.name == "postgresql" else "DATETIME"
+                sync_conn.exec_driver_sql(
+                    f"ALTER TABLE service_tokens ADD COLUMN revoked_at {ts_type}"
+                )
         if "notifications" in tables:
             n_cols = {c["name"] for c in inspector.get_columns("notifications")}
             if "link" not in n_cols:
