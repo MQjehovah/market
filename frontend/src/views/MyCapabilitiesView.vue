@@ -6,7 +6,6 @@ import {
   TYPE_LABELS,
   TYPE_COLORS,
   VISIBILITY_LABELS,
-  JOIN_VS_INSTALL_HINT,
   INSTALL_POLICY_LABELS,
   formatDate,
   shelfLabel,
@@ -15,8 +14,10 @@ import {
   canOnlineEdit,
   canLocalInstallCapability,
   installCommandFor,
-  assetUrl
+  assetUrl,
+  trialLabel
 } from '../utils/format'
+import { toast } from '../utils/toast'
 import StatusBadge from '../components/StatusBadge.vue'
 import CreateCapabilityModal from '../components/CreateCapabilityModal.vue'
 import DebugCapabilityModal from '../components/DebugCapabilityModal.vue'
@@ -29,7 +30,6 @@ const mainTab = ref('owned')
 const caps = ref([])
 const loading = ref(false)
 const error = ref('')
-const notice = ref('')
 const showCreate = ref(false)
 const initialShelf = ref('')
 const debugCap = ref(null)
@@ -187,11 +187,11 @@ function setSourceFilter(key) {
 function onCreated(cap, meta = {}) {
   showCreate.value = false
   if (meta.warning) {
-    notice.value = `「${cap.name}」草稿已创建（${meta.warning}）`
+    toast.success(`「${cap.name}」草稿已创建（${meta.warning}）`)
   } else if (canOnlineEdit(cap.type)) {
-    notice.value = `「${cap.name}」草稿已创建，正在打开在线编辑`
+    toast.success(`「${cap.name}」草稿已创建，正在打开在线编辑`)
   } else {
-    notice.value = `「${cap.name}」草稿已创建，请完善内容并提交审核`
+    toast.success(`「${cap.name}」草稿已创建，请完善内容并提交审核`)
   }
   mainTab.value = 'owned'
   load()
@@ -200,30 +200,30 @@ function onCreated(cap, meta = {}) {
 async function submit(cap) {
   try {
     await api.post(`/publish/capabilities/${cap.id}/submit`)
-    notice.value = `「${cap.name}」已提交审核`
+    toast.success(`「${cap.name}」已提交审核`)
     await load()
   } catch (e) {
-    error.value = e.message
+    toast.error(e.message)
   }
 }
 
 async function submitDraft(cap) {
   try {
     await api.post(`/publish/capabilities/${cap.draft_id}/submit`)
-    notice.value = `「${cap.name}」草稿 v${cap.draft_version} 已提交审核`
+    toast.success(`「${cap.name}」草稿 v${cap.draft_version} 已提交审核`)
     await load()
   } catch (e) {
-    error.value = e.message
+    toast.error(e.message)
   }
 }
 
 async function withdraw(cap) {
   try {
     await api.post(`/publish/capabilities/${cap.id}/withdraw`)
-    notice.value = `「${cap.name}」已撤回审核，可修改类型或删除`
+    toast.success(`「${cap.name}」已撤回审核，可修改类型或删除`)
     await load()
   } catch (e) {
-    error.value = e.message
+    toast.error(e.message)
   }
 }
 
@@ -240,7 +240,7 @@ function askRemoveDraft(cap) {
 
 function askRemoveFromMy(cap) {
   if (cap.removable === false || cap.install_policy === 'required') {
-    error.value = `「${cap.name}」为必装能力，不能移除`
+    toast.error(`「${cap.name}」为必装能力，不能移除`)
     return
   }
   confirmAction.value = {
@@ -259,12 +259,12 @@ async function copyInstall(cap) {
   try {
     await navigator.clipboard.writeText(cmd)
     copiedId.value = cap.id
-    notice.value = `已复制：${cmd}`
+    toast.success(`已复制：${cmd}`)
     setTimeout(() => {
       if (copiedId.value === cap.id) copiedId.value = ''
     }, 1600)
   } catch {
-    notice.value = cmd
+    toast.success(cmd)
   }
 }
 
@@ -276,14 +276,14 @@ async function confirmOk() {
   try {
     if (action.kind === 'delete') {
       await api.delete(`/publish/capabilities/${cap.id}`)
-      notice.value = `「${cap.name}」已删除`
+      toast.success(`「${cap.name}」已删除`)
     } else if (action.kind === 'remove') {
       const r = await api.delete(`/my/capabilities/${cap.id}`)
-      notice.value = r.message
+      toast.success(r.message || '已移除')
     }
     await load()
   } catch (e) {
-    error.value = e.message
+    toast.error(e.message)
   }
 }
 
@@ -320,15 +320,16 @@ onMounted(() => {
       <div>
         <h1 class="page-title">我的能力</h1>
         <p class="page-desc muted">
-          「已加入」是你从能力市场加入的能力；安装与启用由零号员工 / 桌面各自本地记录。
-          「我发布的」走草稿与审核。{{ JOIN_VS_INSTALL_HINT }}
+          已加入的能力可以在零号员工或桌面里使用。我发布的需要提交审核后才会上架。
         </p>
       </div>
       <button class="btn btn-primary" type="button" @click="openCreate()">发布能力</button>
     </div>
 
-    <div v-if="notice" class="alert alert-success mb-16">{{ notice }}</div>
-    <div v-if="error" class="alert alert-error mb-16">{{ error }}</div>
+    <div v-if="error" class="alert alert-error mb-16">
+      {{ error }}
+      <button class="btn btn-sm" type="button" style="margin-left: 8px" @click="load">重试</button>
+    </div>
 
     <div class="main-tabs">
       <button type="button" class="main-tab" :class="{ active: mainTab === 'owned' }" @click="switchTab('owned')">
@@ -363,22 +364,36 @@ onMounted(() => {
     </div>
 
     <div class="panel table-panel">
-      <div v-if="loading" class="empty">加载中…</div>
-      <div v-else-if="caps.length === 0" class="empty">
-        还没有能力。小白推荐路径：
-        <ol style="text-align: left; display: inline-block; margin: 12px 0; padding-left: 20px">
-          <li>点「发布能力」→ 选「发专家」或「发组件」（技能 / 连接器）</li>
-          <li>在线编辑（保存生成包）→ 提交审核</li>
-          <li>上架后加入，本地执行 <code>cap install …</code></li>
-        </ol>
-        <div>
-          <button class="btn btn-primary" type="button" @click="openCreate('recipe')">发专家</button>
-          <a href="/" style="margin-left: 12px; color: var(--primary)">去发现逛逛</a>
+      <div v-if="loading" class="grid grid-3" style="padding: 16px">
+        <div v-for="i in 6" :key="'my-' + i" class="skel-card">
+          <div class="skel-row">
+            <div class="skeleton skel-icon"></div>
+            <div class="skeleton skel-title"></div>
+          </div>
+          <div class="skeleton skel-line"></div>
+          <div class="skeleton skel-line w70"></div>
         </div>
       </div>
-      <div v-else-if="filteredCaps.length === 0 && mainTab === 'added'" class="empty">
-        还没有加入任何能力。加入后可在零号员工或桌面安装使用。
-        <div style="margin-top: 12px"><a href="/">去发现逛逛</a></div>
+      <div v-else-if="caps.length === 0" class="empty">
+        还没有发布过能力。
+        <ol style="text-align: left; display: inline-block; margin: 12px 0; padding-left: 20px">
+          <li>点「发布能力」，选专家、组件或编排</li>
+          <li>写好内容并保存</li>
+          <li>提交审核，通过后会出现在发现页</li>
+        </ol>
+        <div>
+          <button class="btn btn-primary" type="button" @click="openCreate()">发布能力</button>
+          <router-link to="/" style="margin-left: 12px">去发现逛逛</router-link>
+        </div>
+      </div>
+      <div v-else-if="filteredCaps.length === 0 && mainTab === 'added'" class="empty empty-guide">
+        <p style="margin: 0">还没有加入任何能力。</p>
+        <div class="empty-steps">
+          <span>1. 浏览目录</span>
+          <span>2. 加入能力</span>
+          <span>3. 试用</span>
+        </div>
+        <div><router-link to="/">去发现逛逛</router-link></div>
       </div>
       <div v-else-if="filteredCaps.length === 0" class="empty">没有符合筛选条件的能力</div>
       <table v-else-if="mainTab === 'added'" class="skill-table customize-table">
@@ -492,7 +507,7 @@ onMounted(() => {
                   class="op-link"
                   type="button"
                   @click="debugCap = cap"
-                >{{ cap.type === 'mcp' ? '试用连接器' : cap.type === 'agent' ? '试用专家' : '试用' }}</button>
+                >{{ trialLabel(cap.type) }}</button>
                 <template v-if="cap.has_draft">
                   <router-link v-if="editPath(cap)" :to="editPath(cap)" class="op-link">在线编辑</router-link>
                   <button
@@ -580,7 +595,7 @@ onMounted(() => {
     <DebugCapabilityModal
       :show="!!debugCap"
       :cap="debugCap"
-      :title="debugCap?.type === 'agent' ? '试用专家' : (debugCap?.type === 'mcp' ? '试用连接器' : '云端试用')"
+      :title="trialLabel(debugCap?.type)"
       @close="debugCap = null"
     />
   </div>

@@ -1,3 +1,27 @@
+/** 目录标签里不该出现的类型词和导入痕迹 */
+export const BROWSE_TAG_NOISE = new Set([
+  'skill', 'skills', 'agent', 'agents', 'mcp', 'plugin', 'plugins',
+  'tool', 'tools', 'workflow', 'hook', 'hooks', 'command', 'rule',
+  '技能', '专家', '连接器', '能力编排', '编排函数', '能力包', '规则', '命令',
+  '迁移', '内置', '内置工具', 'persona', '安装包', '示例', 'plugin-component'
+])
+
+export function isBrowseTagNoise(value) {
+  const t = String(value || '').trim()
+  if (!t) return true
+  return BROWSE_TAG_NOISE.has(t) || BROWSE_TAG_NOISE.has(t.toLowerCase())
+}
+
+/** 去掉说明里的 Markdown 标题符号，避免卡片直接露出 # */
+export function plainExcerpt(value) {
+  return String(value || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/[*`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 /** 能力类型显示名（type 字段 = kind） */
 export const TYPE_LABELS = {
   agent: '专家',
@@ -17,7 +41,7 @@ export const SHELVES = {
     key: 'brick',
     label: '组件',
     short: '组件',
-    description: '技能 / 连接器 / 编排函数。发布与高级筛选用；逛店请用「技能」「连接器」或「更多」。',
+    description: '技能 / 连接器 / 编排函数。发布与高级筛选用；逛店请用「技能」「连接器」或「编排」。',
     kinds: ['skill', 'mcp', 'tool', 'rule', 'command', 'hook']
   },
   recipe: {
@@ -127,7 +151,7 @@ export const REMOTE_WHERE_HINTS = {
   rule: '加入后在平台或宿主中按需生效。',
   command: '加入后在支持的对话中按需使用。',
   hook: '加入后由宿主在对应事件触发。',
-  agent: '加入后可在零号员工中使用；详情页可先问一句试用。',
+  agent: '加入后可在零号员工中使用；详情页可先试用。',
   workflow: '加入后由平台执行，可查看运行结果。',
   plugin: '加入后其中能力按权限生效，无需本地安装。'
 }
@@ -246,12 +270,21 @@ export const CONSUME_WAYS = [
   { id: 'download', label: '下载制品', api: 'GET /api/capabilities/{name}/download', who: 'cap / 人工' },
   { id: 'install', label: '本地组装', api: 'cap install', who: 'CLI / 兼容路径' },
   { id: 'local', label: '本地运行', api: 'cap run --mode local', who: '零号员工（市场不执行）' },
-  { id: 'trial', label: '云端试用', api: 'POST /api/runtime/*', who: '详情页 / 我的能力（问答验证）' },
+  { id: 'trial', label: '试用', api: 'POST /api/runtime/*', who: '详情页 / 我的能力（问答验证）' },
   { id: 'a2a', label: 'A2A 互调', api: 'Agent Card + tasks/send', who: 'Agent 之间' },
   { id: 'mcp_bridge', label: '市场 MCP 桥', api: 'marketplace_* tools', who: 'IDE / Agent 客户端' },
   { id: 'gateway', label: 'MCP HTTP 网关', api: '/market/api/mcp-gateway/{name}', who: 'Dify 等' },
   { id: 'join', label: '加入我的能力', api: 'POST /api/my/capabilities', who: '人（调用授权前提）' }
 ]
+
+/** 试用按钮文案：统一「试用 · 类型」 */
+export function trialLabel(type) {
+  if (type === 'mcp') return '试用 · 连接器'
+  if (type === 'agent') return '试用 · 专家'
+  if (type === 'skill') return '试用 · 技能'
+  if (type === 'plugin') return '试用 · 能力包'
+  return '试用'
+}
 
 /** 消费矩阵：remote 云端能力去掉「本地组装 / 本地运行」两行（订阅即用，无需安装） */
 export function consumeWaysFor(cap) {
@@ -270,6 +303,56 @@ export const REVIEW_CHECKLIST = [
   'Rule/Command/Hook 包结构合法（RULE.mdc / COMMAND.md / hooks.json）',
   '可见性与许可证符合组织策略（private/team/internal/public）'
 ]
+
+const REVIEW_CHECK_SHORT = ['包结构', '密钥', 'MCP 连接', 'Tool 审计', '依赖', '子组件', '规则包', '可见性']
+
+/** 按能力类型裁剪审核清单，与治理台、详情页共用 */
+export function reviewChecklistFor(cap) {
+  const type = cap?.type || ''
+  return REVIEW_CHECKLIST.map((text, index) => ({
+    text,
+    index,
+    short: REVIEW_CHECK_SHORT[index] || '清单'
+  })).filter((item) => {
+    if (item.index === 2) return type === 'mcp'
+    if (item.index === 3) return type === 'tool'
+    if (item.index === 4) return type === 'plugin' || type === 'agent' || type === 'workflow'
+    if (item.index === 5) return type === 'plugin'
+    if (item.index === 6) return type === 'rule' || type === 'command' || type === 'hook'
+    return true
+  })
+}
+
+/** 校验失败时不能通过上架；空报告不算失败（编排等可能没有报告） */
+export function reviewBlockReason(cap) {
+  const vr = validationReportOf(cap)
+  if (!vr) return ''
+  const errors = (vr.errors || []).map(String).filter(Boolean)
+  if (vr.ok === false || errors.length) return errors[0] || '校验未通过，不能上架'
+  return ''
+}
+
+function validationReportOf(cap) {
+  const vr = cap?.validation_report || (cap?.input_schema || {})._validation_report
+  if (!vr || typeof vr !== 'object' || !Object.keys(vr).length) return null
+  return vr
+}
+
+/** 校验报告已覆盖的项，对应清单下标上的布尔值 */
+export function reviewAutoFlags(cap, items) {
+  const vr = validationReportOf(cap)
+  if (!vr) return (items || []).map(() => false)
+  const errors = (vr.errors || []).map(String)
+  const warnings = (vr.warnings || []).map(String)
+  const text = [...errors, ...warnings].join('\n')
+  const structureOk = vr.ok !== false && errors.length === 0
+  const secretsClean = !/密钥|硬编码|secret|password|api[_-]?key/i.test(text)
+  return (items || []).map((item) => {
+    if (item.index === 0 || item.index === 6) return structureOk
+    if (item.index === 1) return secretsClean
+    return false
+  })
+}
 
 export const STATUS_LABELS = {
   draft: '草稿',
@@ -361,9 +444,9 @@ export const RISK_DEFAULT_BADGE = {
   destructive: 'badge-danger'
 }
 
-/** 加入≠安装：统一文案，避免 Browse / My / Detail 各写一套 */
+/** 加入后怎么用：发现页一句人话，避免把分发字段写进首屏 */
 export const JOIN_VS_INSTALL_HINT =
-  '「加入」只完成授权；安装与启用由零号员工 / 桌面各自本地记录，加入后即可在对应端安装使用（distribution=remote 的云端能力加入即用）。也可以直接写你要办的事。'
+  '搜你要办的事，加入后就能在零号员工或桌面里使用。云端能力加入即可用，本地能力加入后再安装。'
 
 /** 连接器线上试用方式：演示免密 / 平台网关 / 需自备凭证 */
 export function mcpTrialMode({ transport = 'stdio', envKeys = [] } = {}) {
@@ -416,21 +499,52 @@ export const TYPE_COLORS = {
   hook: '#4f46e5'
 }
 
-/** 发布意图：主叙事「专家 + 依赖」；能力包保留能力但不作为默认发布入口 */
+/** 发布意图：专家、组件、编排分开入口，避免编排藏在专家货架里 */
 export const PUBLISH_INTENTS = [
   {
     key: 'recipe',
+    shelf: 'recipe',
     label: '发专家',
-    blurb: '推荐：人设 + 依赖（技能 / 连接器）。网页在线编辑即可；依赖可先上架再引用，或包内嵌。',
+    blurb: '场景问答。写好提示词后提交审核，依赖的技能和连接器可以引用或内嵌。',
     defaultType: 'agent'
   },
   {
     key: 'brick',
+    shelf: 'brick',
     label: '发组件',
-    blurb: '技能 / 连接器（专家的依赖），或编排函数。可网页在线编辑；给专家引用复用。',
+    blurb: '技能、连接器或编排函数。写好后给专家引用。',
     defaultType: 'skill'
+  },
+  {
+    key: 'workflow',
+    shelf: 'recipe',
+    label: '发编排',
+    blurb: '把已上架的能力串成流程，只在云端执行。创建后进入画布，保存后可直接提交审核。',
+    defaultType: 'workflow'
   }
 ]
+
+/** 草稿 / 打回 / 拒绝：保存是更新这一份，不是另存新版本 */
+export function isOpenDraft(status) {
+  return ['draft', 'returned', 'rejected'].includes(status)
+}
+
+export function draftSaveButton(status) {
+  return isOpenDraft(status) ? '保存' : '保存为新版本'
+}
+
+export function draftSaveHint(status, extra = '') {
+  const base = isOpenDraft(status)
+    ? '保存会更新当前草稿，提交审核并通过后才会上架'
+    : '保存会基于已上架版本生成一份新草稿'
+  return extra ? `${base}，${extra}` : base
+}
+
+export function draftSaveNotice(status, version) {
+  return isOpenDraft(status)
+    ? `已保存 v${version}，可提交审核`
+    : `已保存为新版本草稿 v${version}，可提交审核`
+}
 
 /** 发组件时可见的 kind（rule/command/hook 保留但不展示） */
 export const VISIBLE_CREATE_KINDS = {

@@ -214,6 +214,26 @@ ensure_secret JWT_SECRET
 ensure_secret SEED_ADMIN_PASSWORD
 ensure_secret SEED_PUBLISHER_PASSWORD
 ensure_secret SEED_USER_PASSWORD
+# 与线上桌面端一致：管理端与网关都是 https://ai.xzrobot.com/router，模型 deepseek-flash。
+# 市场直接请求网关根下的 chat/completions，所以网关根要带 /v1。已有非空值不覆盖。
+ensure_value() {{
+  key="$1"
+  val="$2"
+  cur="$(grep -E "^$key=" .env 2>/dev/null | head -n1 | cut -d= -f2- | tr -d '\\r')"
+  if [ -n "$cur" ]; then
+    echo "INFO: keeping existing $key"
+    return
+  fi
+  if grep -qE "^$key=" .env; then
+    sed -i "s|^$key=.*|$key=$val|" .env
+  else
+    printf '%s=%s\\n' "$key" "$val" >> .env
+  fi
+  echo "INFO: set $key=$val"
+}}
+ensure_value ROUTER_ADMIN_URL https://ai.xzrobot.com/router
+ensure_value ROUTER_BASE_URL https://ai.xzrobot.com/router/v1
+ensure_value LLM_MODEL deepseek-flash
 if [ "$NEW_ENV" = "1" ]; then
   if grep -qE '^APP_ENV=' .env; then
     sed -i 's|^APP_ENV=.*|APP_ENV=production|' .env

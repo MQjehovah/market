@@ -110,6 +110,7 @@ async def test_workflow_create_execute_query(client, publisher_headers, admin_he
         headers=publisher_headers,
         json={
             "name": wf_name,
+            "display_name": "演示编排",
             "description": "测试工作流",
             "version": "1.0.0",
             "category": "工作流",
@@ -118,6 +119,7 @@ async def test_workflow_create_execute_query(client, publisher_headers, admin_he
         },
     )
     assert r.status_code == 201, r.text
+    assert r.json()["display_name"] == "演示编排"
     wf_id = r.json()["id"]
     r = await client.post(f"/api/publish/capabilities/{wf_id}/submit", headers=publisher_headers)
     assert r.status_code == 200

@@ -5,6 +5,8 @@ import {
   INSTALL_POLICY_LABELS,
   TYPE_COLORS,
   TYPE_LABELS,
+  isBrowseTagNoise,
+  plainExcerpt,
   stars,
   assetUrl
 } from '../utils/format'
@@ -13,6 +15,7 @@ import StatusBadge from './StatusBadge.vue'
 const props = defineProps({
   cap: { type: Object, required: true },
   inMy: { type: Boolean, default: false },
+  joining: { type: Boolean, default: false },
   showJoin: { type: Boolean, default: true }
 })
 const emit = defineEmits(['add'])
@@ -29,6 +32,8 @@ const showStatus = computed(() => !['published'].includes(props.cap.status))
 
 /** 展示名: 中文 display_name 优先(name 为标准机器名/内部标识) */
 const displayName = computed(() => (props.cap.display_name || '').trim() || props.cap.name)
+const blurb = computed(() => plainExcerpt(props.cap.description) || '暂无描述')
+const showDeploy = computed(() => props.cap.distribution === 'remote' || props.cap.distribution === 'local')
 const isImported = computed(() => (props.cap.provenance?.origin || '') === 'mcp-registry')
 const provenanceTitle = computed(() => {
   const p = props.cap.provenance || {}
@@ -43,7 +48,9 @@ function isGarbageLabel(value) {
 }
 const displayCategory = computed(() => (isGarbageLabel(props.cap.category) ? '' : props.cap.category))
 const displayTags = computed(() =>
-  (props.cap.tags || []).filter((t) => t !== 'plugin-component' && !isGarbageLabel(t)).slice(0, 3)
+  (props.cap.tags || [])
+    .filter((t) => !isGarbageLabel(t) && !isBrowseTagNoise(t))
+    .slice(0, 3)
 )
 
 /** 部署方式（清晰中文） */
@@ -58,11 +65,11 @@ const deploy = computed(() => {
   }
 })
 
-/** 质量分级（由评分推导，一眼扫出优质能力） */
+/** 质量分级只在有人评分后出现；没评分不叫「新品」 */
 const grade = computed(() => {
   const count = Number(props.cap.rating_count || 0)
   const avg = Number(props.cap.avg_rating || 0)
-  if (!count) return { label: '新品', cls: 'badge' }
+  if (!count) return null
   if (avg >= 4.5) return { label: 'A · 优质', cls: 'badge-success' }
   if (avg >= 4) return { label: 'B · 良好', cls: 'badge-primary' }
   if (avg >= 3) return { label: 'C · 合格', cls: 'badge-warning' }
@@ -82,7 +89,7 @@ const ratingCount = computed(() => Number(props.cap.rating_count || 0))
 const subline = computed(() => {
   const parts = []
   const n = (props.cap.name || '').trim()
-  if (n) parts.push(n)
+  if (n && n !== displayName.value) parts.push(n)
   if (props.cap.version) parts.push(`v${props.cap.version}`)
   return parts.join(' · ')
 })
@@ -98,8 +105,7 @@ watch(
 
 <template>
   <div class="cap-card">
-    <span v-if="cap.latest" class="cap-ribbon" title="最新正式版本">最新</span>
-    <router-link :to="`/capabilities/${cap.id}`" class="cap-body" :class="{ 'has-ribbon': cap.latest }">
+    <router-link :to="`/capabilities/${cap.id}`" class="cap-body">
       <div class="card-head">
         <img
           v-if="cap.icon_url && !iconFailed"
@@ -116,10 +122,10 @@ watch(
         <span class="type-pill">{{ TYPE_LABELS[cap.type] || cap.type }}</span>
         <StatusBadge v-if="showStatus" :status="cap.status" />
       </div>
-      <p class="cap-desc">{{ cap.description || '暂无描述' }}</p>
+      <p class="cap-desc">{{ blurb }}</p>
       <div class="cap-tags">
-        <span class="badge" :class="grade.cls">{{ grade.label }}</span>
-        <span class="badge" :class="deploy.cls" :title="`分发方式：${DISTRIBUTION_LABELS[cap.distribution] || cap.distribution}`">{{ deploy.label }}</span>
+        <span v-if="grade" class="badge" :class="grade.cls">{{ grade.label }}</span>
+        <span v-if="showDeploy" class="badge" :class="deploy.cls" :title="`分发方式：${DISTRIBUTION_LABELS[cap.distribution] || cap.distribution}`">{{ deploy.label }}</span>
         <span v-if="cap.verified" class="badge badge-success" title="管理员认证">认证</span>
         <span v-if="isImported" class="badge badge-primary" :title="provenanceTitle">外部导入</span>
         <span v-if="requiresBinary" class="badge" :title="`依赖本机 CLI：${requiresBinary}`">需 {{ requiresBinary }}</span>
@@ -131,9 +137,11 @@ watch(
     <div class="cap-foot">
       <span class="muted cap-foot-meta">
         <span v-if="dateStr">{{ dateStr }}</span>
-        <span v-if="dateStr"> · </span>
-        <span class="rating" :title="ratingCount ? `${ratingCount} 人评分` : '暂无评分'">{{ stars(cap.avg_rating) }} {{ cap.avg_rating || '暂无' }}<em v-if="ratingCount">（{{ ratingCount }}）</em></span>
-        <span v-if="usage"> · {{ usage }} 次使用</span>
+        <template v-if="ratingCount">
+          <span v-if="dateStr"> · </span>
+          <span class="rating" :title="`${ratingCount} 人评分`">{{ stars(cap.avg_rating) }} {{ cap.avg_rating }}<em>（{{ ratingCount }}）</em></span>
+        </template>
+        <span v-if="usage"><template v-if="dateStr || ratingCount"> · </template>{{ usage }} 次使用</span>
       </span>
       <div class="flex" style="gap: 8px">
         <span v-if="inMy && !canRemove" class="badge badge-warning" title="必装能力不可移除">必装</span>
@@ -142,9 +150,10 @@ watch(
           v-else-if="showJoin"
           class="btn btn-sm btn-primary"
           type="button"
+          :disabled="joining"
           @click="emit('add', cap)"
         >
-          加入
+          {{ joining ? '加入中…' : '加入' }}
         </button>
       </div>
     </div>
@@ -155,7 +164,7 @@ watch(
 .cap-card {
   position: relative;
   display: flex; flex-direction: column; color: var(--text);
-  background: #fff; border: 1px solid var(--border); border-radius: 14px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
   box-shadow: var(--shadow); transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
   overflow: hidden;
 }
@@ -164,15 +173,7 @@ watch(
   border-color: #c9d8ff;
   box-shadow: var(--shadow-lg);
 }
-.cap-ribbon {
-  position: absolute; top: 0; right: 0; z-index: 2;
-  padding: 3px 10px; border-bottom-left-radius: 10px;
-  font-size: 11px; font-weight: 650;
-  color: #fff; background: linear-gradient(135deg, #2f6bff, #7c3aed);
-}
 .cap-body { color: var(--text); padding: 16px 16px 0; }
-/* 有「最新」角标时右移内容，避免类型徽章/标题被角标压住 */
-.cap-body.has-ribbon { padding-right: 56px; }
 /* 图标 + 标题并排（对齐参考卡片，标题在右、不再压到下方） */
 .card-head { display: flex; align-items: center; gap: 12px; }
 .head-text { min-width: 0; flex: 1; }
@@ -187,10 +188,16 @@ watch(
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .head-sub { margin-top: 3px; font-size: 12px; color: var(--muted); }
-.type-pill {
+.type-pill,
+.latest-pill {
   flex: none; align-self: flex-start;
   padding: 1px 8px; border-radius: 999px; font-size: 11px; white-space: nowrap;
+}
+.type-pill {
   color: var(--muted); background: var(--panel-2); border: 1px solid var(--border);
+}
+.latest-pill {
+  color: var(--primary); background: var(--primary-soft); border: 1px solid #c9d8ff;
 }
 .cap-desc {
   color: var(--muted); font-size: 13px; margin: 12px 0;
@@ -200,10 +207,11 @@ watch(
 .cap-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; min-height: 24px; }
 .cap-foot {
   display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  flex-wrap: wrap;
   margin-top: auto; font-size: 12px; padding: 12px 16px;
   border-top: 1px solid var(--border); background: var(--panel-2);
 }
-.cap-foot-meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cap-foot-meta { min-width: 0; line-height: 1.4; }
 .cap-foot .rating { color: var(--warning); }
 .cap-foot .rating em { font-style: normal; color: var(--muted); margin-left: 2px; }
 </style>

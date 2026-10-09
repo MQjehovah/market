@@ -111,6 +111,139 @@ async def test_publish_submit_review_publish_flow(client, publisher_headers, adm
 
 
 @pytest.mark.asyncio
+async def test_review_comment_visible_and_package_frozen(client, publisher_headers, admin_headers):
+    name = "审核意见可见"
+    r = await client.post(
+        "/api/publish/capabilities",
+        headers=publisher_headers,
+        json={
+            "name": name,
+            "display_name": "审核意见",
+            "description": "打回原因要给作者看",
+            "type": "tool",
+            "version": "1.0.0",
+            "category": "测试",
+            "tags": ["测试"],
+            "visibility": "internal",
+        },
+    )
+    assert r.status_code == 201, r.text
+    cap_id = r.json()["id"]
+    r = await client.post(
+        f"/api/publish/capabilities/{cap_id}/artifact",
+        headers=publisher_headers,
+        files={"file": ("pkg.zip", _tool_zip(name), "application/zip")},
+    )
+    assert r.status_code == 200, r.text
+    r = await client.post(f"/api/publish/capabilities/{cap_id}/submit", headers=publisher_headers)
+    assert r.status_code == 200
+    assert r.json()["status"] == "reviewing"
+
+    r = await client.post(
+        f"/api/publish/capabilities/{cap_id}/artifact",
+        headers=publisher_headers,
+        files={"file": ("pkg.zip", _tool_zip(name), "application/zip")},
+    )
+    assert r.status_code == 409, r.text
+    assert "撤回" in r.text
+
+    r = await client.post(
+        f"/api/admin/capabilities/{cap_id}/review",
+        headers=admin_headers,
+        json={"action": "return", "comment": "   "},
+    )
+    assert r.status_code == 422, r.text
+
+    r = await client.post(
+        f"/api/admin/capabilities/{cap_id}/review",
+        headers=admin_headers,
+        json={"action": "return", "comment": "请补上使用说明"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "returned"
+
+    r = await client.get(f"/api/admin/capabilities/{cap_id}/reviews", headers=publisher_headers)
+    assert r.status_code == 200, r.text
+    assert any(row["comment"] == "请补上使用说明" for row in r.json())
+
+    r = await client.get("/api/notifications", headers=publisher_headers)
+    notes = [n for n in r.json() if n.get("link") == f"/capabilities/{cap_id}"]
+    assert notes and "审核意见" in notes[0]["title"]
+
+    me = await client.post(
+        "/api/publish/capabilities",
+        headers=admin_headers,
+        json={"name": "管理员自审", "type": "tool", "description": "x", "version": "1.0.0"},
+    )
+    assert me.status_code == 201, me.text
+    own_id = me.json()["id"]
+    up = await client.post(
+        f"/api/publish/capabilities/{own_id}/artifact",
+        headers=admin_headers,
+        files={"file": ("pkg.zip", _tool_zip("管理员自审"), "application/zip")},
+    )
+    assert up.status_code == 200, up.text
+    assert (await client.post(f"/api/publish/capabilities/{own_id}/submit", headers=admin_headers)).status_code == 200
+    denied = await client.post(
+        f"/api/admin/capabilities/{own_id}/review",
+        headers=admin_headers,
+        json={"action": "approve", "comment": "自己过"},
+    )
+    assert denied.status_code == 403, denied.text
+
+
+@pytest.mark.asyncio
+async def test_review_queue_shows_live_version(client, publisher_headers, admin_headers):
+    name = "换版提示"
+    first = await _publish_capability(client, publisher_headers, admin_headers, name, "tool", _tool_zip(name))
+    assert first
+    r = await client.post(
+        f"/api/publish/capabilities/{first}/versions",
+        headers=publisher_headers,
+        json={"new_version": "1.1.0"},
+    )
+    assert r.status_code == 201, r.text
+    nxt = r.json()["id"]
+    r = await client.post(
+        f"/api/publish/capabilities/{nxt}/artifact",
+        headers=publisher_headers,
+        files={"file": ("pkg.zip", _tool_zip(name, "1.1.0"), "application/zip")},
+    )
+    assert r.status_code == 200, r.text
+    r = await client.post(f"/api/publish/capabilities/{nxt}/submit", headers=publisher_headers)
+    assert r.status_code == 200, r.text
+    listed = await client.get("/api/admin/capabilities", headers=admin_headers, params={"status_filter": "reviewing"})
+    assert listed.status_code == 200, listed.text
+    row = next(item for item in listed.json() if item["id"] == nxt)
+    assert row["live_version"] == "1.0.0"
+    assert row["submitted_at"]
+
+
+@pytest.mark.asyncio
+async def test_own_stats_and_token_defaults(client, user_headers, admin_headers):
+    r = await client.get("/api/admin/stats/own", headers=user_headers)
+    assert r.status_code == 200, r.text
+    assert "total_capabilities" in r.json()
+
+    r = await client.post(
+        "/api/admin/service-tokens",
+        headers=admin_headers,
+        json={"name": "目录同步机器人"},
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert set(body["scopes"]) == {"gateway", "sync"}
+    assert body["username"]
+    r = await client.post(
+        f"/api/admin/service-tokens/{body['id']}/revoke",
+        headers=admin_headers,
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["revoked"] is True
+    assert r.json()["revoked_at"]
+
+
+@pytest.mark.asyncio
 async def test_normal_user_can_create_own_draft(client, user_headers):
     """任何登录用户都可以创建自己的能力草稿（审核上架仍由管理员把关）。"""
     r = await client.post(

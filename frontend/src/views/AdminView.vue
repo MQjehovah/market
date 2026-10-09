@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { marked } from 'marked'
 import { api } from '../api'
@@ -7,12 +7,15 @@ import { authState } from '../stores/auth'
 import { adminState } from '../stores/admin'
 import {
   TYPE_LABELS,
-  REVIEW_CHECKLIST,
   VISIBILITY_LABELS,
+  reviewChecklistFor,
+  reviewAutoFlags,
+  reviewBlockReason,
   INSTALL_POLICY_LABELS,
   shelfLabel,
   formatDate,
-  assetUrl
+  assetUrl,
+  trialLabel
 } from '../utils/format'
 import StatusBadge from '../components/StatusBadge.vue'
 import DebugCapabilityModal from '../components/DebugCapabilityModal.vue'
@@ -30,7 +33,7 @@ const __API_BASE__ = (import.meta.env.BASE_URL || '/').replace(/\/$/, '') + '/ap
 const SECTIONS = ['caps', 'users', 'gateway', 'tokens']
 const SECTION_META = {
   caps: { label: '能力管理', hint: '审核上架、下架归档统一管理' },
-  users: { label: '用户管理', hint: '账号、角色与启停；权限边界见下方角色说明' },
+  users: { label: '用户管理', hint: '按姓名、工号或部门查找，再改角色和启停' },
   gateway: { label: 'MCP 网关', hint: '把 stdio / HTTP / SSE 统一暴露为 HTTP 端点，供 Dify / Agent 接入' },
   tokens: {
     label: '服务令牌',
@@ -53,8 +56,10 @@ watch(
   (s) => {
     const v = String(s)
     if (v === 'review' || v === 'listed') {
-      capsTab.value = v === 'listed' ? 'listed' : 'review'
-      router.replace(`/admin/caps${v === 'listed' ? '?ctab=listed' : ''}`)
+      const query = { ...route.query }
+      if (v === 'listed') query.ctab = 'listed'
+      else delete query.ctab
+      router.replace({ path: '/admin/caps', query })
       return
     }
     if (!SECTIONS.includes(v)) router.replace('/admin/caps')
@@ -62,18 +67,23 @@ watch(
   { immediate: true }
 )
 
-watch(
-  () => route.query.ctab,
-  (v) => {
-    if (v === 'listed' || v === 'review') capsTab.value = String(v)
-  },
-  { immediate: true }
-)
-
 /** 审核队列：pending | rejected | returned */
 const auditFilter = ref('pending')
-const auditTypeFilter = ref('')
+const typeFilter = ref('')
 const listedFilter = ref('published')
+const auditQuery = ref('')
+const listedQuery = ref('')
+const loading = ref(true)
+const showRegistry = ref(false)
+const moreId = ref('')
+const reviewAuto = ref([])
+const reviewHistory = ref([])
+const reviewHistoryLoading = ref(false)
+const reviewHistoryError = ref('')
+let historySeq = 0
+let applyingQuery = false
+
+const DECISION_LABELS = { reject: '拒绝', return: '打回', approve: '通过' }
 const showTrial = ref(false)
 const showStatsDetail = ref(false)
 const selectedId = ref('')
@@ -90,9 +100,10 @@ const reviewComment = ref('')
 const reviewChecks = ref([])
 const confirmReview = ref(null)
 const allReviewChecked = computed(() => reviewChecks.value.length > 0 && reviewChecks.value.every(Boolean))
-function resetReviewChecks() {
-  reviewChecks.value = REVIEW_CHECKLIST.map(() => false)
-}
+const reviewingOwn = computed(
+  () => Boolean(selectedCap.value && authState.user && selectedCap.value.author_id === authState.user.id)
+)
+const approveBlock = computed(() => reviewBlockReason(selectedCap.value))
 
 const TYPE_COLORS = {
   plugin: '#2f6bff',
@@ -104,21 +115,30 @@ const TYPE_COLORS = {
 }
 
 const userQuery = ref('')
+const userRoleFilter = ref('')
+const userStatusFilter = ref('')
+const userDeptFilter = ref('')
+const userMoreId = ref('')
 const showCreateUser = ref(false)
 const showEditUser = ref(false)
 const editUser = ref(null)
 const userNotice = ref('')
-const userForm = ref({
+const emptyUserForm = () => ({
   username: '',
   email: '',
   password: '',
   name: '',
+  work_id: '',
+  phone: '',
   department: '',
   role: 'user'
 })
+const userForm = ref(emptyUserForm())
 const editForm = ref({
   username: '',
   name: '',
+  work_id: '',
+  phone: '',
   email: '',
   department: '',
   password: ''
@@ -158,6 +178,10 @@ const listedCounts = computed(() => ({
   all: allCaps.value.filter((c) => ['published', 'deprecated'].includes(c.status)).length
 }))
 
+const queueTotal = computed(
+  () => auditCounts.value.pending + auditCounts.value.rejected + auditCounts.value.returned
+)
+
 const auditList = computed(() => {
   let list =
     auditFilter.value === 'pending'
@@ -165,8 +189,18 @@ const auditList = computed(() => {
       : auditFilter.value === 'returned'
         ? returnedQueue.value
         : rejectedQueue.value
-  if (auditTypeFilter.value) list = list.filter((c) => c.type === auditTypeFilter.value)
-  return list
+  if (typeFilter.value) list = list.filter((c) => c.type === typeFilter.value)
+  const q = auditQuery.value.trim().toLowerCase()
+  if (q) {
+    list = list.filter((c) => capBlob(c).includes(q))
+  }
+  const rank = { high: 0, unknown: 1, medium: 2, none: 3 }
+  return list.slice().sort((a, b) => {
+    const diff = (rank[riskOf(a).key] ?? 9) - (rank[riskOf(b).key] ?? 9)
+    if (diff) return diff
+    const stamp = (c) => String(c.submitted_at || c.updated_at || '')
+    return stamp(b).localeCompare(stamp(a))
+  })
 })
 
 const selectedCap = computed(() => auditList.value.find((c) => c.id === selectedId.value) || null)
@@ -196,9 +230,36 @@ const fileList = computed(() => {
 })
 
 const listedCaps = computed(() => {
-  const all = allCaps.value.filter((c) => ['published', 'deprecated'].includes(c.status))
-  if (listedFilter.value === 'all') return all
-  return all.filter((c) => c.status === listedFilter.value)
+  let all = allCaps.value.filter((c) => ['published', 'deprecated'].includes(c.status))
+  if (listedFilter.value !== 'all') all = all.filter((c) => c.status === listedFilter.value)
+  if (typeFilter.value) all = all.filter((c) => c.type === typeFilter.value)
+  const q = listedQuery.value.trim().toLowerCase()
+  if (q) all = all.filter((c) => capBlob(c).includes(q))
+  return all
+})
+
+const activeChecks = computed(() => reviewChecklistFor(selectedCap.value))
+
+const pendingCheckLabels = computed(() =>
+  activeChecks.value.filter((_, i) => !reviewChecks.value[i]).map((item) => item.short)
+)
+
+const lastDecision = computed(
+  () => reviewHistory.value.find((row) => row.action === 'reject' || row.action === 'return') || null
+)
+
+const auditEmptyText = computed(() => {
+  if (auditQuery.value.trim() || typeFilter.value) return '没有匹配的能力'
+  if (auditFilter.value === 'pending') return '待审核队列已清空'
+  if (auditFilter.value === 'rejected') return '没有已拒绝的能力'
+  return '没有已打回的能力'
+})
+
+const listedEmptyText = computed(() => {
+  if (listedQuery.value.trim() || typeFilter.value) return '没有匹配的能力'
+  if (listedFilter.value === 'published') return '还没有已上架的能力'
+  if (listedFilter.value === 'deprecated') return '没有已下架的能力'
+  return '暂无记录'
 })
 
 function typeColor(type) {
@@ -220,34 +281,129 @@ function markIconError(id) {
   iconErrors.value = new Set([...iconErrors.value, id])
 }
 
+function capTitle(cap) {
+  return cap?.display_name || cap?.name || ''
+}
+
+function capBlob(cap) {
+  return `${cap?.name || ''} ${cap?.display_name || ''} ${cap?.author_name || ''} ${cap?.description || ''}`.toLowerCase()
+}
+
+function validationOf(cap) {
+  const vr = cap?.validation_report || (cap?.input_schema || {})._validation_report
+  if (!vr || typeof vr !== 'object' || !Object.keys(vr).length) return null
+  return vr
+}
+
+function applyAutoChecks(cap) {
+  const items = reviewChecklistFor(cap)
+  const flags = reviewAutoFlags(cap, items)
+  reviewAuto.value = flags
+  reviewChecks.value = flags.slice()
+}
+
 function riskOf(cap) {
-  const vr = cap?.validation_report || (cap?.input_schema || {})._validation_report || {}
+  const vr = validationOf(cap)
+  if (!vr) return { key: 'unknown', label: '未校验' }
   const errors = vr.errors || []
   const warnings = vr.warnings || []
-  if (errors.length) return { key: 'high', label: '高风险' }
+  if (errors.length || vr.ok === false) return { key: 'high', label: '高风险' }
   if (warnings.length) return { key: 'medium', label: '中风险' }
   return { key: 'none', label: '无风险' }
 }
 
 function selectCap(cap) {
+  if (!cap) return
+  const changed = selectedId.value !== cap.id
   selectedId.value = cap.id
+  if (!changed) return
   detailTab.value = 'intro'
-  resetReviewChecks()
   reviewComment.value = ''
+  applyAutoChecks(cap)
+  loadHistory(cap)
 }
 
-function setAuditFilter(key) {
-  auditFilter.value = key
-  const list =
-    key === 'pending' ? reviewQueue.value : key === 'returned' ? returnedQueue.value : rejectedQueue.value
-  selectedId.value = list[0]?.id || ''
-  resetReviewChecks()
-  reviewComment.value = ''
+async function loadHistory(cap) {
+  const seq = ++historySeq
+  reviewHistory.value = []
+  if (!cap || (cap.status !== 'rejected' && cap.status !== 'returned')) {
+    reviewHistoryLoading.value = false
+    return
+  }
+  reviewHistoryLoading.value = true
+  reviewHistoryError.value = ''
+  try {
+    const rows = await api.get(`/admin/capabilities/${cap.id}/reviews`)
+    if (seq !== historySeq) return
+    reviewHistory.value = Array.isArray(rows) ? rows : []
+  } catch {
+    if (seq === historySeq) {
+      reviewHistory.value = []
+      reviewHistoryError.value = '暂时读不到审核记录'
+    }
+  } finally {
+    if (seq === historySeq) reviewHistoryLoading.value = false
+  }
 }
+
+function focusCaps(target) {
+  showTrial.value = false
+  if (target === 'usage') {
+    capsTab.value = 'review'
+    showStatsDetail.value = true
+    return
+  }
+  showStatsDetail.value = false
+  if (target === 'pending') {
+    capsTab.value = 'review'
+    auditFilter.value = 'pending'
+    return
+  }
+  capsTab.value = 'listed'
+  listedFilter.value = 'published'
+}
+
+watch(
+  () => [route.query.ctab, route.query.aq, route.query.type, route.query.listed],
+  async () => {
+    applyingQuery = true
+    const q = route.query
+    const nextTab = q.ctab === 'listed' ? 'listed' : 'review'
+    const nextAudit = q.aq === 'rejected' || q.aq === 'returned' ? String(q.aq) : 'pending'
+    const nextType = typeof q.type === 'string' ? q.type : ''
+    const nextListed = q.listed === 'deprecated' || q.listed === 'all' ? String(q.listed) : 'published'
+    if (capsTab.value !== nextTab) capsTab.value = nextTab
+    if (auditFilter.value !== nextAudit) auditFilter.value = nextAudit
+    if (typeFilter.value !== nextType) typeFilter.value = nextType
+    if (listedFilter.value !== nextListed) listedFilter.value = nextListed
+    await nextTick()
+    applyingQuery = false
+  },
+  { immediate: true }
+)
+
+watch([capsTab, auditFilter, typeFilter, listedFilter], () => {
+  if (applyingQuery || section.value !== 'caps') return
+  const query = { ...route.query }
+  if (capsTab.value === 'listed') query.ctab = 'listed'
+  else delete query.ctab
+  if (auditFilter.value !== 'pending') query.aq = auditFilter.value
+  else delete query.aq
+  if (typeFilter.value) query.type = typeFilter.value
+  else delete query.type
+  if (listedFilter.value !== 'published') query.listed = listedFilter.value
+  else delete query.listed
+  const keys = ['ctab', 'aq', 'type', 'listed']
+  if (keys.every((key) => String(query[key] || '') === String(route.query[key] || ''))) return
+  router.replace({ query })
+})
 
 watch(auditList, (list) => {
-  if (!list.find((c) => c.id === selectedId.value)) {
-    selectedId.value = list[0]?.id || ''
+  if (list.find((c) => c.id === selectedId.value)) return
+  if (list[0]) selectCap(list[0])
+  else {
+    selectedId.value = ''
+    reviewHistory.value = []
   }
 })
 
@@ -256,16 +412,37 @@ const roleDefs = [
   { key: 'user', label: '普通用户', desc: '登录即可发布与在线编辑能力、提交审核；试用自己创建或已加入的资产；生产消费走 cap install / MCP' }
 ]
 
+const userFilterOn = computed(() =>
+  Boolean(userQuery.value.trim() || userRoleFilter.value || userStatusFilter.value || userDeptFilter.value)
+)
 const filteredUsers = computed(() => {
   const q = userQuery.value.trim().toLowerCase()
-  if (!q) return users.value
-  return users.value.filter(
-    (u) =>
-      u.username.toLowerCase().includes(q) ||
-      (u.name || '').toLowerCase().includes(q) ||
-      (u.email || '').toLowerCase().includes(q)
-  )
+  return users.value.filter((u) => {
+    if (userRoleFilter.value && u.role !== userRoleFilter.value) return false
+    if (userStatusFilter.value === 'active' && !u.is_active) return false
+    if (userStatusFilter.value === 'disabled' && u.is_active) return false
+    if (userDeptFilter.value && (u.department || '') !== userDeptFilter.value) return false
+    if (!q) return true
+    return [u.username, u.name, u.email, u.work_id, u.phone, u.department].some((v) =>
+      String(v || '').toLowerCase().includes(q)
+    )
+  })
 })
+function roleLabel(role) {
+  return roleDefs.find((r) => r.key === role)?.label || role
+}
+function userTitle(u) {
+  return (u.name || '').trim() || u.username || '—'
+}
+function userSub(u) {
+  const work = (u.work_id || '').trim()
+  const login = (u.username || '').trim()
+  const title = userTitle(u)
+  const bits = []
+  if (work && work !== title) bits.push(work)
+  if (login && login !== title && login !== work) bits.push(login)
+  return bits.join(' · ')
+}
 
 const departmentOptions = computed(() => [
   ...new Set(users.value.map((u) => (u.department || '').trim()).filter(Boolean))
@@ -273,6 +450,7 @@ const departmentOptions = computed(() => [
 
 async function load() {
   error.value = ''
+  loading.value = true
   try {
     const [queue, rejected, returned, caps, userList, stat, gatewayList] = await Promise.all([
       api.get('/admin/capabilities?status_filter=reviewing'),
@@ -291,11 +469,10 @@ async function load() {
     stats.value = stat
     gatewayServers.value = gatewayList
     adminState.reviewingCount = reviewQueue.value.length
-    if (!selectedId.value && auditList.value.length) {
-      selectedId.value = auditList.value[0].id
-    }
   } catch (e) {
     error.value = e.message
+  } finally {
+    loading.value = false
   }
 }
 
@@ -305,16 +482,30 @@ async function review(cap, action) {
     await api.post(`/admin/capabilities/${cap.id}/review`, { action, comment: reviewComment.value })
     notice.value =
       action === 'approve'
-        ? `「${cap.name}」已通过并上架`
+        ? `「${capTitle(cap)}」已通过并上架`
         : action === 'reject'
-          ? `「${cap.name}」已拒绝`
-          : `「${cap.name}」已打回修改`
+          ? `「${capTitle(cap)}」已拒绝`
+          : `「${capTitle(cap)}」已打回修改`
     reviewComment.value = ''
     confirmReview.value = null
-    resetReviewChecks()
     await load()
   } catch (e) {
     error.value = e.message
+  }
+}
+
+function askApprove(cap) {
+  const live = cap.live_version
+  const title = capTitle(cap)
+  confirmReview.value = {
+    action: 'approve',
+    title: '确定通过并上架？',
+    body: live
+      ? `「${title}」通过后立即上架。已上架的 v${live} 会变为已弃用。`
+      : `「${title}」通过后立即上架。`,
+    okText: '通过并上架',
+    danger: false,
+    cap
   }
 }
 
@@ -322,7 +513,7 @@ function askReject(cap) {
   confirmReview.value = {
     action: 'reject',
     title: '确定拒绝？',
-    body: `拒绝后，「${cap.name}」将退回作者，需修改后重新提交。`,
+    body: `拒绝后，「${capTitle(cap)}」状态为「已驳回」，留在已拒绝列表。作者按意见修改后可以重新提交。`,
     okText: '拒绝',
     danger: true,
     cap
@@ -333,7 +524,7 @@ function askReturn(cap) {
   confirmReview.value = {
     action: 'return',
     title: '确定打回？',
-    body: `打回后，「${cap.name}」将回到草稿态，作者可继续修改。`,
+    body: `打回后，「${capTitle(cap)}」状态为「已打回」，不会变回草稿。作者按意见修改后可以重新提交。`,
     okText: '打回',
     danger: false,
     cap
@@ -343,13 +534,17 @@ function askReturn(cap) {
 async function confirmReviewOk() {
   const action = confirmReview.value
   if (!action) return
+  if (['reject', 'return'].includes(action.action) && !reviewComment.value.trim()) {
+    error.value = '请填写审核意见，作者会在详情页看到'
+    return
+  }
   await review(action.cap, action.action)
 }
 
 async function statusAction(cap, action) {
   try {
     await api.post(`/admin/capabilities/${cap.id}/${action}`)
-    notice.value = action === 'deprecate' ? `「${cap.name}」已下架` : `「${cap.name}」已归档`
+    notice.value = action === 'deprecate' ? `「${capTitle(cap)}」已下架` : `「${capTitle(cap)}」已归档`
     await load()
   } catch (e) {
     error.value = e.message
@@ -393,7 +588,7 @@ async function createUser() {
   userNotice.value = ''
   const f = userForm.value
   if (!f.username || !f.email || !f.password) {
-    error.value = '请填写用户名、邮箱和密码'
+    error.value = '请填写登录名、邮箱和密码'
     return
   }
   try {
@@ -402,12 +597,14 @@ async function createUser() {
       email: f.email,
       password: f.password,
       name: f.name,
+      work_id: f.work_id,
+      phone: f.phone,
       department: f.department,
       role: f.role
     })
     userNotice.value = `已创建用户 ${u.username}（${roleDefs.find((r) => r.key === u.role)?.label}）`
     showCreateUser.value = false
-    userForm.value = { username: '', email: '', password: '', name: '', department: '', role: 'user' }
+    userForm.value = emptyUserForm()
     await load()
   } catch (e) {
     error.value = e.message
@@ -419,10 +616,13 @@ function isSelf(u) {
 }
 
 function openEditUser(u) {
+  userMoreId.value = ''
   editUser.value = u
   editForm.value = {
     username: u.username,
     name: u.name || '',
+    work_id: u.work_id || '',
+    phone: u.phone || '',
     email: u.email || '',
     department: u.department || '',
     password: ''
@@ -437,6 +637,8 @@ async function saveEditUser() {
   const patch = {}
   if (f.username && f.username !== editUser.value.username) patch.username = f.username
   if (f.name !== (editUser.value.name || '')) patch.name = f.name
+  if (f.work_id !== (editUser.value.work_id || '')) patch.work_id = f.work_id
+  if (f.phone !== (editUser.value.phone || '')) patch.phone = f.phone
   if (f.email !== (editUser.value.email || '')) patch.email = f.email
   if (f.department !== (editUser.value.department || '')) patch.department = f.department
   if (f.password) patch.password = f.password
@@ -456,9 +658,38 @@ async function saveEditUser() {
 
 const confirmAction = ref(null)
 
+function askSetRole(u, role) {
+  userMoreId.value = ''
+  const label = roleLabel(role)
+  confirmAction.value = {
+    kind: 'user-role',
+    title: `将「${userTitle(u)}」设为${label}？`,
+    body: role === 'admin'
+      ? '管理员可以审核上架、管理用户、网关和服务令牌。'
+      : '改为普通用户后，不能再审核上架或管理其他账号。',
+    okText: `设为${label}`,
+    danger: role === 'admin',
+    payload: { user: u, role }
+  }
+}
+
+function askToggleActive(u) {
+  userMoreId.value = ''
+  const title = userTitle(u)
+  confirmAction.value = {
+    kind: 'user-active',
+    title: u.is_active ? `禁用「${title}」？` : `启用「${title}」？`,
+    body: u.is_active ? '禁用后该账号不能登录。' : '启用后该账号可以重新登录。',
+    okText: u.is_active ? '禁用' : '启用',
+    danger: !!u.is_active,
+    payload: u
+  }
+}
+
 async function removeUser(u) {
   error.value = ''
   userNotice.value = ''
+  userMoreId.value = ''
   confirmAction.value = {
     kind: 'remove-user',
     title: '确认删除用户？',
@@ -596,12 +827,31 @@ async function doRemoveGateway(s) {
   }
 }
 
+function askStatus(cap, action) {
+  moreId.value = ''
+  const title = capTitle(cap)
+  confirmAction.value = {
+    kind: 'cap-status',
+    title: action === 'deprecate' ? `下架「${title}」？` : `归档「${title}」？`,
+    body:
+      action === 'deprecate'
+        ? '下架后，该能力不再作为可安装的上架能力，仍可在「已下架」中查看。'
+        : '归档后，该能力会离开上架治理列表（已上架 / 已下架），本页不能撤销。',
+    okText: action === 'deprecate' ? '下架' : '归档',
+    danger: true,
+    payload: { cap, action }
+  }
+}
+
 async function confirmActionOk() {
   const action = confirmAction.value
   confirmAction.value = null
   if (!action) return
   if (action.kind === 'remove-user') await doRemoveUser(action.payload)
+  if (action.kind === 'user-role') await updateUser(action.payload.user, { role: action.payload.role })
+  if (action.kind === 'user-active') await updateUser(action.payload, { is_active: !action.payload.is_active })
   if (action.kind === 'remove-gateway') await doRemoveGateway(action.payload)
+  if (action.kind === 'cap-status') await statusAction(action.payload.cap, action.payload.action)
 }
 
 async function testGateway(s) {
@@ -665,10 +915,19 @@ function openDebug() {
   showTrial.value = false
 }
 
+function closeMore() {
+  moreId.value = ''
+  userMoreId.value = ''
+}
+
 onMounted(() => {
-  resetReviewChecks()
+  document.addEventListener('click', closeMore)
   if (route.query.trial === '1') showTrial.value = true
   load()
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', closeMore)
 })
 
 watch(
@@ -683,16 +942,16 @@ watch(
   <div class="admin-page">
       <div class="admin-header">
         <div>
-          <h2 style="margin: 0">{{ sectionTitle }}</h2>
-          <div class="muted" style="font-size: 13px">{{ sectionHint }}</div>
+          <h2 class="page-title">{{ sectionTitle }}</h2>
+          <div v-if="stats && section === 'caps'" class="stat-line">
+            <span><b>{{ stats.total_capabilities }}</b> 个能力</span>
+            <button type="button" @click="focusCaps('published')"><b class="ok">{{ stats.published_count }}</b> 已上架</button>
+            <button type="button" @click="focusCaps('pending')"><b class="warn">{{ stats.reviewing_count }}</b> 待审核</button>
+            <button type="button" @click="focusCaps('usage')"><b>{{ stats.total_usage }}</b> 次用量</button>
+          </div>
+          <div v-else class="muted section-hint">{{ sectionHint }}</div>
         </div>
         <div class="header-right">
-          <div v-if="stats && section === 'caps'" class="header-chips">
-            <div class="chip"><span class="chip-num">{{ stats.total_capabilities }}</span>能力总数</div>
-            <div class="chip"><span class="chip-num success">{{ stats.published_count }}</span>已上架</div>
-            <div class="chip"><span class="chip-num warning">{{ stats.reviewing_count }}</span>待审核</div>
-            <div class="chip"><span class="chip-num primary">{{ stats.total_usage }}</span>总用量</div>
-          </div>
           <button
             v-if="section === 'caps' && capsTab === 'review' && stats"
             class="btn"
@@ -700,6 +959,7 @@ watch(
             @click="showStatsDetail = !showStatsDetail"
           >{{ showStatsDetail ? '收起统计' : '统计明细' }}</button>
           <AdminTrialPanel
+            v-if="section === 'caps'"
             v-model:show="showTrial"
             v-model:debug-type="debugType"
             v-model:debug-name="debugName"
@@ -714,29 +974,32 @@ watch(
       <div v-if="notice" class="alert alert-success mb-12">{{ notice }}</div>
       <div v-if="error" class="alert alert-error mb-12">{{ error }}</div>
 
-      <!-- 官方 MCP Registry 导入(仅元数据, 汇入审核队列) -->
-      <RegistryImportPanel />
-
       <!-- 能力管理：审核队列 / 上架治理 -->
       <section v-if="section === 'caps'" class="desk">
-        <div class="seg mb-12" style="max-width: 360px">
-          <button
-            type="button"
-            class="seg-item"
-            :class="{ active: capsTab === 'review' }"
-            @click="capsTab = 'review'"
-          >
-            审核队列 <span>{{ auditCounts.pending }}</span>
-          </button>
-          <button
-            type="button"
-            class="seg-item"
-            :class="{ active: capsTab === 'listed' }"
-            @click="capsTab = 'listed'"
-          >
-            上架治理 <span>{{ listedCounts.all }}</span>
+        <div class="desk-head">
+          <div class="seg">
+            <button
+              type="button"
+              class="seg-item"
+              :class="{ active: capsTab === 'review' }"
+              @click="capsTab = 'review'"
+            >
+              审核队列 <span>{{ queueTotal }}</span>
+            </button>
+            <button
+              type="button"
+              class="seg-item"
+              :class="{ active: capsTab === 'listed' }"
+              @click="capsTab = 'listed'"
+            >
+              上架治理 <span>{{ listedCounts.all }}</span>
+            </button>
+          </div>
+          <button class="btn btn-sm" type="button" @click="showRegistry = !showRegistry">
+            {{ showRegistry ? '收起 Registry 导入' : '从 Registry 导入' }}
           </button>
         </div>
+        <RegistryImportPanel v-if="showRegistry" />
 
         <template v-if="capsTab === 'review'">
         <div v-if="showStatsDetail && stats" class="stats-band">
@@ -751,8 +1014,8 @@ watch(
           <div class="panel">
             <h3>热门能力 TOP5</h3>
             <div v-for="item in stats.top_used" :key="item.id" class="top-item">
-              <router-link :to="`/capabilities/${item.id}`">{{ item.name }}</router-link>
-              <span class="badge">{{ item.type }}</span>
+              <router-link :to="`/capabilities/${item.id}`">{{ item.display_name || item.name }}</router-link>
+              <span class="badge">{{ TYPE_LABELS[item.type] || item.type }}</span>
               <span class="muted">{{ item.count }} 次</span>
             </div>
             <div v-if="!(stats.top_used || []).length" class="muted" style="font-size: 13px">暂无用量</div>
@@ -768,30 +1031,34 @@ watch(
         </div>
 
         <div class="desk-toolbar">
-          <div class="seg">
-            <button type="button" class="seg-item" :class="{ active: auditFilter === 'pending' }" @click="setAuditFilter('pending')">
-              待审核 <span>{{ auditCounts.pending }}</span>
+          <div class="text-tabs">
+            <button type="button" class="text-tab" :class="{ active: auditFilter === 'pending' }" @click="auditFilter = 'pending'">
+              待审核 <em>{{ auditCounts.pending }}</em>
             </button>
-            <button type="button" class="seg-item" :class="{ active: auditFilter === 'rejected' }" @click="setAuditFilter('rejected')">
-              已拒绝 <span>{{ auditCounts.rejected }}</span>
+            <button type="button" class="text-tab" :class="{ active: auditFilter === 'rejected' }" @click="auditFilter = 'rejected'">
+              已拒绝 <em>{{ auditCounts.rejected }}</em>
             </button>
-            <button type="button" class="seg-item" :class="{ active: auditFilter === 'returned' }" @click="setAuditFilter('returned')">
-              已打回 <span>{{ auditCounts.returned }}</span>
+            <button type="button" class="text-tab" :class="{ active: auditFilter === 'returned' }" @click="auditFilter = 'returned'">
+              已打回 <em>{{ auditCounts.returned }}</em>
             </button>
           </div>
-          <select v-model="auditTypeFilter" class="select" style="max-width: 180px">
-            <option value="">全部类型</option>
-            <option v-for="t in Object.keys(TYPE_LABELS)" :key="t" :value="t">{{ TYPE_LABELS[t] }}</option>
-          </select>
+          <div class="toolbar-filters">
+            <input v-model="auditQuery" class="input queue-search" type="search" placeholder="搜索名称、作者" />
+            <select v-model="typeFilter" class="select type-select">
+              <option value="">全部类型</option>
+              <option v-for="t in Object.keys(TYPE_LABELS)" :key="t" :value="t">{{ TYPE_LABELS[t] }}</option>
+            </select>
+          </div>
         </div>
 
-        <div class="audit-split">
+        <div class="audit-split" :class="{ 'with-stats': showStatsDetail }">
             <div class="audit-list panel">
               <div class="list-head">
-                <span>能力</span>
-                <span>风险程度</span>
+                <span>能力 · {{ auditList.length }} 条</span>
+                <span title="高风险与未校验排在前面">风险</span>
               </div>
-              <div v-if="auditList.length === 0" class="empty-sm">暂无记录</div>
+              <div v-if="loading && auditList.length === 0" class="empty-sm">正在加载审核队列…</div>
+              <div v-else-if="!loading && auditList.length === 0" class="empty-sm">{{ auditEmptyText }}</div>
               <button
                 v-for="cap in auditList"
                 :key="cap.id"
@@ -811,10 +1078,14 @@ watch(
                   <div v-else class="skill-icon" :style="{ background: typeColor(cap.type) }">{{ nameInitial(cap) }}</div>
                   <div class="skill-meta">
                     <div class="skill-name-row">
-                      <span class="skill-name">{{ cap.name }}</span>
+                      <span class="skill-name">{{ capTitle(cap) }}</span>
                       <span class="ver-tag">v{{ cap.version }}</span>
                     </div>
-                    <div class="skill-desc muted">{{ cap.description || TYPE_LABELS[cap.type] }}</div>
+                    <div class="skill-sub muted">
+                      <span>{{ TYPE_LABELS[cap.type] || cap.type }}</span>
+                      <span>{{ cap.author_name || '—' }}</span>
+                      <span>{{ formatDate(cap.submitted_at || cap.updated_at) }}</span>
+                    </div>
                   </div>
                 </div>
                 <span class="risk" :class="riskOf(cap).key">{{ riskOf(cap).label }}</span>
@@ -822,21 +1093,24 @@ watch(
             </div>
 
             <div class="audit-detail panel">
-              <div v-if="!selectedCap" class="empty-sm">从左侧选择一条能力</div>
+              <div v-if="!selectedCap" class="empty-sm">
+                {{ loading ? '正在加载审核队列…' : (auditList.length ? '从左侧选择一条能力' : '队列里没有需要处理的能力') }}
+              </div>
               <template v-else>
+                <div class="detail-scroll">
                 <div class="detail-top">
                   <div class="detail-identity">
                     <img
                       v-if="selectedCap.icon_url && !iconErrors.has(selectedCap.id)"
                       class="skill-icon lg icon-img"
                       :src="assetUrl(selectedCap.icon_url)"
-                      :alt="selectedCap.name"
+                      :alt="capTitle(selectedCap)"
                       @error="markIconError(selectedCap.id)"
                     />
                     <div v-else class="skill-icon lg" :style="{ background: typeColor(selectedCap.type) }">{{ nameInitial(selectedCap) }}</div>
                     <div>
                       <div class="detail-name-row">
-                        <h3 class="detail-name">{{ selectedCap.name }}</h3>
+                        <h3 class="detail-name">{{ capTitle(selectedCap) }}</h3>
                         <StatusBadge :status="selectedCap.status" />
                       </div>
                       <div class="muted" style="font-size: 12px; margin-top: 4px">
@@ -845,44 +1119,19 @@ watch(
                       </div>
                     </div>
                   </div>
-                  <div v-if="selectedCap.status === 'reviewing'" class="detail-actions">
-                    <button class="btn btn-danger" type="button" @click="askReject(selectedCap)">拒绝</button>
-                    <button class="btn" type="button" @click="askReturn(selectedCap)">打回</button>
-                    <button
-                      class="btn btn-primary"
-                      type="button"
-                      :disabled="!allReviewChecked"
-                      @click="review(selectedCap, 'approve')"
-                    >通过</button>
+                </div>
+
+                <div class="meta-grid">
+                  <div class="meta-cell"><span class="meta-k">开发者</span><span class="meta-v">{{ selectedCap.author_name || '—' }}</span></div>
+                  <div class="meta-cell"><span class="meta-k">部门</span><span class="meta-v">{{ selectedCap.organization || '个人' }}</span></div>
+                  <div class="meta-cell"><span class="meta-k">加入次数</span><span class="meta-v">{{ selectedCap.usage_count || 0 }}</span></div>
+                  <div class="meta-cell"><span class="meta-k">提交时间</span><span class="meta-v">{{ formatDate(selectedCap.submitted_at || selectedCap.updated_at) }}</span></div>
+                  <div v-if="selectedCap.live_version" class="meta-cell"><span class="meta-k">当前上架</span><span class="meta-v">v{{ selectedCap.live_version }}</span></div>
+                  <div class="meta-cell"><span class="meta-k">版本</span><span class="meta-v">v{{ selectedCap.version }}</span></div>
+                  <div class="meta-cell">
+                    <span class="meta-k">可见范围</span>
+                    <span class="meta-v"><span class="vis-pill">{{ VISIBILITY_LABELS[selectedCap.visibility] || selectedCap.visibility }}</span></span>
                   </div>
-                </div>
-
-                <div class="meta-row">
-                  <div><span class="meta-k">开发者</span>{{ selectedCap.author_name || '—' }}</div>
-                  <div><span class="meta-k">部门</span>{{ selectedCap.organization || '个人' }}</div>
-                  <div><span class="meta-k">加入次数</span>{{ selectedCap.usage_count || 0 }}</div>
-                  <div><span class="meta-k">提交时间</span>{{ formatDate(selectedCap.updated_at) }}</div>
-                  <div><span class="meta-k">版本</span>v{{ selectedCap.version }}</div>
-                </div>
-
-                <div class="vis-block">
-                  <span class="meta-k">可见范围</span>
-                  <span class="vis-pill">{{ VISIBILITY_LABELS[selectedCap.visibility] || selectedCap.visibility }}</span>
-                </div>
-
-                <div v-if="selectedCap.status === 'reviewing'" class="checklist-box">
-                  <div class="check-title">审核清单</div>
-                  <label v-for="(item, i) in REVIEW_CHECKLIST" :key="i" class="check-item">
-                    <input v-model="reviewChecks[i]" type="checkbox" />
-                    <span>{{ item }}</span>
-                  </label>
-                  <textarea
-                    v-model="reviewComment"
-                    class="textarea"
-                    rows="2"
-                    placeholder="审核意见（可选）"
-                  ></textarea>
-                  <div v-if="!allReviewChecked" class="muted" style="font-size: 12px">勾选全部清单后可点「通过」</div>
                 </div>
 
                 <div class="detail-tabs">
@@ -907,7 +1156,7 @@ watch(
                     <div v-for="(e, i) in (selectedValidation.errors || [])" :key="'e'+i" class="vr-line err">{{ e }}</div>
                     <div v-for="(w, i) in (selectedValidation.warnings || [])" :key="'w'+i" class="vr-line warn">{{ w }}</div>
                     <div v-if="fileList.length" class="file-tree">
-                      <div class="file-tree-title">包内文件（点击上方「文件预览」查看内容）</div>
+                      <div class="file-tree-title">包内文件（打开「文件预览」查看内容）</div>
                       <button
                         v-for="(f, i) in fileList.slice(0, 40)"
                         :key="i"
@@ -919,7 +1168,59 @@ watch(
                     </div>
                     <div v-if="selectedValidation.ok !== false" class="muted" style="font-size: 12px; margin-top: 8px">结构校验通过</div>
                   </template>
-                  <div v-else class="muted" style="font-size: 13px">暂无校验报告</div>
+                  <div v-else class="muted" style="font-size: 13px">暂无校验报告。风险列会显示「未校验」，通过前请打开文件预览核对。</div>
+                </div>
+                </div>
+
+                <div v-if="selectedCap.status === 'reviewing'" class="decision-dock">
+                  <div class="check-title">审核清单</div>
+                  <div class="check-list">
+                    <label v-for="(item, i) in activeChecks" :key="item.index" class="check-item">
+                      <input v-model="reviewChecks[i]" type="checkbox" />
+                      <span class="check-label">{{ item.text }}</span>
+                      <em v-if="reviewAuto[i]" class="auto-tag">{{ item.index === 1 ? '未见硬编码' : '结构通过' }}</em>
+                    </label>
+                  </div>
+                  <textarea
+                    v-model="reviewComment"
+                    class="textarea"
+                    rows="2"
+                    placeholder="审核意见（拒绝 / 打回必填，作者会在详情页看到）"
+                  ></textarea>
+                  <div v-if="reviewingOwn" class="muted decision-hint">这是你提交的。请在「我的能力」撤回，或等其他管理员审核。</div>
+                  <div v-else class="decision-row">
+                    <div class="muted decision-hint">
+                      <template v-if="approveBlock">{{ approveBlock }}</template>
+                      <template v-else-if="allReviewChecked">清单已齐，可以通过{{ selectedCap.live_version ? `。已上架的 v${selectedCap.live_version} 会变为已弃用` : '' }}</template>
+                      <template v-else>还差 {{ pendingCheckLabels.length }} 项：{{ pendingCheckLabels.join('、') }}</template>
+                    </div>
+                    <div class="muted decision-hint">打回后是「已打回」，拒绝后是「已驳回」。都要写意见，作者改完可以再交。</div>
+                    <div class="detail-actions">
+                      <button class="btn btn-danger" type="button" @click="askReject(selectedCap)">拒绝</button>
+                      <button class="btn" type="button" @click="askReturn(selectedCap)">打回</button>
+                      <button
+                        class="btn btn-primary"
+                        type="button"
+                        :disabled="!allReviewChecked || !!approveBlock"
+                        :title="approveBlock || (allReviewChecked ? '通过并上架' : '还差 ' + pendingCheckLabels.join('、'))"
+                        @click="askApprove(selectedCap)"
+                      >通过</button>
+                    </div>
+                  </div>
+                </div>
+                <div v-else class="decision-dock">
+                  <div class="check-title">{{ selectedCap.status === 'rejected' ? '已拒绝' : '已打回' }} · 等待作者修改后重新提交</div>
+                  <div v-if="reviewHistoryLoading" class="muted decision-hint">正在读取审核记录…</div>
+                  <div v-else-if="reviewHistoryError" class="muted decision-hint">
+                    {{ reviewHistoryError }}
+                    <button class="btn btn-sm" type="button" style="margin-left: 8px" @click="loadHistory(selectedCap)">重试</button>
+                  </div>
+                  <div v-else-if="lastDecision" class="history-comment">
+                    <span class="meta-k">上次{{ DECISION_LABELS[lastDecision.action] || '结论' }}</span>
+                    {{ lastDecision.comment || '（无审核意见）' }}
+                    <span class="muted"> · {{ formatDate(lastDecision.created_at) }}</span>
+                  </div>
+                  <div v-else class="muted decision-hint">暂无审核意见</div>
                 </div>
                </template>
              </div>
@@ -928,20 +1229,28 @@ watch(
 
         <template v-else>
          <div class="desk-toolbar">
-          <div class="seg">
-            <button type="button" class="seg-item" :class="{ active: listedFilter === 'published' }" @click="listedFilter = 'published'">
-              已上架 <span>{{ listedCounts.published }}</span>
+          <div class="text-tabs">
+            <button type="button" class="text-tab" :class="{ active: listedFilter === 'published' }" @click="listedFilter = 'published'">
+              已上架 <em>{{ listedCounts.published }}</em>
             </button>
-            <button type="button" class="seg-item" :class="{ active: listedFilter === 'deprecated' }" @click="listedFilter = 'deprecated'">
-              已下架 <span>{{ listedCounts.deprecated }}</span>
+            <button type="button" class="text-tab" :class="{ active: listedFilter === 'deprecated' }" @click="listedFilter = 'deprecated'">
+              已下架 <em>{{ listedCounts.deprecated }}</em>
             </button>
-            <button type="button" class="seg-item" :class="{ active: listedFilter === 'all' }" @click="listedFilter = 'all'">
-              全部 <span>{{ listedCounts.all }}</span>
+            <button type="button" class="text-tab" :class="{ active: listedFilter === 'all' }" @click="listedFilter = 'all'">
+              全部 <em>{{ listedCounts.all }}</em>
             </button>
+          </div>
+          <div class="toolbar-filters">
+            <input v-model="listedQuery" class="input queue-search" type="search" placeholder="搜索名称、作者" />
+            <select v-model="typeFilter" class="select type-select">
+              <option value="">全部类型</option>
+              <option v-for="t in Object.keys(TYPE_LABELS)" :key="t" :value="t">{{ TYPE_LABELS[t] }}</option>
+            </select>
           </div>
         </div>
         <div class="panel table-panel">
-          <div v-if="listedCaps.length === 0" class="empty">暂无记录</div>
+          <div v-if="loading && listedCaps.length === 0" class="empty">正在加载上架列表…</div>
+          <div v-else-if="listedCaps.length === 0" class="empty">{{ listedEmptyText }}</div>
           <table v-else class="skill-table">
             <thead>
               <tr>
@@ -950,7 +1259,7 @@ watch(
                 <th>可见范围</th>
                 <th>作者</th>
                 <th>使用量</th>
-                <th style="width: 160px">操作</th>
+                <th>操作</th>
               </tr>
             </thead>
             <tbody>
@@ -984,22 +1293,27 @@ watch(
                     <router-link class="op-link" :to="`/capabilities/${cap.id}`">详情</router-link>
                     <button class="op-link" type="button" @click="toggleVerify(cap)">{{ cap.verified ? '取消认证' : '认证' }}</button>
                     <select
-                      class="op-link"
+                      class="select policy-select"
                       :value="cap.install_policy || 'optional'"
-                      title="安装策略（必装=组织级强制）"
+                      title="安装策略（必装 = 组织级强制）"
                       @change="setInstallPolicy(cap, $event.target.value)"
                     >
-                      <option value="optional">可选</option>
+                      <option value="optional">可选安装</option>
                       <option value="default_on">默认安装</option>
-                      <option value="required">必装</option>
+                      <option value="required">组织必装</option>
                     </select>
-                    <button v-if="cap.status === 'published'" class="op-link danger" type="button" @click="statusAction(cap, 'deprecate')">下架</button>
-                    <button
-                      v-if="['published', 'deprecated'].includes(cap.status)"
-                      class="op-link danger"
-                      type="button"
-                      @click="statusAction(cap, 'archive')"
-                    >归档</button>
+                    <div class="more-wrap" @click.stop>
+                      <button class="op-link" type="button" @click="moreId = moreId === cap.id ? '' : cap.id">更多</button>
+                      <div v-if="moreId === cap.id" class="more-menu">
+                        <button v-if="cap.status === 'published'" type="button" class="danger" @click="askStatus(cap, 'deprecate')">下架</button>
+                        <button
+                          v-if="cap.status === 'published' || cap.status === 'deprecated'"
+                          type="button"
+                          class="danger"
+                          @click="askStatus(cap, 'archive')"
+                        >归档</button>
+                      </div>
+                    </div>
                   </div>
                 </td>
               </tr>
@@ -1010,52 +1324,68 @@ watch(
       </section>
 
       <section v-else-if="section === 'users'" class="panel">
-        <div class="users-head">
-          <p class="muted boundary-hint">
-            市场是目录控制面。宿主 BuiltinTool（src/tools）与通道插件（钉钉/飞书）不上架。
-          </p>
-          <div class="role-cards">
-            <div v-for="r in roleDefs" :key="r.key" class="role-card">
-              <strong>{{ r.label }}</strong>
-              <span class="muted" style="font-size: 12px">{{ r.desc }}</span>
-            </div>
+        <div class="desk-toolbar">
+          <div class="toolbar-filters">
+            <input v-model="userQuery" class="input queue-search" placeholder="姓名、工号、手机、部门" />
+            <select v-model="userRoleFilter" class="select type-select">
+              <option value="">全部角色</option>
+              <option value="admin">管理员</option>
+              <option value="user">普通用户</option>
+            </select>
+            <select v-model="userStatusFilter" class="select type-select">
+              <option value="">全部状态</option>
+              <option value="active">正常</option>
+              <option value="disabled">禁用</option>
+            </select>
+            <select v-model="userDeptFilter" class="select user-dept-select">
+              <option value="">全部部门</option>
+              <option v-for="d in departmentOptions" :key="d" :value="d">{{ d }}</option>
+            </select>
+            <span class="muted user-count">
+              <template v-if="userFilterOn">{{ filteredUsers.length }} / {{ users.length }} 人</template>
+              <template v-else>共 {{ users.length }} 人</template>
+            </span>
           </div>
-          <div class="users-tools">
-            <input v-model="userQuery" class="input" style="max-width: 220px" placeholder="搜索用户…" />
-            <button class="btn btn-primary" @click="showCreateUser = true">+ 新增用户</button>
-          </div>
+          <button class="btn btn-primary" type="button" @click="showCreateUser = true">新增用户</button>
         </div>
         <div v-if="userNotice" class="alert alert-success">{{ userNotice }}</div>
-        <table class="table mt-16">
+        <table class="table">
           <thead>
-            <tr><th style="width: 70px">ID</th><th>工号</th><th>姓名</th><th>手机</th><th>邮箱</th><th>部门</th><th>角色</th><th>状态</th><th>操作</th></tr>
+            <tr><th>用户</th><th>联系方式</th><th>部门</th><th>角色</th><th>状态</th><th>操作</th></tr>
           </thead>
           <tbody>
             <tr v-if="filteredUsers.length === 0">
-              <td colspan="9" class="muted">{{ userQuery ? '无匹配用户' : '暂无用户' }}</td>
+              <td colspan="6" class="muted">{{ userFilterOn ? '无匹配用户' : '暂无用户' }}</td>
             </tr>
             <tr v-for="u in filteredUsers" :key="u.id">
-              <td>{{ u.id }}</td>
-              <td>{{ u.work_id || '—' }}</td>
-              <td>{{ u.name || '—' }}</td>
-              <td>{{ u.phone || '—' }}</td>
-              <td>{{ u.email || '—' }}</td>
+              <td>
+                <div class="user-name">{{ userTitle(u) }}</div>
+                <div v-if="userSub(u)" class="muted user-sub">{{ userSub(u) }}</div>
+              </td>
+              <td>
+                <div class="user-contact">{{ u.phone || '—' }}</div>
+                <div v-if="u.email" class="muted user-sub">{{ u.email }}</div>
+              </td>
               <td>{{ u.department || '—' }}</td>
+              <td><span class="badge" :class="u.role === 'admin' ? 'badge-primary' : ''">{{ roleLabel(u.role) }}</span></td>
               <td>
-                <select :value="u.role" class="select" style="width: auto; padding: 4px 8px" :disabled="isSelf(u)" @change="updateUser(u, { role: $event.target.value })">
-                  <option value="admin">管理员</option>
-                  <option value="user">普通用户</option>
-                </select>
+                <div class="user-status">
+                  <span class="badge" :class="u.is_active ? 'badge-success' : 'badge-danger'">{{ u.is_active ? '正常' : '禁用' }}</span>
+                  <span v-if="isSelf(u)" class="badge">当前账号</span>
+                </div>
               </td>
               <td>
-                <span class="badge" :class="u.is_active ? 'badge-success' : 'badge-danger'">{{ u.is_active ? '正常' : '禁用' }}</span>
-                <span v-if="isSelf(u)" class="muted" style="font-size: 11px">（自己，不可禁用/降级）</span>
-              </td>
-              <td>
-                <div class="flex" style="gap: 6px">
-                  <button class="btn btn-sm" @click="openEditUser(u)">编辑</button>
-                  <button v-if="!isSelf(u)" class="btn btn-sm" :class="u.is_active ? '' : 'btn-success'" @click="updateUser(u, { is_active: !u.is_active })">{{ u.is_active ? '禁用' : '启用' }}</button>
-                  <button v-if="!isSelf(u)" class="btn btn-sm btn-danger" @click="removeUser(u)">删除</button>
+                <div class="ops">
+                  <button class="op-link" type="button" @click="openEditUser(u)">编辑</button>
+                  <div v-if="!isSelf(u)" class="more-wrap" @click.stop>
+                    <button class="op-link" type="button" @click="userMoreId = userMoreId === u.id ? '' : u.id">更多</button>
+                    <div v-if="userMoreId === u.id" class="more-menu">
+                      <button v-if="u.role !== 'admin'" type="button" @click="askSetRole(u, 'admin')">设为管理员</button>
+                      <button v-else type="button" @click="askSetRole(u, 'user')">设为普通用户</button>
+                      <button type="button" :class="{ danger: u.is_active }" @click="askToggleActive(u)">{{ u.is_active ? '禁用' : '启用' }}</button>
+                      <button type="button" class="danger" @click="removeUser(u)">删除</button>
+                    </div>
+                  </div>
                 </div>
               </td>
             </tr>
@@ -1128,7 +1458,7 @@ watch(
       @ok="confirmActionOk"
       @cancel="confirmAction = null"
     />
-    <DebugCapabilityModal :show="!!debugCap" :cap="debugCap" title="云端试用" @close="debugCap = null" />
+    <DebugCapabilityModal :show="!!debugCap" :cap="debugCap" :title="trialLabel(debugCap?.type)" @close="debugCap = null" />
 
     <div v-if="confirmReview" class="confirm-mask" @click.self="confirmReview = null">
       <div class="confirm-card">
@@ -1141,7 +1471,7 @@ watch(
           v-model="reviewComment"
           class="textarea"
           rows="2"
-          placeholder="审核意见（可选）"
+          :placeholder="['reject', 'return'].includes(confirmReview.action) ? '审核意见（必填，作者会在详情页看到）' : '审核意见（可选）'"
           style="margin-top: 12px"
         ></textarea>
         <div class="confirm-actions">
@@ -1150,6 +1480,7 @@ watch(
             class="btn"
             :class="confirmReview.danger ? 'btn-danger' : 'btn-primary'"
             type="button"
+            :disabled="['reject', 'return'].includes(confirmReview.action) && !reviewComment.trim()"
             @click="confirmReviewOk"
           >{{ confirmReview.okText }}</button>
         </div>
@@ -1163,17 +1494,20 @@ watch(
           <button class="modal-close" @click="showCreateUser = false">✕</button>
         </div>
         <div class="grid" style="grid-template-columns: 1fr 1fr">
-          <div class="field"><label>用户名 *</label><input v-model="userForm.username" class="input" placeholder="3-64 位字母数字/._-" /></div>
-          <div class="field"><label>邮箱 *</label><input v-model="userForm.email" class="input" placeholder="user@example.com" /></div>
-          <div class="field"><label>初始密码 *</label><input v-model="userForm.password" type="password" class="input" placeholder="至少 6 位" /></div>
           <div class="field"><label>姓名</label><input v-model="userForm.name" class="input" /></div>
+          <div class="field"><label>工号</label><input v-model="userForm.work_id" class="input" placeholder="与登录名不同时填写" /></div>
+          <div class="field"><label>登录名 *</label><input v-model="userForm.username" class="input" placeholder="3-64 位字母数字/._-" /></div>
+          <div class="field"><label>邮箱 *</label><input v-model="userForm.email" class="input" placeholder="user@example.com" /></div>
+          <div class="field"><label>手机</label><input v-model="userForm.phone" class="input" /></div>
           <div class="field"><label>部门</label><input v-model="userForm.department" class="input" list="dept-suggest" placeholder="如：研发部" /></div>
+          <div class="field"><label>初始密码 *</label><input v-model="userForm.password" type="password" class="input" placeholder="至少 6 位" /></div>
         </div>
         <div class="field mt-12">
           <label>角色</label>
           <select v-model="userForm.role" class="select">
-            <option v-for="r in roleDefs" :key="r.key" :value="r.key">{{ r.label }}：{{ r.desc }}</option>
+            <option v-for="r in roleDefs" :key="r.key" :value="r.key">{{ r.label }}</option>
           </select>
+          <span class="muted role-hint">{{ roleDefs.find((r) => r.key === userForm.role)?.desc }}</span>
         </div>
         <div v-if="error" class="alert alert-error mt-12">{{ error }}</div>
         <div class="modal-foot">
@@ -1193,15 +1527,17 @@ watch(
           <button class="modal-close" @click="showEditUser = false">✕</button>
         </div>
         <div class="grid" style="grid-template-columns: 1fr 1fr">
-          <div class="field"><label>用户名</label><input v-model="editForm.username" class="input" /></div>
-          <div class="field"><label>邮箱</label><input v-model="editForm.email" class="input" /></div>
           <div class="field"><label>姓名</label><input v-model="editForm.name" class="input" /></div>
+          <div class="field"><label>工号</label><input v-model="editForm.work_id" class="input" /></div>
+          <div class="field"><label>登录名</label><input v-model="editForm.username" class="input" /></div>
+          <div class="field"><label>邮箱</label><input v-model="editForm.email" class="input" /></div>
+          <div class="field"><label>手机</label><input v-model="editForm.phone" class="input" /></div>
           <div class="field"><label>部门</label><input v-model="editForm.department" class="input" list="dept-suggest" placeholder="如：研发部" /></div>
           <div class="field"><label>重置密码（留空不改）</label><input v-model="editForm.password" type="password" class="input" placeholder="至少 6 位" /></div>
         </div>
         <div v-if="error" class="alert alert-error mt-12">{{ error }}</div>
         <div class="modal-foot">
-          <span class="muted" style="font-size: 12px">角色与启停直接在表格中操作；自己不能禁用/降级</span>
+          <span class="muted" style="font-size: 12px">角色和启停在列表的「更多」里修改</span>
           <div class="flex" style="gap: 10px">
             <button class="btn" @click="showEditUser = false">取消</button>
             <button class="btn btn-primary" @click="saveEditUser">保存</button>
@@ -1324,14 +1660,26 @@ watch(
 .stats-band {
   display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 12px; margin-bottom: 14px;
 }
+.desk-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  flex-wrap: wrap; margin-bottom: 14px;
+}
+.desk-head .seg { margin-bottom: 0; }
 .desk-toolbar {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   flex-wrap: wrap; margin-bottom: 14px;
 }
 .desk-toolbar .seg { margin-bottom: 0; }
-.users-head { display: flex; flex-direction: column; gap: 12px; }
-.boundary-hint { margin: 0; font-size: 13px; line-height: 1.55; }
-.users-tools { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+.toolbar-filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.queue-search { width: 200px; max-width: 100%; }
+.type-select { width: 140px; }
+.user-dept-select { width: 160px; }
+.user-count { font-size: 13px; white-space: nowrap; }
+.user-name { font-weight: 650; }
+.user-sub { font-size: 12px; margin-top: 2px; }
+.user-contact { font-size: 13px; }
+.user-status { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.role-hint { display: block; margin-top: 6px; font-size: 12px; line-height: 1.5; }
 .gw-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; }
 .gw-card-top { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; margin-bottom: 10px; }
 .gw-badges { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
@@ -1368,12 +1716,21 @@ watch(
   display: flex; justify-content: space-between; align-items: center; gap: 16px;
   flex-wrap: wrap; margin-bottom: 16px;
 }
-.header-chips { display: flex; gap: 10px; flex-wrap: wrap; }
-.role-cards { display: flex; gap: 10px; flex-wrap: wrap; }
-.role-card {
-  flex: 1; min-width: 200px; background: var(--panel-2); border: 1px solid var(--border);
-  border-radius: 10px; padding: 10px 14px; display: flex; flex-direction: column; gap: 4px;
+.page-title { margin: 0; font-size: 20px; }
+.section-hint { font-size: 13px; margin-top: 2px; }
+.stat-line {
+  display: flex; flex-wrap: wrap; gap: 2px 14px; margin-top: 4px;
+  font-size: 13px; color: var(--muted);
 }
+.stat-line b { font-weight: 650; font-variant-numeric: tabular-nums; color: var(--text); }
+.stat-line b.ok { color: var(--success); }
+.stat-line b.warn { color: #b7791f; }
+.stat-line button {
+  background: none; border: none; padding: 0; cursor: pointer;
+  font: inherit; color: var(--muted);
+}
+.stat-line button:hover { color: var(--primary); }
+.header-chips { display: flex; gap: 10px; flex-wrap: wrap; }
 .modal-mask {
   position: fixed; inset: 0; background: var(--overlay, rgba(15, 23, 42, 0.45)); z-index: 100;
   display: flex; align-items: center; justify-content: center; padding: 20px;
@@ -1391,6 +1748,8 @@ watch(
   background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
   padding: 8px 14px; font-size: 12px; color: var(--muted);
 }
+.chip-btn { cursor: pointer; font: inherit; color: var(--muted); }
+.chip-btn:hover { border-color: var(--primary); }
 .chip-num { font-size: 20px; font-weight: 700; color: var(--text); }
 .chip-num.success { color: var(--success); }
 .chip-num.warning { color: var(--warning); }
@@ -1405,28 +1764,42 @@ watch(
 }
 .seg-item span { margin-left: 4px; font-variant-numeric: tabular-nums; }
 .seg-item.active { background: #fff; color: var(--primary); font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+.text-tabs { display: flex; align-items: center; gap: 2px; }
+.text-tab {
+  background: none; border: none; color: var(--muted); padding: 6px 10px;
+  border-radius: 8px; cursor: pointer; font-size: 13px;
+}
+.text-tab em { font-style: normal; margin-left: 4px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.text-tab:hover { color: var(--text); }
+.text-tab.active { color: var(--text); font-weight: 650; background: var(--panel-2); }
+.text-tab.active em { color: var(--primary); }
 
 .audit-split {
-  display: grid; grid-template-columns: minmax(280px, 380px) 1fr; gap: 14px; align-items: start;
-  min-height: 520px;
+  display: grid; grid-template-columns: minmax(280px, 380px) 1fr; gap: 14px; align-items: stretch;
+  height: calc(100vh - 188px); min-height: 420px;
 }
-.audit-list { padding: 0; overflow: hidden; max-height: calc(100vh - 200px); overflow-y: auto; }
+.audit-split.with-stats { height: calc(100vh - 430px); min-height: 320px; }
+.audit-list { padding: 0; overflow: auto; min-height: 0; height: auto; max-height: none; }
 .list-head {
   display: flex; justify-content: space-between; padding: 10px 14px;
   font-size: 12px; color: var(--muted); background: #fafbfc; border-bottom: 1px solid var(--border);
   position: sticky; top: 0;
 }
 .list-row {
-  width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  width: 100%; display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
   text-align: left; background: none; border: none; border-bottom: 1px solid var(--border);
-  padding: 12px 14px; cursor: pointer;
+  padding: 12px 14px; cursor: pointer; box-shadow: inset 3px 0 0 transparent;
 }
 .list-row:hover { background: #fafbfc; }
-.list-row.active { background: #f0f4ff; }
-.risk { font-size: 12px; white-space: nowrap; flex: none; }
-.risk.none { color: var(--muted); }
-.risk.medium { color: #c27803; }
-.risk.high { color: var(--danger); }
+.list-row.active { background: var(--primary-soft); box-shadow: inset 3px 0 0 var(--primary); }
+.risk {
+  font-size: 11px; line-height: 1.4; white-space: nowrap; flex: none;
+  margin-top: 2px; padding: 1px 8px; border-radius: 999px;
+}
+.risk.none { color: var(--muted); background: transparent; padding-right: 0; }
+.risk.unknown { color: #475569; background: var(--panel-2); border: 1px solid var(--border); }
+.risk.medium { color: #b7791f; background: rgba(245, 165, 36, 0.14); }
+.risk.high { color: var(--danger); background: rgba(229, 72, 77, 0.1); font-weight: 650; }
 
 .skill-cell { display: flex; gap: 10px; align-items: flex-start; min-width: 0; }
 .skill-icon {
@@ -1449,21 +1822,44 @@ watch(
   margin-top: 3px; font-size: 12px; line-height: 1.4;
   display: -webkit-box; -webkit-line-clamp: 1; line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden;
 }
+.skill-sub {
+  display: flex; flex-wrap: wrap; gap: 0 2px; margin-top: 3px; font-size: 12px;
+}
+.skill-sub span:not(:last-child)::after { content: '·'; margin: 0 6px; color: #c5cad3; }
 
-.audit-detail { padding: 18px 20px; min-height: 520px; max-height: calc(100vh - 200px); overflow-y: auto; }
+.audit-detail {
+  padding: 0; min-height: 0; max-height: none; height: auto;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.detail-scroll { flex: 1; min-height: 0; overflow: auto; padding: 18px 20px 12px; }
+.decision-dock {
+  flex: none; border-top: 1px solid var(--border); padding: 12px 20px 14px; background: var(--panel-2);
+}
+.decision-dock .textarea { min-height: 0; margin-top: 8px; background: var(--panel); }
+.decision-row {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  flex-wrap: wrap; margin-top: 8px;
+}
+.decision-hint { font-size: 12px; line-height: 1.45; }
+.history-comment { font-size: 13px; line-height: 1.55; }
+.check-list { display: flex; flex-direction: column; gap: 2px; }
+.auto-tag {
+  font-style: normal; margin-left: auto; font-size: 11px; color: var(--success);
+  background: rgba(18, 183, 106, 0.12); border-radius: 999px; padding: 0 6px; flex: none;
+}
 .detail-top { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
 .detail-identity { display: flex; gap: 12px; align-items: flex-start; }
 .detail-name-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .detail-name { margin: 0; font-size: 18px; font-weight: 700; }
 .detail-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
-.meta-row {
-  display: flex; flex-wrap: wrap; gap: 16px 20px; margin-top: 16px;
-  padding: 12px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
-  font-size: 13px;
+.meta-grid {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 16px;
+  margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border);
 }
-.meta-k { color: var(--muted); margin-right: 6px; font-size: 12px; }
-.vis-block { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.meta-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.meta-k { color: var(--muted); font-size: 12px; }
+.meta-v { font-size: 13px; color: var(--text); }
 .vis-pill {
   display: inline-flex; padding: 2px 8px; border-radius: 999px;
   background: var(--panel-2); border: 1px solid var(--border); font-size: 12px;
@@ -1474,9 +1870,10 @@ watch(
 }
 .check-title { font-size: 13px; font-weight: 650; margin-bottom: 8px; }
 .check-item {
-  display: flex; gap: 8px; align-items: flex-start; font-size: 12px; color: var(--muted);
-  margin: 6px 0; cursor: pointer;
+  display: flex; gap: 8px; align-items: flex-start; font-size: 13px; color: var(--text);
+  margin: 0; padding: 3px 0; cursor: pointer;
 }
+.check-label { flex: 1; min-width: 0; }
 .checklist-box .textarea { margin-top: 8px; margin-bottom: 6px; }
 
 .detail-tabs {
@@ -1511,7 +1908,7 @@ watch(
 }
 .file-line-btn:hover { text-decoration: underline; }
 
-.table-panel { padding: 0; overflow: hidden; }
+.table-panel { padding: 0; overflow: visible; }
 .skill-table { width: 100%; border-collapse: collapse; }
 .skill-table th {
   text-align: left; padding: 12px 16px; font-size: 12px; font-weight: 500;
@@ -1521,7 +1918,20 @@ watch(
   padding: 14px 16px; border-bottom: 1px solid var(--border); vertical-align: middle; font-size: 13px;
 }
 .skill-table tr:hover td { background: #fafbfc; }
-.ops { display: flex; flex-wrap: wrap; gap: 10px; }
+.ops { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.policy-select { width: auto; max-width: 112px; padding: 2px 6px; font-size: 12px; }
+.more-wrap { position: relative; }
+.more-menu {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 8;
+  min-width: 112px; background: #fff; border: 1px solid var(--border);
+  border-radius: 8px; box-shadow: var(--shadow-lg); padding: 4px;
+}
+.more-menu button {
+  display: block; width: 100%; text-align: left; background: none; border: none;
+  padding: 6px 8px; cursor: pointer; color: var(--text); font-size: 13px; border-radius: 6px;
+}
+.more-menu button:hover { background: #fafbfc; }
+.more-menu button.danger { color: var(--danger); }
 .op-link {
   background: none; border: none; padding: 0; cursor: pointer;
   color: var(--primary); font-size: 13px; text-decoration: none;
@@ -1553,8 +1963,11 @@ watch(
 .top-item, .recent-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
 h3 { margin: 0 0 12px; }
 @media (max-width: 1100px) {
-  .audit-split { grid-template-columns: 1fr; }
-  .audit-list, .audit-detail { max-height: none; }
+  .audit-split { grid-template-columns: 1fr; height: auto; min-height: 0; }
+  .audit-list { max-height: 420px; }
+  .audit-detail { overflow: visible; max-height: none; }
+  .detail-scroll { overflow: visible; }
+  .meta-grid { grid-template-columns: 1fr 1fr; }
   .stats-band { grid-template-columns: 1fr; }
 }
 </style>

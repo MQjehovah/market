@@ -204,7 +204,8 @@ async def ensure_editable_draft(db, user, cap: Capability) -> Capability:
     if cap.status in UPLOADABLE_STATUSES:
         return await _reload_cap(db, cap.id)
     if cap.status not in ("published", "deprecated"):
-        raise HTTPException(status.HTTP_409_CONFLICT, "当前状态不可在线编辑")
+        hint = "；审核中的能力请先撤回后再修改" if cap.status == "reviewing" else ""
+        raise HTTPException(status.HTTP_409_CONFLICT, f"当前状态不可在线编辑{hint}")
     draft = await _find_open_draft(db, cap)
     if draft is not None:
         return await _reload_cap(db, draft.id)

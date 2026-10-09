@@ -20,6 +20,14 @@ _GROUP_LIMIT = 8
 _EXPAND_FACTOR = 0.55
 
 _PUNCT = re.compile(r"[\s,，。.!！?？;；:：、|/\\]+")
+# 两字虚词单独命中说明时，会把不相干的长文案搜出来
+_STOP_CHARS = set("的了是在有和与或不没会能可要把这那个也都就而及被对从为以到中上下里着过还很更最")
+
+
+def _is_content_term(term: str) -> bool:
+    if len(term) == 2 and all(ch in _STOP_CHARS for ch in term):
+        return False
+    return True
 
 
 def tokenize_query(q: str) -> list[str]:
@@ -76,6 +84,7 @@ def score_capability(cap: Capability, terms: list[str]) -> tuple[float, list[str
     total = 0.0
     matched: list[str] = []
     matched_set: set[str] = set()
+    content_hit = False
     for term in terms:
         hit = False
         for key, hay in fields.items():
@@ -85,6 +94,10 @@ def score_capability(cap: Capability, terms: list[str]) -> tuple[float, list[str
         if hit and term not in matched_set:
             matched_set.add(term)
             matched.append(term)
+        if hit and _is_content_term(term):
+            content_hit = True
+    if not content_hit:
+        return 0.0, []
     return total, matched
 
 

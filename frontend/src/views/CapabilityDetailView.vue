@@ -13,9 +13,10 @@ import {
   ORCH_LABELS,
   consumeWaysFor,
   kindHintFor,
-  REVIEW_CHECKLIST,
   OWNER_PROGRESS_STEPS,
-  JOIN_VS_INSTALL_HINT,
+  reviewChecklistFor,
+  reviewAutoFlags,
+  reviewBlockReason,
   INSTALL_POLICY_LABELS,
   DISTRIBUTION_LABELS,
   RISK_DEFAULT_LABELS,
@@ -32,8 +33,10 @@ import {
   editRouteFor,
   canOnlineEdit,
   mcpTrialMode,
-  assetUrl
+  assetUrl,
+  trialLabel
 } from '../utils/format'
+import { toast } from '../utils/toast'
 import StatusBadge from '../components/StatusBadge.vue'
 import PackagePreview from '../components/PackagePreview.vue'
 import PackageEditor from '../components/PackageEditor.vue'
@@ -49,13 +52,48 @@ const props = defineProps({ id: { type: String, required: true } })
 const router = useRouter()
 const route = useRoute()
 
+function goBack() {
+  const back = window.history.state?.back
+  if (typeof back === 'string' && back.length) {
+    router.back()
+    return
+  }
+  const type = cap.value?.type
+  if (type === 'plugin') {
+    router.push({ path: '/', query: { shelf: 'install' } })
+    return
+  }
+  if (type) {
+    router.push({ path: '/', query: { type } })
+    return
+  }
+  router.push('/')
+}
+
 const cap = ref(null)
+const loading = ref(true)
 const versions = ref([])
 const ratings = ref([])
+const ratingsExpanded = ref(false)
+const ratingBusy = ref(false)
+const myBusy = ref(false)
 const error = ref('')
 const notice = ref('')
 const reviewComment = ref('')
 const rating = ref({ score: 5, comment: '' })
+const ratingHover = ref(0)
+const ratingPop = ref(0)
+
+function setRating(score) {
+  rating.value.score = score
+  ratingPop.value = 0
+  requestAnimationFrame(() => {
+    ratingPop.value = score
+  })
+}
+const visibleRatings = computed(() =>
+  ratingsExpanded.value ? ratings.value : ratings.value.slice(0, 3)
+)
 const newVersion = ref('')
 const versionChangelog = ref('')
 const versionSuggestions = ref({ current: '', major: '', minor: '', patch: '' })
@@ -63,7 +101,7 @@ const uploading = ref(false)
 const saving = ref(false)
 const myIds = ref(new Set())
 const myNotice = ref('')
-const confirmRemove = ref(false)
+const confirmState = ref(null)
 const subscribedNames = ref(new Set())
 const subBusy = ref(false)
 const copyNotice = ref('')
@@ -114,17 +152,101 @@ function splitList(text) {
 
 const openSection = ref({ overview: true, usage: true, developer: false, governance: false })
 const reviewChecks = ref([])
+const authorDecision = ref(null)
 const allReviewChecked = computed(() => reviewChecks.value.length > 0 && reviewChecks.value.every(Boolean))
+const approveBlock = computed(() => reviewBlockReason(cap.value))
+const replacesVersion = computed(() => {
+  const pubs = (versions.value || []).filter((v) => v.status === 'published' && v.id !== cap.value?.id)
+  if (!pubs.length) return ''
+  const best = pubs.reduce((a, b) => {
+    const pa = String(a.version).split('.').map(Number)
+    const pb = String(b.version).split('.').map(Number)
+    for (let i = 0; i < 3; i++) {
+      if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0) ? a : b
+    }
+    return a
+  })
+  return best.version || ''
+})
 const needsPackage = computed(() => cap.value && needsZipUpload(cap.value.type))
 const showPackageUpload = computed(
   () =>
     needsPackage.value &&
     isOwner.value &&
-    ['draft', 'returned', 'rejected', 'reviewing'].includes(cap.value?.status)
+    ['draft', 'returned', 'rejected'].includes(cap.value?.status)
 )
 
-function resetReviewChecks() {
-  reviewChecks.value = REVIEW_CHECKLIST.map(() => false)
+const reviewAuto = ref([])
+const activeChecks = computed(() => reviewChecklistFor(cap.value))
+const pendingCheckLabels = computed(() =>
+  activeChecks.value.filter((_, i) => !reviewChecks.value[i]).map((item) => item.short)
+)
+
+function applyReviewChecks() {
+  const items = reviewChecklistFor(cap.value)
+  const flags = reviewAutoFlags(cap.value, items)
+  reviewAuto.value = flags
+  reviewChecks.value = flags.slice()
+}
+
+const platformSecretsReady = computed(() => {
+  if (!isMcp.value || !(isOwner.value || isAdmin.value) || !platformLoaded.value) return null
+  const required = platformSecretRows.value.filter((row) => row.secret)
+  if (!required.length) return true
+  return required.every((row) => row.row)
+})
+
+function distributionPlain(value) {
+  if (value === 'remote') return '云端使用，不用安装'
+  if (value === 'local') return '装到本机后使用'
+  if (value === 'both') return '云端或本机都可以'
+  return value || '—'
+}
+
+const consumerHint = computed(() => {
+  const dist = cap.value?.distribution
+  if (!joined.value) {
+    if (dist === 'remote') return '「加入」是授权你使用。加入后在对话里直接用，不用安装。'
+    if (dist === 'local') return '「加入」是把它放进你的能力。之后可以试用，也可以装到零号员工。'
+    return '「加入」是授权你使用。云端可以直接用，也可以装到本机。'
+  }
+  if (dist === 'remote') return '已加入，在对话里直接用。'
+  if (dist === 'local') return '已加入。要在本机用，打开下面的「其他方式」。'
+  return '已加入。云端可以直接用；要装到本机，打开下面的「其他方式」。'
+})
+
+const ownerNextHint = computed(() => {
+  if (cap.value?.status === 'reviewing') return '已提交，等待其他管理员审核。审核期间不能改文件，要改请先撤回。'
+  if (cap.value?.status === 'returned') return '已打回。按意见修改后可以重新提交。'
+  if (cap.value?.status === 'rejected') return '已驳回。按意见修改后可以重新提交。'
+  if (needsPackageFirst.value) return '先完善内容并保存，再提交审核。'
+  if (canSubmit.value) return '内容已齐，可以提交审核。'
+  return '完善内容后提交审核，上架后才能加入。'
+})
+
+const AUTHOR_TAB_KEYS = ['files', 'manage']
+const readerTabs = computed(() => contentTabs.value.filter((tab) => !AUTHOR_TAB_KEYS.includes(tab.key)))
+const authorTabs = computed(() => contentTabs.value.filter((tab) => AUTHOR_TAB_KEYS.includes(tab.key)))
+
+function applyRouteTab() {
+  const keys = contentTabs.value.map((item) => item.key)
+  if (!keys.length) return
+  if (route.query.focus === 'package' && keys.includes('files') && !route.query.tab) {
+    contentTab.value = 'files'
+    return
+  }
+  const tab = typeof route.query.tab === 'string' ? route.query.tab : ''
+  if (tab && keys.includes(tab)) contentTab.value = tab
+  else if (!keys.includes(contentTab.value)) contentTab.value = 'intro'
+}
+
+function setContentTab(key) {
+  contentTab.value = key
+  const query = { ...route.query }
+  if (!key || key === 'intro') delete query.tab
+  else query.tab = key
+  if (String(route.query.tab || '') === String(query.tab || '')) return
+  router.replace({ query })
 }
 
 function toggleSection(key) {
@@ -153,7 +275,7 @@ const canEdit = computed(
 const canEditPackage = computed(
   () =>
     (isOwner.value || isAdmin.value) &&
-    ['draft', 'returned', 'rejected', 'reviewing'].includes(cap.value?.status)
+    ['draft', 'returned', 'rejected'].includes(cap.value?.status)
 )
 const hasPackage = computed(() => Boolean((cap.value?.artifacts || []).length))
 const canSubmit = computed(() => {
@@ -170,7 +292,9 @@ const needsPackageFirst = computed(
 )
 const canDelete = computed(() => isOwner.value && ['draft', 'returned', 'rejected', 'reviewing'].includes(cap.value?.status))
 const canWithdraw = computed(() => isOwner.value && cap.value?.status === 'reviewing')
-const canReview = computed(() => isAdmin.value && cap.value?.status === 'reviewing')
+const canReview = computed(
+  () => isAdmin.value && !isOwner.value && cap.value?.status === 'reviewing'
+)
 /** 可查看/管理能力包与产物（作者/管理员）：文件预览等作者面仅对其可见 */
 const canViewPackage = computed(
   () => isOwner.value || isAdmin.value || canEdit.value || canReview.value
@@ -191,9 +315,18 @@ const shelfName = computed(() => (cap.value ? shelfLabel(cap.value.type) : ''))
 const showTemplateDownload = computed(
   () => showPackageUpload.value && ['skill', 'mcp', 'tool', 'agent', 'plugin', 'rule', 'command', 'hook'].includes(cap.value?.type)
 )
-const progressIndex = computed(() =>
-  ownerProgressIndex(cap.value, { joined: myIds.value.has(props.id) })
+const progressSteps = computed(() =>
+  OWNER_PROGRESS_STEPS.filter((step) => ['created', 'package', 'submit', 'reviewing', 'published'].includes(step.key))
 )
+const progressDone = computed(() => ['published', 'deprecated'].includes(cap.value?.status))
+const progressIndex = computed(() => {
+  const steps = progressSteps.value
+  if (progressDone.value) return Math.max(0, steps.length - 1)
+  const raw = ownerProgressIndex(cap.value, { joined: false })
+  const key = OWNER_PROGRESS_STEPS[raw]?.key
+  const idx = steps.findIndex((step) => step.key === key)
+  return idx >= 0 ? idx : 0
+})
 const onlineEditPath = computed(() => (cap.value ? editRouteFor(cap.value) : null))
 const preferOnlineEdit = computed(
   () => Boolean(onlineEditPath.value && (isOwner.value || isAdmin.value) && canOnlineEdit(cap.value?.type))
@@ -217,7 +350,31 @@ const embeddedMcp = computed(() => {
   const schema = cap.value?.input_schema || {}
   return Array.isArray(schema.embedded_mcp) ? schema.embedded_mcp : []
 })
-const usedBy = computed(() => Array.isArray(cap.value?.used_by) ? cap.value.used_by : [])
+function versionNewer(a, b) {
+  const parts = (v) => String(v || '0').split(/[.+-]/).map((n) => parseInt(n, 10) || 0)
+  const pa = parts(a)
+  const pb = parts(b)
+  const n = Math.max(pa.length, pb.length)
+  for (let i = 0; i < n; i += 1) {
+    const d = (pa[i] || 0) - (pb[i] || 0)
+    if (d) return d > 0
+  }
+  return false
+}
+const usedByRawCount = computed(() => (Array.isArray(cap.value?.used_by) ? cap.value.used_by.length : 0))
+const usedBy = computed(() => {
+  const rows = Array.isArray(cap.value?.used_by) ? cap.value.used_by : []
+  const latest = new Map()
+  for (const u of rows) {
+    const key = `${u.type || ''}\0${String(u.name || '').trim().toLowerCase()}`
+    const cur = latest.get(key)
+    if (!cur || versionNewer(u.version, cur.version)) latest.set(key, u)
+  }
+  return [...latest.values()].sort((a, b) =>
+    String(a.type || '').localeCompare(String(b.type || ''))
+    || String(a.name || '').localeCompare(String(b.name || ''), 'zh')
+  )
+})
 const usedByAgents = computed(() =>
   usedBy.value.filter((u) => u.type === 'agent' && (u.capability_id || u.name))
 )
@@ -228,6 +385,17 @@ const showAskTrial = computed(() => {
   if (isAgent.value || isPlugin.value) return true
   if (['skill', 'mcp'].includes(cap.value.type) && usedByAgents.value.length) return true
   return false
+})
+const showPrimaryUsage = computed(() => {
+  if (showAskTrial.value && askAgentName.value) return true
+  return Boolean(isMcp.value && isPublished.value && !usedByAgents.value.length)
+})
+const showUsageMore = computed(() => {
+  if (!cap.value) return false
+  if (isMcp.value && isPublished.value && usedByAgents.value.length) return true
+  if (isMcp.value && mcpClientConfigJson.value) return true
+  if ((cap.value.artifacts || []).length && canViewPackage.value) return true
+  return Boolean(isOwner.value || isAdmin.value)
 })
 const askAgentName = computed(() => {
   if (!cap.value) return ''
@@ -252,9 +420,9 @@ const askCanRun = computed(() => {
   return joined.value || Boolean(usedByAgents.value[0]?.capability_id)
 })
 const askBlockedHint = computed(() => {
-  if (!authState.token) return '登录后才能试用。'
+  if (!authState.token) return '用企业统一登录后才能试用。'
   if (askCanRun.value) return ''
-  return '先「加入」授权，再问一句。'
+  return '先「加入」授权，再试用。'
 })
 const parentPluginId = computed(() => cap.value?.parent_plugin_id || null)
 const isSkillOrMcp = computed(() => ['skill', 'mcp'].includes(cap.value?.type))
@@ -270,6 +438,13 @@ const packageSizeLabel = computed(() =>
 const installCommand = computed(() => (cap.value ? installCommandFor(cap.value) : ''))
 const canLocalInstall = computed(() => (cap.value ? canLocalInstallCapability(cap.value) : false))
 const isRemoteOnly = computed(() => cap.value?.distribution === 'remote')
+const hasExtraWays = computed(() => {
+  if (!cap.value || !isPublished.value) return false
+  if (joined.value && (cap.value.install_policy || 'optional') !== 'required') return true
+  if (canLocalInstall.value && installCommand.value) return true
+  if (!isRemoteOnly.value) return true
+  return Boolean(authState.token)
+})
 const consumeWays = computed(() => consumeWaysFor(cap.value))
 const departmentSuggestions = computed(() => {
   const set = new Set()
@@ -628,10 +803,20 @@ async function savePlatformSecrets() {
   }
 }
 
-async function clearPlatformSecret(row) {
+async function clearPlatformSecret(row, confirmed = false) {
   const capId = cap.value?.id
-  if (!row?.row || !capId) return
-  if (!confirm(`确认清除平台密钥「${row.key}」？清除后平台轨将无法注入该变量。`)) return
+  if (!row?.key || !capId) return
+  if (!confirmed) {
+    confirmState.value = {
+      kind: 'clear-secret',
+      row,
+      title: `清除平台密钥「${row.key}」？`,
+      body: '清除后平台轨将无法注入该变量。',
+      okText: '清除',
+      danger: true
+    }
+    return
+  }
   platformClearing.value = row.key
   platformError.value = ''
   platformNotice.value = ''
@@ -687,9 +872,9 @@ const nextStep = computed(() => {
   if (!authState.token) return { kind: 'login', label: '登录后加入' }
   const trialLike = () => {
     if (usedByAgents.value.length) {
-      return { kind: 'trial-agent', label: `试用专家 · ${usedByAgents.value[0].name}` }
+      return { kind: 'trial-agent', label: `试用 · ${usedByAgents.value[0].name}` }
     }
-    if (canTrialCurrent.value) return { kind: 'trial', label: isAgent.value ? '问一句试用' : '试用连接器' }
+    if (canTrialCurrent.value) return { kind: 'trial', label: trialLabel(isAgent.value ? 'agent' : cap.value?.type) }
     return { kind: 'mine', label: '去我的能力' }
   }
   if (!joined.value) {
@@ -697,13 +882,19 @@ const nextStep = computed(() => {
   }
   return trialLike()
 })
-/** 已加入后的统一口径：安装与启用由各运行端本地各记（按 distribution 细化） */
+const installTitle = computed(() => {
+  const kind = nextStep.value?.kind
+  if (kind === 'join') return '加入我的能力'
+  if (kind === 'login') return '登录后加入'
+  if (kind === 'trial-agent') return `试用 · ${usedByAgents.value[0]?.name || '专家'}`
+  if (kind === 'trial') return trialLabel(isAgent.value ? 'agent' : cap.value?.type)
+  if (kind === 'mine') return '已加入'
+  return '使用这个能力'
+})
 const joinedHint = computed(() => {
-  if (cap.value?.distribution === 'remote') return '已加入，云端能力加入即用（无需安装）。'
-  if (cap.value?.distribution === 'local') {
-    return '已加入 · 可在零号员工或桌面安装使用（本地安装）。'
-  }
-  return '已加入 · 可在零号员工或桌面安装使用（本地安装 / 云端托管）。'
+  if (cap.value?.distribution === 'remote') return '已加入，在对话里直接用。'
+  if (cap.value?.distribution === 'local') return '已加入，可以试用，也可以装到零号员工。'
+  return '已加入。云端可以直接用，也可以装到本机。'
 })
 const mcpClientConfigJson = computed(() => {
   if (!cap.value || !isMcp.value) return ''
@@ -766,36 +957,35 @@ const typeInitial = computed(() => {
   const n = (displayName.value || '').trim()
   return n ? n.slice(0, 1).toUpperCase() : '?'
 })
-/** 技术信息（从徽章行下沉，避免头部拥挤） */
-const metaBits = computed(() => {
-  const bits = []
-  const d = DISTRIBUTION_LABELS[cap.value?.distribution]
-  if (d) bits.push(`分发：${d}`)
-  const r = RISK_DEFAULT_LABELS[cap.value?.risk_default]
-  if (r) bits.push(`风险：${r}`)
-  if (isMcp.value) bits.push(`传输：${mcpTransport.value}`)
-  if (isMcp.value && mcpToolRows.value.length) bits.push(`工具 ${mcpToolRows.value.length}`)
-  if (isMcp.value && isPublished.value) bits.push(mcpTrial.value.label)
-  if (provenance.value.origin === 'mcp-registry') bits.push('外部导入')
-  if (requiresBinary.value) bits.push(`需 ${requiresBinary.value}`)
-  return bits
-})
 const readmeHtml = computed(() => {
-  const md = (cap.value?.readme_md || '').trim()
+  let md = (cap.value?.readme_md || '').trim()
   if (!md) return ''
+  const ver = (cap.value?.version || '').trim()
+  if (ver) {
+    md = md.replace(/(cap\s+install\s+\S+@)\d+(?:\.\d+)*/gi, `$1${ver}`)
+  }
   try {
     return marked.parse(md, { gfm: true, breaks: true })
   } catch {
     return ''
   }
 })
+const introTags = computed(() =>
+  (cap.value?.tags || []).filter((t) => t && t !== 'plugin-component').slice(0, 8)
+)
+const fallbackToolPreview = computed(() => mcpToolRows.value.slice(0, 5))
 
 watch(cap, () => {
   iconFailed.value = false
-  const keys = contentTabs.value.map((t) => t.key)
-  if (!keys.includes(contentTab.value)) contentTab.value = 'intro'
+  applyReviewChecks()
+  applyRouteTab()
   loadRunMeta()
 })
+
+watch(
+  () => route.query.tab,
+  () => applyRouteTab()
+)
 
 // 切换能力时立即重置头像加载失败态（cap 尚未加载完成也会先生效）
 watch(
@@ -894,7 +1084,7 @@ function stubFromCap(c) {
 function openTrial() {
   if (!cap.value) return
   if (showAskTrial.value && askAgentName.value) {
-    contentTab.value = 'intro'
+    setContentTab('intro')
     nextTick(() => askTrialRef.value?.focus?.())
     return
   }
@@ -903,7 +1093,7 @@ function openTrial() {
 
 function openTrialAgent(u) {
   if (showAskTrial.value && (u?.name || askAgentName.value)) {
-    contentTab.value = 'intro'
+    setContentTab('intro')
     nextTick(() => askTrialRef.value?.focus?.())
     return
   }
@@ -934,13 +1124,31 @@ async function load() {
     allowedUsers.value = normList(cap.value.allowed_users)
     allowedDepartments.value = normList(cap.value.allowed_departments)
     allowedRoles.value = normList(cap.value.allowed_roles)
-    void loadAccessOptions()
+    if (authState.token && (isOwner.value || isAdmin.value)) {
+      void loadAccessOptions()
+    }
     versions.value = await api.get(`/capabilities/${props.id}/versions`)
     ratings.value = await api.get(`/capabilities/${props.id}/ratings`)
+    await loadAuthorDecision()
     await loadMcpPackageMeta()
     await loadPlatformSecrets()
+    error.value = ''
   } catch (e) {
     error.value = e.message
+  } finally {
+    loading.value = false
+  }
+}
+
+async function loadAuthorDecision() {
+  authorDecision.value = null
+  if (!authState.token || !isOwner.value) return
+  if (!['returned', 'rejected'].includes(cap.value?.status)) return
+  try {
+    const rows = await api.get(`/admin/capabilities/${props.id}/reviews`)
+    authorDecision.value = (rows || []).find((row) => row.action === 'reject' || row.action === 'return') || null
+  } catch {
+    authorDecision.value = null
   }
 }
 
@@ -962,22 +1170,29 @@ async function loadMy() {
 
 async function toggleMy() {
   myNotice.value = ''
+  if (myBusy.value) return
   if (myIds.value.has(props.id)) {
     if ((cap.value?.install_policy || 'optional') === 'required') {
       myNotice.value = '必装能力不可移除'
       return
     }
-    confirmRemove.value = true
+    confirmState.value = {
+      kind: 'remove-mine',
+      title: '确定移除？',
+      body: `移除后，「${cap.value?.display_name || cap.value?.name || ''}」将不再出现在自定义列表中，不影响目录上架状态。`,
+      okText: '移除',
+      danger: false
+    }
     return
   }
   if (!subscribeGate.value.ok) {
     myNotice.value = subscribeGate.value.reason
     return
   }
+  myBusy.value = true
   try {
     const r = await api.post('/my/capabilities', { capability_id: props.id })
     myIds.value = new Set([...myIds.value, props.id])
-    // 专家/能力包会随依赖一并加入；刷新「我的」id 集合
     try {
       const mine = await api.get('/my/capabilities?scope=added')
       myIds.value = new Set((mine || []).filter((c) => c.added).map((c) => c.id))
@@ -985,23 +1200,89 @@ async function toggleMy() {
       /* ignore refresh errors */
     }
     const extra = r?.message && r.message.includes('未加入') ? `；${r.message}` : ''
-    myNotice.value = joinedHint.value + extra
+    toast.success(joinedHint.value + extra)
   } catch (e) {
-    myNotice.value = e.message
+    toast.error(e.message)
+  } finally {
+    myBusy.value = false
   }
 }
 
+function askReview(action) {
+  if (!reviewComment.value.trim()) {
+    error.value = '请先写下审核意见，作者会在详情页看到'
+    return
+  }
+  const name = cap.value?.display_name || cap.value?.name || ''
+  confirmState.value = {
+    kind: 'review',
+    action,
+    title: action === 'reject' ? `拒绝「${name}」？` : `打回「${name}」？`,
+    body:
+      action === 'reject'
+        ? '拒绝后状态为「已驳回」。作者按意见修改后可以重新提交。'
+        : '打回后状态为「已打回」，不会变回草稿。作者按意见修改后可以重新提交。',
+    okText: action === 'reject' ? '拒绝' : '打回',
+    danger: action === 'reject'
+  }
+}
+
+function askApprove() {
+  if (approveBlock.value || !allReviewChecked.value) return
+  const name = cap.value?.display_name || cap.value?.name || ''
+  const live = replacesVersion.value
+  confirmState.value = {
+    kind: 'review',
+    action: 'approve',
+    title: `通过并上架「${name}」？`,
+    body: live ? `通过后立即上架。已上架的 v${live} 会变为已弃用。` : '通过后立即上架。',
+    okText: '通过并上架',
+    danger: false
+  }
+}
+
+function askStatus(action) {
+  const name = cap.value?.display_name || cap.value?.name || ''
+  confirmState.value = {
+    kind: 'status',
+    path: `/admin/capabilities/${props.id}/${action}`,
+    title: action === 'deprecate' ? `下架「${name}」？` : `归档「${name}」？`,
+    body:
+      action === 'deprecate'
+        ? '下架后，该能力不再作为可安装的上架能力，仍可在治理台的「已下架」中查看。'
+        : '归档后，该能力会离开上架治理列表，本页不能撤销。',
+    okText: action === 'deprecate' ? '下架' : '归档',
+    danger: true
+  }
+}
+
+async function onConfirmOk() {
+  const state = confirmState.value
+  confirmState.value = null
+  if (!state) return
+  if (state.kind === 'remove-mine') await removeMine()
+  else if (state.kind === 'review') submitReview(state.action)
+  else if (state.kind === 'status') doAction(state.path)
+  else if (state.kind === 'delete-cap') await removeCap(true)
+  else if (state.kind === 'delete-version') await deleteVersion(state.version, true)
+  else if (state.kind === 'change-type') await saveMeta(true)
+  else if (state.kind === 'clear-secret') await clearPlatformSecret(state.row, true)
+  else if (state.kind === 'delete-icon') await removeIcon(true)
+}
+
 async function removeMine() {
-  confirmRemove.value = false
   myNotice.value = ''
+  myBusy.value = true
   try {
     const r = await api.delete(`/my/capabilities/${props.id}`)
     const next = new Set(myIds.value)
     next.delete(props.id)
     myIds.value = next
-    myNotice.value = r.message
+    toast.success(r.message || '已移除')
   } catch (e) {
-    myNotice.value = e.message
+    toast.error(e.message)
+  } finally {
+    myBusy.value = false
   }
 }
 
@@ -1075,9 +1356,18 @@ async function onIconPick(event) {
   }
 }
 
-async function removeIcon() {
+async function removeIcon(confirmed = false) {
   if (!cap.value?.icon_url) return
-  if (!confirm('确认删除能力头像？删除后回退为类型默认图标。')) return
+  if (!confirmed) {
+    confirmState.value = {
+      kind: 'delete-icon',
+      title: '删除能力头像？',
+      body: '删除后显示名称首字。',
+      okText: '删除',
+      danger: true
+    }
+    return
+  }
   iconBusy.value = true
   iconNotice.value = ''
   iconError.value = ''
@@ -1287,13 +1577,18 @@ function rpcUrl(id) {
 }
 
 async function submitRating() {
+  if (ratingBusy.value) return
   error.value = ''
+  ratingBusy.value = true
   try {
     await api.post(`/capabilities/${props.id}/ratings`, rating.value)
     rating.value = { score: 5, comment: '' }
+    toast.success('评分已提交')
     await load()
   } catch (e) {
-    error.value = e.message
+    toast.error(e.message)
+  } finally {
+    ratingBusy.value = false
   }
 }
 
@@ -1309,14 +1604,14 @@ async function toggleSubscribe() {
       const next = new Set(subscribedNames.value)
       next.delete(name)
       subscribedNames.value = next
-      notice.value = '已取消订阅更新'
+      toast.success('已取消订阅更新')
     } else {
       await api.post('/subscriptions', { capability_name: name })
       subscribedNames.value = new Set([...subscribedNames.value, name])
-      notice.value = '订阅成功，新版本发布时将收到通知'
+      toast.success('订阅成功，新版本发布时将收到通知')
     }
   } catch (e) {
-    error.value = e.message
+    toast.error(e.message)
   } finally {
     subBusy.value = false
   }
@@ -1328,15 +1623,22 @@ function onEditTypeChange() {
   }
 }
 
-async function saveMeta() {
+async function saveMeta(confirmed = false) {
   error.value = ''
   notice.value = ''
   if (!editForm.name.trim()) {
     error.value = '请填写能力名称'
     return
   }
-  if (editForm.type !== cap.value.type && (cap.value.artifacts || []).length) {
-    if (!confirm('更改类型将清空已上传的能力包，需按新类型重新上传。确定继续？')) return
+  if (!confirmed && editForm.type !== cap.value.type && (cap.value.artifacts || []).length) {
+    confirmState.value = {
+      kind: 'change-type',
+      title: '更改类型？',
+      body: '更改类型将清空已上传的能力包，需按新类型重新上传。',
+      okText: '继续',
+      danger: true
+    }
+    return
   }
   saving.value = true
   try {
@@ -1372,8 +1674,21 @@ async function withdrawReview() {
   }
 }
 
-async function removeCap() {
-  if (!confirm(`确认删除「${cap.value.name} v${cap.value.version}」？删除后可使用该名称重新创建。`)) return
+function askRemoveCap() {
+  confirmState.value = {
+    kind: 'delete-cap',
+    title: `删除「${cap.value.name} v${cap.value.version}」？`,
+    body: '删除后可使用该名称重新创建。',
+    okText: '删除',
+    danger: true
+  }
+}
+
+async function removeCap(confirmed = false) {
+  if (!confirmed) {
+    askRemoveCap()
+    return
+  }
   error.value = ''
   try {
     await api.delete(`/publish/capabilities/${props.id}`)
@@ -1383,8 +1698,22 @@ async function removeCap() {
   }
 }
 
-async function deleteVersion(v) {
-  if (!confirm(`确认删除版本 v${v.version}（${v.status}）？删除后可使用该版本号重新创建。`)) return
+function askDeleteVersion(v) {
+  confirmState.value = {
+    kind: 'delete-version',
+    version: v,
+    title: `删除版本 v${v.version}（${STATUS_LABELS[v.status] || v.status}）？`,
+    body: '删除后可使用该版本号重新创建。',
+    okText: '删除',
+    danger: true
+  }
+}
+
+async function deleteVersion(v, confirmed = false) {
+  if (!confirmed) {
+    askDeleteVersion(v)
+    return
+  }
   error.value = ''
   notice.value = ''
   try {
@@ -1402,7 +1731,7 @@ async function deleteVersion(v) {
 }
 
 function focusPackagePanel() {
-  contentTab.value = 'files'
+  setContentTab('files')
 }
 
 /** 统一在线编辑入口：workflow 走可视化编排器；已发布→开新版；草稿→打开文件编辑器 */
@@ -1420,9 +1749,9 @@ function goEdit() {
 }
 
 async function bootstrapDetail({ keepNotice = false } = {}) {
+  if (!cap.value) loading.value = true
   if (!keepNotice) notice.value = ''
   error.value = ''
-  resetReviewChecks()
   await load()
   await loadVersionSuggestions()
   loadMy()
@@ -1452,12 +1781,42 @@ onMounted(() => {
 </script>
 
 <template>
-  <div v-if="error && !cap" class="empty">{{ error }}</div>
+  <div v-if="loading && !cap" class="detail">
+    <div class="panel detail-hero">
+      <div class="skel-row">
+        <div class="skeleton skel-icon" style="width:56px;height:56px"></div>
+        <div style="flex:1">
+          <div class="skeleton skel-title"></div>
+          <div class="skeleton skel-line w70"></div>
+          <div class="skeleton skel-line w40"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div v-else-if="error && !cap" class="empty empty-guide">
+    <p>{{ error }}</p>
+    <div class="flex" style="justify-content:center">
+      <button class="btn btn-primary" type="button" @click="bootstrapDetail()">重试</button>
+      <button class="btn" type="button" @click="goBack">返回</button>
+    </div>
+  </div>
   <div v-else-if="cap" class="detail">
     <div v-if="error" class="alert alert-error">{{ error }}</div>
     <div v-if="notice" class="alert alert-success">{{ notice }}</div>
 
     <nav class="detail-crumb muted">
+      <button class="detail-back" type="button" title="返回" aria-label="返回" @click="goBack">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <path
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.75"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M15 5.5 8.5 12 15 18.5"
+          />
+        </svg>
+      </button>
       <router-link to="/">发现</router-link>
       <span>/</span>
       <router-link v-if="cap.type === 'skill'" :to="{ path: '/', query: { type: 'skill' } }">技能</router-link>
@@ -1468,75 +1827,88 @@ onMounted(() => {
       <span>{{ displayName }}</span>
     </nav>
 
-    <div v-if="isOwner" class="owner-progress panel mb-16">
+    <div v-if="isOwner && authorDecision" class="alert mb-16">
+      <strong>{{ authorDecision.action === 'reject' ? '已驳回' : '已打回' }}</strong>
+      <div>{{ authorDecision.comment || '没有填写审核意见' }}</div>
+    </div>
+
+    <div v-if="isOwner && !progressDone" class="owner-progress panel mb-16">
       <div
-        v-for="(step, i) in OWNER_PROGRESS_STEPS"
+        v-for="(step, i) in progressSteps"
         :key="step.key"
         class="owner-progress-step"
-        :class="{ done: i < progressIndex, active: i === progressIndex }"
+        :class="{ done: i < progressIndex || (progressDone && i === progressIndex), active: i === progressIndex && !progressDone }"
       >
         <span class="n">{{ i + 1 }}</span>
         <span class="l">{{ step.label }}</span>
       </div>
     </div>
 
-    <section class="detail-hero panel">
-      <img
-        v-if="cap.icon_url && !iconFailed"
-        class="detail-hero-icon icon-img"
-        :src="assetUrl(cap.icon_url)"
-        :alt="cap.name"
-        @error="iconFailed = true"
-      />
-      <div v-else class="detail-hero-icon" aria-hidden="true">{{ typeInitial }}</div>
-      <div class="detail-hero-main">
-        <div class="detail-hero-badges">
-          <StatusBadge :status="cap.status" />
-          <span class="badge">{{ TYPE_LABELS[cap.type] }}</span>
-          <span v-if="cap.verified" class="badge badge-success" title="管理员认证">认证</span>
-        </div>
-        <h1 class="detail-title">
-          {{ displayName }}
-          <span class="detail-ver">v{{ cap.version }}</span>
-        </h1>
-        <p v-if="cap.slug" class="detail-tagline muted" style="margin-top: -6px">标准名：{{ cap.slug }}</p>
-        <p class="detail-tagline">{{ cap.description || '暂无简介' }}</p>
-        <div class="detail-byline muted">
-          <span>作者 {{ cap.author_name || '-' }}</span>
-          <span>·</span>
-          <span>更新于 {{ formatDate(cap.updated_at) }}</span>
-        </div>
-        <p v-if="metaBits.length" class="detail-tagline muted">技术信息：{{ metaBits.join(' · ') }}</p>
-        <div class="detail-kpis">
-          <div class="kpi"><strong>{{ formatStat(cap.usage_count) }}</strong><span>使用</span></div>
-          <div class="kpi"><strong>{{ stars(cap.avg_rating) }}</strong><span>{{ formatStat(cap.rating_count) }} 评价</span></div>
-          <div class="kpi"><strong>{{ versions.length }}</strong><span>版本</span></div>
-          <div class="kpi">
-            <strong class="kpi-trust">{{ cap.status === 'published' ? '已审核' : (STATUS_LABELS[cap.status] || cap.status) }}</strong>
-            <span>安全状态</span>
+    <section class="detail-hero">
+      <div class="hero-top">
+        <img
+          v-if="cap.icon_url && !iconFailed"
+          class="detail-hero-icon icon-img"
+          :src="assetUrl(cap.icon_url)"
+          :alt="cap.name"
+          @error="iconFailed = true"
+        />
+        <div v-else class="detail-hero-icon" aria-hidden="true">{{ typeInitial }}</div>
+        <div class="detail-hero-main">
+          <h1 class="detail-title">{{ displayName }}</h1>
+          <p v-if="cap.name && cap.name !== displayName" class="hero-slug">{{ cap.name }}</p>
+          <p class="hero-source">
+            <span>作者 {{ cap.author_name || '未知' }}</span>
+            <span class="stat-dot">·</span>
+            <span>{{ TYPE_LABELS[cap.type] }}</span>
+            <template v-if="cap.verified">
+              <span class="stat-dot">·</span>
+              <span>已认证</span>
+            </template>
+          </p>
+          <p class="detail-tagline">{{ cap.description || kindHint?.where || '暂无简介' }}</p>
+          <div class="hero-facts">
+            <span class="fact-pill">{{ STATUS_LABELS[cap.status] || cap.status }}</span>
+            <span>{{ formatDate(cap.updated_at) }} 更新</span>
+            <span class="stat-dot">·</span>
+            <span>v{{ cap.version }}</span>
+            <template v-if="cap.rating_count">
+              <span class="stat-dot">·</span>
+              <span class="stat-stars">{{ stars(cap.avg_rating) }}</span>
+              <span>{{ formatStat(cap.rating_count) }} 评价</span>
+            </template>
+            <span class="stat-dot">·</span>
+            <span>{{ formatStat(cap.usage_count) }} 次使用</span>
           </div>
-        </div>
-        <div v-if="!canEdit" class="detail-tags">
-          <span v-if="cap.category" class="badge">{{ cap.category }}</span>
-          <span
-            v-for="t in (cap.tags || []).filter((x) => x && x !== 'plugin-component')"
-            :key="t"
-            class="badge"
-          >{{ t }}</span>
         </div>
       </div>
     </section>
 
     <div class="detail-layout">
       <div class="detail-main">
-        <div class="detail-tabs">
+        <div class="detail-tabs" role="tablist">
           <button
-            v-for="t in contentTabs"
+            v-for="t in readerTabs"
             :key="t.key"
             type="button"
             class="detail-tab"
             :class="{ active: contentTab === t.key }"
-            @click="contentTab = t.key"
+            role="tab"
+            :aria-selected="contentTab === t.key"
+            @click="setContentTab(t.key)"
+          >
+            {{ t.label }}
+          </button>
+          <span v-if="authorTabs.length" class="tab-split">维护</span>
+          <button
+            v-for="t in authorTabs"
+            :key="t.key"
+            type="button"
+            class="detail-tab author-tab"
+            :class="{ active: contentTab === t.key }"
+            role="tab"
+            :aria-selected="contentTab === t.key"
+            @click="setContentTab(t.key)"
           >
             {{ t.label }}
           </button>
@@ -1612,15 +1984,171 @@ onMounted(() => {
           </template>
         </section>
 
-        <div v-show="['intro', 'config'].includes(contentTab)">
-          <section v-show="contentTab === 'intro'" class="panel">
-            <h2 class="detail-section-title">介绍</h2>
+        <div v-show="['intro', 'config'].includes(contentTab)" class="intro-stack">
+          <section
+            v-show="contentTab === 'intro'"
+            class="panel overview"
+          >
+            <AskTrialPanel
+              v-if="showAskTrial && askAgentName"
+              ref="askTrialRef"
+              :agent-name="askAgentName"
+              :agent-version="askAgentVersion"
+              :subject-label="askSubjectLabel"
+              :suggestions="askSuggestions"
+              :can-run="askCanRun"
+              :blocked-hint="askBlockedHint"
+            />
+            <div v-if="isMcp && isPublished && !usedByAgents.length" class="guide-block trial-block">
+              <h3 class="guide-title">{{ trialLabel('mcp') }}</h3>
+              <p class="guide-lead">{{ mcpTrial.hint }}</p>
+              <div class="trial-actions">
+                <button v-if="canTrialMcp" class="btn btn-primary" type="button" @click="debugCap = stubFromCap(cap)">{{ trialLabel('mcp') }}</button>
+                <router-link
+                  v-else-if="!authState.token"
+                  :to="{ path: '/login', query: { redirect: route.fullPath } }"
+                  class="btn btn-primary"
+                >登录后试用</router-link>
+                <span v-else-if="!joined" class="muted" style="font-size: 13px">先在右侧加入，再试用。</span>
+              </div>
+            </div>
+            <p v-if="parentPluginId" class="overview-note">
+              来自能力包
+              <router-link :to="`/capabilities/${parentPluginId}`">打开能力包</router-link>
+            </p>
             <div v-if="readmeHtml" class="readme-body" v-html="readmeHtml"></div>
-            <div v-else-if="cap.description" class="guide-body prose">{{ cap.description }}</div>
+            <div v-else class="readme-fallback">
+              <h3 class="guide-title">介绍</h3>
+              <p class="guide-lead muted">作者还没写 README，下面按类型整理了用法。</p>
+              <dl class="fallback-facts">
+                <div>
+                  <dt>是什么</dt>
+                  <dd>{{ kindHint?.what || cap.description || '—' }}</dd>
+                </div>
+                <div>
+                  <dt>怎么用</dt>
+                  <dd>{{ kindHint?.where || consumerHint }}</dd>
+                </div>
+                <div>
+                  <dt>谁来跑</dt>
+                  <dd>{{ kindHint?.whoRuns || '加入后按平台约定使用' }}</dd>
+                </div>
+                <div>
+                  <dt>交付</dt>
+                  <dd>{{ distributionPlain(cap.distribution) }}</dd>
+                </div>
+              </dl>
+              <div v-if="introTags.length || cap.category" class="fallback-tags">
+                <span v-if="cap.category" class="badge badge-primary">{{ cap.category }}</span>
+                <span v-for="t in introTags" :key="t" class="badge">{{ t }}</span>
+              </div>
+              <div v-if="fallbackToolPreview.length" class="fallback-section">
+                <div class="fallback-k">能调哪些工具</div>
+                <ul class="guide-list">
+                  <li v-for="t in fallbackToolPreview" :key="'fb-' + t.name">
+                    <strong>{{ t.name }}</strong>
+                    <template v-if="t.description"> · {{ t.description }}</template>
+                  </li>
+                </ul>
+                <button
+                  v-if="mcpToolRows.length > fallbackToolPreview.length"
+                  class="btn btn-sm mt-8"
+                  type="button"
+                  @click="setContentTab('tools')"
+                >查看全部 {{ mcpToolRows.length }} 个工具</button>
+              </div>
+              <div v-if="isAgent && (embeddedSkills.length || embeddedMcp.length)" class="fallback-section">
+                <div class="fallback-k">内含能力</div>
+                <p class="guide-lead">
+                  <template v-if="embeddedSkills.length">{{ embeddedSkills.length }} 个技能</template>
+                  <template v-if="embeddedSkills.length && embeddedMcp.length"> · </template>
+                  <template v-if="embeddedMcp.length">{{ embeddedMcp.length }} 个连接器</template>
+                  ，加入专家后会一并生效。
+                </p>
+                <button class="btn btn-sm" type="button" @click="setContentTab('bundle')">查看内含能力</button>
+              </div>
+              <div v-if="isPlugin && pluginComponents.length" class="fallback-section">
+                <div class="fallback-k">包装组件</div>
+                <p class="guide-lead">这个能力包装了 {{ pluginComponents.length }} 个组件。</p>
+                <button class="btn btn-sm" type="button" @click="setContentTab('components')">查看组件</button>
+              </div>
+              <div v-if="isOwner || isAdmin" class="guide-note">
+                补一份 README，别人会更容易理解这个能力。
+                <div class="fallback-cta">
+                  <router-link
+                    v-if="preferOnlineEdit && onlineEditPath"
+                    :to="onlineEditPath"
+                    class="btn btn-sm btn-primary"
+                  >去在线编辑</router-link>
+                  <button
+                    v-else-if="canEditPackage"
+                    class="btn btn-sm btn-primary"
+                    type="button"
+                    @click="setContentTab('files')"
+                  >去文件里补 README</button>
+                  <button
+                    v-else-if="canEdit"
+                    class="btn btn-sm"
+                    type="button"
+                    @click="setContentTab('manage')"
+                  >去管理</button>
+                </div>
+              </div>
+            </div>
+            <div v-if="exampleList.length && !showAskTrial" class="guide-block">
+              <h3 class="guide-title">可以这样用</h3>
+              <ul class="guide-list">
+                <li v-for="(s, i) in exampleList" :key="'ex-'+i">
+                  <span v-if="['skill', 'mcp', 'agent', 'plugin'].includes(cap.type)">{{ s }}</span>
+                  <code v-else>{{ s }}</code>
+                </li>
+              </ul>
+            </div>
             <div v-if="cap.changelog" class="guide-block">
-              <h3 class="guide-title">本版说明</h3>
+              <h3 class="guide-title">本版更新</h3>
               <div class="guide-body prose">{{ cap.changelog }}</div>
             </div>
+            <details v-if="showUsageMore" class="more-usage">
+              <summary>更多用法</summary>
+              <div v-if="isMcp && isPublished && usedByAgents.length" class="guide-block trial-block">
+                <h3 class="guide-title">单独调这个连接器</h3>
+                <p class="guide-lead">{{ mcpTrial.hint }}</p>
+                <div class="trial-actions">
+                  <button v-if="canTrialMcp" class="btn" type="button" @click="debugCap = stubFromCap(cap)">连接并调工具</button>
+                  <span v-else-if="authState.token && !joined" class="muted" style="font-size: 13px">先加入，再试用。</span>
+                </div>
+              </div>
+              <details v-if="isMcp && mcpClientConfigJson" class="guide-block mcp-advanced">
+                <summary class="mcp-advanced-summary">给兼容客户端的配置</summary>
+                <div class="flex" style="gap: 8px; margin: 8px 0">
+                  <button class="btn btn-sm" type="button" @click="copyMcpClientConfig">复制配置</button>
+                </div>
+                <pre class="mcp-config-pre">{{ mcpClientConfigJson }}</pre>
+                <p v-if="mcpConfigNotice" class="muted" style="font-size: 12px; margin: 8px 0 0">{{ mcpConfigNotice }}</p>
+              </details>
+              <div v-if="(cap.artifacts || []).length && canViewPackage" class="guide-block">
+                <button class="btn btn-sm" type="button" @click="setContentTab('files')">预览包内文件</button>
+              </div>
+              <div v-if="(isOwner || isAdmin) && (PACKAGE_HINTS[cap.type] || isAgent || isWorkflow)" class="guide-block">
+                <h3 class="guide-title">给作者</h3>
+                <ul v-if="PACKAGE_HINTS[cap.type]" class="guide-list">
+                  <li>{{ PACKAGE_HINTS[cap.type] }}</li>
+                </ul>
+              </div>
+              <div v-if="isOwner || isAdmin" class="guide-block">
+                <h3 class="guide-title">调用方式</h3>
+                <table class="table">
+                  <thead><tr><th>方式</th><th>接口</th><th>适用</th></tr></thead>
+                  <tbody>
+                    <tr v-for="w in consumeWays" :key="w.id">
+                      <td>{{ w.label }}</td>
+                      <td><code style="font-size: 11px">{{ w.api }}</code></td>
+                      <td class="muted" style="font-size: 12px">{{ w.who }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </details>
           </section>
           <section v-show="contentTab === 'config'" class="panel">
             <h2 class="detail-section-title">配置</h2>
@@ -1716,12 +2244,9 @@ onMounted(() => {
               <div v-if="mcpEnvRows.length" class="env-fill-box">
                 <h4 class="env-fill-title">本机凭据（本地安装用）</h4>
                 <p class="muted" style="font-size: 13px; margin: 0 0 10px">
-                  <template v-if="isOwner || isAdmin">
-                    仅供 dashboard 本地安装 / 本机运行时使用；云端平台轨已改用上方平台密钥。
-                  </template>
-                  <template v-else>
-                    仅供 dashboard 本地安装 / 本机运行时使用；云端平台轨已改用能力级平台密钥（由作者或管理员维护）。
-                  </template>
+                  <template v-if="platformSecretsReady === true">云端已可用。下面只影响你自己的本地安装，不填也能试用。</template>
+                  <template v-else-if="isOwner || isAdmin">只影响本机安装。试用走上方平台密钥，未填的可选项不影响云端。</template>
+                  <template v-else>只影响你自己的本地安装。云端由作者配置的平台密钥提供，可选项未填不影响云端使用。</template>
                 </p>
                 <router-link
                   v-if="!authState.token"
@@ -1733,10 +2258,10 @@ onMounted(() => {
                     <div v-for="row in envRowsWithState" :key="row.key" class="env-row">
                       <div class="env-row-head">
                         <code>{{ row.key }}</code>
-                        <span v-if="row.capRow" class="badge badge-success">能力级已配</span>
+                        <span v-if="row.capRow" class="badge badge-success">本机已填</span>
                         <span v-else-if="row.globalRow" class="badge badge-warning">全局值生效</span>
-                        <span v-else class="badge badge-danger">未配置</span>
-                        <span class="muted" style="font-size: 12px">{{ row.secret ? '凭据' : '可选' }}</span>
+                        <span v-else-if="row.secret" class="badge">未填</span>
+                        <span v-else class="muted" style="font-size: 12px">可选</span>
                       </div>
                       <div class="env-row-input">
                         <input
@@ -1768,127 +2293,12 @@ onMounted(() => {
               </div>
             </div>
           </section>
-          <section v-show="contentTab === 'intro'" class="panel">
-            <h2 class="detail-section-title">使用指南</h2>
-
-            <AskTrialPanel
-              v-if="showAskTrial && askAgentName"
-              ref="askTrialRef"
-              :agent-name="askAgentName"
-              :agent-version="askAgentVersion"
-              :subject-label="askSubjectLabel"
-              :suggestions="askSuggestions"
-              :can-run="askCanRun"
-              :blocked-hint="askBlockedHint"
-            />
-
-            <div v-if="isMcp && isPublished" class="guide-block trial-block">
-              <h3 class="guide-title">{{ usedByAgents.length ? '高级 · 单独调工具' : '试用连接器' }}</h3>
-              <p class="guide-lead">{{ mcpTrial.hint }}</p>
-              <p v-if="usedByAgents.length" class="muted" style="font-size: 13px; margin: 0 0 10px">
-                日常请用上方「问一句」。这里只验证连接器能否连上并调用工具。
-              </p>
-              <div class="trial-actions">
-                <button
-                  v-if="canTrialMcp"
-                  class="btn"
-                  :class="usedByAgents.length ? '' : 'btn-primary'"
-                  type="button"
-                  @click="debugCap = stubFromCap(cap)"
-                >{{ usedByAgents.length ? '连接并调工具' : '试用连接器' }}</button>
-                <router-link
-                  v-else-if="!authState.token"
-                  :to="{ path: '/login', query: { redirect: route.fullPath } }"
-                  class="btn btn-primary"
-                >登录后试用</router-link>
-                <span v-else-if="!joined" class="muted" style="font-size: 13px">先「加入」授权，再试用。</span>
-              </div>
-            </div>
-
-            <details v-if="isMcp && mcpClientConfigJson" class="guide-block mcp-advanced">
-              <summary class="mcp-advanced-summary">高级 · MCP 客户端 JSON</summary>
-              <p class="muted" style="font-size: 12px; margin: 8px 0 10px">
-                给调试或兼容客户端粘贴 <code>mcpServers</code>。员工日常请加入后随专家安装，不要把这段当主路径。
-              </p>
-              <div class="flex" style="gap: 8px; margin-bottom: 8px">
-                <button class="btn btn-sm" type="button" @click="copyMcpClientConfig">复制 JSON</button>
-              </div>
-              <pre class="mcp-config-pre">{{ mcpClientConfigJson }}</pre>
-              <p v-if="mcpConfigNotice" class="muted" style="font-size: 12px; margin: 8px 0 0">{{ mcpConfigNotice }}</p>
-            </details>
-
-            <div v-if="exampleList.length && !showAskTrial" class="guide-block">
-              <h3 class="guide-title">示例用法</h3>
-              <ul class="guide-list">
-                <li v-for="(s, i) in exampleList" :key="'ex-'+i">
-                  <span v-if="['skill', 'mcp', 'agent', 'plugin'].includes(cap.type)">{{ s }}</span>
-                  <code v-else>{{ s }}</code>
-                </li>
-              </ul>
-            </div>
-            <div v-if="(cap.artifacts || []).length && canViewPackage" class="guide-block">
-              <div class="flex-between flex-wrap" style="align-items: center">
-                <div>
-                  <h3 class="guide-title" style="margin: 0">能力包</h3>
-                  <div class="muted" style="font-size: 12px; margin-top: 4px">可预览包内 README、SKILL.md、配置与源码</div>
-                </div>
-                <button class="btn btn-sm btn-primary" type="button" @click="contentTab = 'files'">预览文件</button>
-              </div>
-            </div>
-            <div v-if="kindHint" class="guide-block">
-              <h3 class="guide-title">核心用法</h3>
-              <div class="guide-body">
-                <p class="guide-lead">{{ TYPE_LABELS[cap.type] }}（{{ shelfName }}）：{{ kindHint.what }}</p>
-                <ul class="guide-list">
-                  <li>
-                    <strong>{{ ['skill', 'mcp', 'agent', 'plugin'].includes(cap.type) ? '怎么用' : '装到哪' }}</strong>
-                    ：{{ kindHint.where }}
-                  </li>
-                  <li>
-                    <strong>{{ ['skill', 'mcp', 'agent', 'plugin'].includes(cap.type) ? '谁来答' : '谁执行' }}</strong>
-                    ：{{ kindHint.whoRuns }}
-                  </li>
-                  <li v-if="PACKAGE_HINTS[cap.type] && (isOwner || isAdmin)"><strong>包规范</strong>：{{ PACKAGE_HINTS[cap.type] }}</li>
-                </ul>
-                <div v-if="isAgent && (isOwner || isAdmin)" class="guide-note">
-                  <strong>{{ ORCH_LABELS.team.name }}</strong>（TEAM.md）：节点是角色，在零号员工 TeamOrchestrator 执行。与「能力编排」平行，禁止互转。
-                </div>
-                <div v-if="isWorkflow && (isOwner || isAdmin)" class="guide-note">
-                  <strong>{{ ORCH_LABELS.capability.name }}</strong>：节点是已上架能力，只在云端执行；可将带 TEAM.md 的 Agent 作为 agent 节点调用。
-                </div>
-              </div>
-            </div>
-            <div class="guide-block">
-              <h3 class="guide-title">怎么用 · 消费矩阵</h3>
-              <div class="guide-body">
-                <p class="guide-lead muted">市场是控制面目录。日常在零号员工问答里用；试用只验证连接，不是生产主路径。</p>
-                <table class="table">
-                  <thead><tr><th>方式</th><th v-if="isOwner || isAdmin">接口</th><th>适用</th></tr></thead>
-                  <tbody>
-                    <tr v-for="w in consumeWays" :key="w.id">
-                      <td>{{ w.label }}</td>
-                      <td v-if="isOwner || isAdmin"><code style="font-size: 11px">{{ w.api }}</code></td>
-                      <td class="muted" style="font-size: 12px">{{ w.who }}</td>
-                    </tr>
-                  </tbody>
-                </table>
-                <p v-if="isRemoteOnly" class="guide-lead muted" style="margin: 10px 0 0">
-                  云端能力加入即用：通过云端接口 / 平台轨调用或试用，无需本地安装。
-                </p>
-              </div>
-            </div>
-          </section>
-
-          <div v-if="contentTab === 'intro' && parentPluginId" class="panel">
-            <h3>来自能力包</h3>
-            <div class="muted" style="font-size: 13px">本能力由能力包拆分生成。</div>
-            <div class="mt-16"><router-link :to="`/capabilities/${parentPluginId}`">查看父能力包</router-link></div>
-          </div>
 
           <div v-if="contentTab === 'intro' && usedBy.length" class="panel">
             <h3>{{ usedByAgents.length && usedByAgents.length === usedBy.length ? '被以下专家使用' : '被以下能力使用' }}</h3>
             <div class="muted" style="font-size: 13px">
               {{ isMcp ? '挂到这些专家后，对话里才会动手。' : '来自专家内嵌声明或能力包组件引用。' }}
+              <template v-if="usedByRawCount > usedBy.length">同一专家只显示最新版本。</template>
               <router-link :to="`/?${cap.type}=${encodeURIComponent(cap.name)}&shelf=all`">在目录中筛选</router-link>
             </div>
             <table class="table mt-16">
@@ -1905,15 +2315,15 @@ onMounted(() => {
                       class="btn btn-sm"
                       type="button"
                       @click="openTrialAgent(u)"
-                    >试用专家</button>
+                    >{{ trialLabel('agent') }}</button>
                   </td>
                 </tr>
               </tbody>
             </table>
           </div>
 
-          <div v-if="contentTab === 'intro' && cap.type === 'tool' && Object.keys(cap.input_schema || {}).length && !(cap.input_schema || {}).kind" class="panel">
-            <h3>参数定义（schema.json）</h3>
+          <details v-if="contentTab === 'intro' && cap.type === 'tool' && Object.keys(cap.input_schema || {}).length && !(cap.input_schema || {}).kind" class="panel more-usage">
+            <summary>参数定义（schema.json）</summary>
             <table class="table">
               <thead><tr><th>参数</th><th>类型</th><th>必填</th><th>说明</th></tr></thead>
               <tbody>
@@ -1928,13 +2338,10 @@ onMounted(() => {
                 </tr>
               </tbody>
             </table>
-          </div>
+          </details>
 
-          <div v-if="contentTab === 'intro' && isAgent && cap.status === 'published'" class="a2a-panel panel">
-            <div class="flex-between flex-wrap">
-              <h3>A2A 互调信息</h3>
-              <span class="badge badge-primary">protocolVersion 1.0</span>
-            </div>
+          <details v-if="contentTab === 'intro' && isAgent && cap.status === 'published'" class="a2a-panel panel more-usage">
+            <summary>A2A 互调信息</summary>
             <div class="muted" style="font-size: 13px">可作为标准 A2A Agent 被发现与委派。</div>
             <div class="mt-16">
               <div class="flex"><span class="muted" style="width: 120px">Agent Card</span>
@@ -1946,7 +2353,7 @@ onMounted(() => {
                 <button class="btn btn-sm" type="button" @click="copyText(rpcUrl(cap.id))">复制</button>
               </div>
             </div>
-          </div>
+          </details>
         </div>
 
         <div v-show="contentTab === 'tools'">
@@ -1974,6 +2381,9 @@ onMounted(() => {
             <p class="muted" style="font-size: 13px; margin: 0 0 12px">
               <template v-if="canEditPackage">
                 多文件/文件夹在线编辑：新增文件与文件夹、上传多个文件或整个文件夹、重命名/删除；技能可用「技能模板」一键生成 SKILL.md 与 references/、scripts/、assets/。保存后写入能力包。
+              </template>
+              <template v-else-if="cap.status === 'reviewing'">
+                审核中不能修改这一包。{{ isOwner ? '要改请先撤回。' : '' }}
               </template>
               <template v-else>浏览能力包内文件；Markdown 渲染预览，其它文本以源码显示。</template>
             </p>
@@ -2086,7 +2496,7 @@ onMounted(() => {
                       v-if="(isOwner || isAdmin) && ['draft', 'returned', 'rejected', 'reviewing'].includes(v.status)"
                       class="btn btn-sm btn-danger"
                       type="button"
-                      @click="deleteVersion(v)"
+                      @click="askDeleteVersion(v)"
                     >删除</button>
                   </td>
                 </tr>
@@ -2096,10 +2506,10 @@ onMounted(() => {
               <h3>版本管理</h3>
               <div class="muted" style="font-size: 12px; margin-bottom: 8px">
                 <template v-if="['published', 'deprecated'].includes(cap.status)">
-                  已发布内容请先创建新版本草稿；可在在线编辑完善后提交审核。
+                  已发布内容请先创建新版本草稿，在线编辑完善后再提交审核。
                 </template>
                 <template v-else-if="preferOnlineEdit">
-                  草稿可在在线编辑完善（保存会生成能力包）后提交审核。
+                  草稿请在线编辑完善（保存会生成能力包），再提交审核。
                 </template>
                 <template v-else>草稿需在编辑页完善内容后再提交审核。</template>
               </div>
@@ -2112,27 +2522,6 @@ onMounted(() => {
               </div>
               <textarea v-model="versionChangelog" class="textarea mt-8" rows="2" placeholder="本版本变更说明（可选）"></textarea>
             </div>
-            <div v-if="canReview" class="mt-24">
-              <h3>审核</h3>
-              <div class="muted" style="font-size: 12px; line-height: 1.5; margin-bottom: 8px">
-                审核清单：
-                <ul style="margin: 6px 0 0; padding-left: 18px; list-style: none">
-                  <li v-for="(item, i) in REVIEW_CHECKLIST" :key="i" style="margin: 4px 0">
-                    <label style="display: flex; gap: 8px; align-items: flex-start; cursor: pointer">
-                      <input v-model="reviewChecks[i]" type="checkbox" />
-                      <span>{{ item }}</span>
-                    </label>
-                  </li>
-                </ul>
-                <div v-if="!allReviewChecked" class="muted" style="font-size: 12px; margin-top: 6px">请勾选全部审核项后再点「通过并发布」</div>
-              </div>
-              <textarea v-model="reviewComment" class="textarea" placeholder="审核意见（可选）"></textarea>
-              <div class="flex mt-8">
-                <button class="btn btn-success" type="button" :disabled="!allReviewChecked" @click="submitReview('approve')">通过并发布</button>
-                <button class="btn btn-danger" type="button" @click="submitReview('reject')">驳回</button>
-                <button class="btn" type="button" @click="submitReview('return')">打回修改</button>
-              </div>
-            </div>
           </section>
         </div>
 
@@ -2141,7 +2530,7 @@ onMounted(() => {
           <div v-if="isOwner || isAdmin" class="panel">
             <h3>能力头像</h3>
             <p class="muted" style="font-size: 13px; margin: 6px 0 0">
-              建议使用 1:1 图片；选择后自动居中裁剪为 512×512 上传（PNG/JPG/WebP，≤256KB）。无头像时展示类型默认图标。
+              建议使用 1:1 图片；选择后自动居中裁剪为 512×512 上传（PNG/JPG/WebP，≤256KB）。没有头像时显示名称首字。
             </p>
             <div class="flex mt-16" style="align-items: center; gap: 16px; flex-wrap: wrap">
               <img
@@ -2249,7 +2638,6 @@ onMounted(() => {
 
           <h3 class="manage-group">发布操作</h3>
             <div v-if="canSubmit || canWithdraw || canDelete || preferOnlineEdit || isAdmin" class="panel">
-            <h3>操作</h3>
             <div class="flex flex-wrap" style="gap: 8px">
               <button
                 v-if="preferOnlineEdit && !canRevise"
@@ -2272,9 +2660,9 @@ onMounted(() => {
                 @click="doAction(`/publish/capabilities/${props.id}/submit`)"
               >提交审核</button>
               <button v-if="canWithdraw" class="btn" type="button" @click="withdrawReview">撤回审核</button>
-              <button v-if="canDelete" class="btn btn-danger" type="button" @click="removeCap">删除</button>
-              <button v-if="isAdmin && cap.status === 'published'" class="btn btn-danger" type="button" @click="doAction(`/admin/capabilities/${props.id}/deprecate`)">下架（弃用）</button>
-              <button v-if="isAdmin && ['published', 'deprecated', 'rejected', 'returned'].includes(cap.status)" class="btn btn-danger" type="button" @click="doAction(`/admin/capabilities/${props.id}/archive`)">归档</button>
+              <button v-if="canDelete" class="btn btn-danger" type="button" @click="askRemoveCap">删除</button>
+              <button v-if="isAdmin && cap.status === 'published'" class="btn btn-danger" type="button" @click="askStatus('deprecate')">下架</button>
+              <button v-if="isAdmin && ['published', 'deprecated', 'rejected', 'returned'].includes(cap.status)" class="btn btn-danger" type="button" @click="askStatus('archive')">归档</button>
             </div>
           </div>
 
@@ -2348,186 +2736,261 @@ onMounted(() => {
       </div>
 
       <aside class="detail-aside">
-        <div class="panel aside-card sticky-card">
-          <h3>下一步</h3>
-          <template v-if="isPublished">
+        <div v-if="isPublished" class="install-card sticky-card">
+          <h2 class="install-title">{{ installTitle }}</h2>
+          <p class="install-lead">{{ consumerHint }}</p>
+          <div class="install-actions">
+            <button
+              v-if="nextStep?.kind === 'join'"
+              class="btn btn-block btn-primary"
+              type="button"
+              :disabled="!canSubscribe || myBusy"
+              :title="canSubscribe ? '' : subscribeBlockedReason"
+              @click="toggleMy"
+            >{{ myBusy ? '加入中…' : nextStep.label }}</button>
+            <router-link
+              v-else-if="nextStep?.kind === 'login'"
+              :to="{ path: '/login', query: { redirect: route.fullPath } }"
+              class="btn btn-block btn-primary"
+            >{{ nextStep.label }}</router-link>
+            <button
+              v-else-if="nextStep?.kind === 'trial-agent'"
+              class="btn btn-block btn-primary"
+              type="button"
+              @click="openTrialAgent(usedByAgents[0])"
+            >{{ nextStep.label }}</button>
+            <button
+              v-else-if="nextStep?.kind === 'trial'"
+              class="btn btn-block btn-primary"
+              type="button"
+              @click="openTrial"
+            >{{ nextStep.label }}</button>
+            <router-link
+              v-else-if="nextStep?.kind === 'mine'"
+              to="/my"
+              class="btn btn-block btn-primary"
+            >{{ nextStep.label }}</router-link>
+          </div>
+          <p v-if="nextStep?.kind === 'join' && !canSubscribe" class="install-lead aside-deny">{{ subscribeBlockedReason }}</p>
+          <p v-if="copyNotice || myNotice" class="install-lead">{{ copyNotice || myNotice }}</p>
+          <div v-if="hasExtraWays" class="install-extra">
+            <button
+              v-if="joined && (cap.install_policy || 'optional') !== 'required'"
+              class="btn btn-block install-ghost"
+              type="button"
+              :disabled="myBusy"
+              @click="toggleMy"
+            >{{ myBusy ? '处理中…' : '移出' }}</button>
+            <button
+              v-if="canLocalInstall && installCommand"
+              class="btn btn-block install-ghost"
+              type="button"
+              @click="copyInstallCommand"
+            >复制安装命令</button>
+            <button v-if="!isRemoteOnly" class="btn btn-block install-ghost" type="button" @click="downloadArtifact">
+              下载压缩包{{ packageSizeLabel ? ` · ${packageSizeLabel}` : '' }}
+            </button>
+            <button
+              v-if="authState.token"
+              class="btn btn-block install-ghost"
+              type="button"
+              :disabled="subBusy"
+              @click="toggleSubscribe"
+            >{{ subscribed ? '取消订阅更新' : '有更新时通知我' }}</button>
+          </div>
+        </div>
+        <div v-else class="install-card action-card sticky-card">
+          <h2 class="install-title">{{ canReview ? '审核' : '下一步' }}</h2>
+          <template v-if="canReview">
+            <div class="check-list">
+              <label v-for="(item, i) in activeChecks" :key="item.index" class="check-item">
+                <input v-model="reviewChecks[i]" type="checkbox" />
+                <span class="check-label">{{ item.text }}</span>
+                <em v-if="reviewAuto[i]" class="auto-tag">{{ item.index === 1 ? '未见硬编码' : '结构通过' }}</em>
+              </label>
+            </div>
+            <textarea v-model="reviewComment" class="textarea" rows="2" placeholder="审核意见（拒绝 / 打回必填，作者会在详情页看到）"></textarea>
+            <p class="aside-hint muted">
+              <template v-if="approveBlock">{{ approveBlock }}</template>
+              <template v-else-if="allReviewChecked">清单已齐，可以通过。{{ replacesVersion ? `已上架的 v${replacesVersion} 会变为已弃用。` : '' }}</template>
+              <template v-else>还差 {{ pendingCheckLabels.length }} 项：{{ pendingCheckLabels.join('、') }}</template>
+            </p>
             <div class="aside-cta">
               <button
-                v-if="nextStep?.kind === 'join'"
                 class="btn btn-block btn-lg btn-primary"
                 type="button"
-                :disabled="!canSubscribe"
-                :title="canSubscribe ? '' : subscribeBlockedReason"
-                @click="toggleMy"
-              >{{ nextStep.label }}</button>
-              <router-link
-                v-else-if="nextStep?.kind === 'login'"
-                :to="{ path: '/login', query: { redirect: route.fullPath } }"
-                class="btn btn-block btn-lg btn-primary"
-              >{{ nextStep.label }}</router-link>
-              <button
-                v-else-if="nextStep?.kind === 'trial-agent'"
-                class="btn btn-block btn-lg btn-primary"
-                type="button"
-                @click="openTrialAgent(usedByAgents[0])"
-              >{{ nextStep.label }}</button>
-              <button
-                v-else-if="nextStep?.kind === 'trial'"
-                class="btn btn-block btn-lg btn-primary"
-                type="button"
-                @click="openTrial"
-              >{{ nextStep.label }}</button>
-              <router-link
-                v-else-if="nextStep?.kind === 'mine'"
-                to="/my"
-                class="btn btn-block btn-lg btn-primary"
-              >{{ nextStep.label }}</router-link>
-              <p v-if="nextStep?.kind === 'join' && !canSubscribe" class="aside-hint aside-deny">
-                {{ subscribeBlockedReason }}
-              </p>
-              <p v-if="copyNotice" class="muted" style="font-size: 12px; margin: 0">{{ copyNotice }}</p>
-              <span v-if="myNotice" class="muted" style="font-size: 12px">{{ myNotice }}</span>
+                :disabled="!allReviewChecked || !!approveBlock"
+                @click="askApprove"
+              >通过并上架</button>
             </div>
             <div class="aside-more">
-              <button
-                v-if="joined && (cap.install_policy || 'optional') !== 'required'"
-                class="aside-link"
-                type="button"
-                @click="toggleMy"
-              >移出</button>
-              <button
-                v-if="canLocalInstall && installCommand"
-                class="aside-link"
-                type="button"
-                @click="copyInstallCommand"
-              >高级 · 复制 cap install（本机运行）</button>
-              <button v-if="!isRemoteOnly" class="aside-link" type="button" @click="downloadArtifact">
-                下载 zip{{ packageSizeLabel ? ` · ${packageSizeLabel}` : '' }}
-              </button>
-              <button
-                v-if="authState.token"
-                class="aside-link"
-                type="button"
-                :disabled="subBusy"
-                @click="toggleSubscribe"
-              >{{ subscribed ? '取消订阅更新' : '订阅更新' }}</button>
-              <router-link v-if="authState.token && nextStep?.kind !== 'mine'" to="/my" class="aside-link">我的能力</router-link>
+              <button class="aside-link" type="button" @click="askReview('return')">打回</button>
+              <button class="aside-link danger" type="button" @click="askReview('reject')">拒绝</button>
             </div>
-            <p class="aside-hint muted">
-              <template v-if="isRemoteOnly">
-                云端能力加入即用：无需安装，加入后即可在云端调用或试用。{{ isMcp ? mcpTrial.hint : '' }}
-              </template>
-              <template v-else-if="!joined">先加入，完成授权。{{ JOIN_VS_INSTALL_HINT }}</template>
-              <template v-else>{{ joinedHint }}{{ isMcp ? ` ${mcpTrial.hint}` : '' }}</template>
-            </p>
           </template>
           <template v-else>
-            <p class="aside-hint muted" style="margin-top: 0">
-              <template v-if="preferOnlineEdit && needsPackageFirst">
-                先在线编辑完善内容（保存会生成能力包），再提交审核。
-              </template>
-              <template v-else-if="needsPackageFirst">请先在编辑页完善内容，再提交审核。</template>
-              <template v-else-if="cap.status === 'reviewing'">已提交，等待管理员审核。</template>
-              <template v-else>完善内容后提交审核；上架后才能加入与本地安装。</template>
-            </p>
-            <div class="aside-cta mt-16">
+            <p class="aside-hint muted" style="margin-top: 0">{{ ownerNextHint }}</p>
+            <div class="aside-cta">
               <button
-                v-if="preferOnlineEdit && canEdit"
-                class="btn btn-block btn-primary btn-lg"
-                type="button"
-                @click="goEdit"
-              >在线编辑</button>
-              <button
-                v-else-if="canSubmit"
-                class="btn btn-block btn-success btn-lg"
+                v-if="canSubmit"
+                class="btn btn-block btn-lg btn-success"
                 type="button"
                 @click="doAction(`/publish/capabilities/${props.id}/submit`)"
               >提交审核</button>
+              <router-link
+                v-if="preferOnlineEdit && (canEdit || isAdmin)"
+                :to="onlineEditPath"
+                class="btn btn-block"
+                :class="canSubmit ? '' : 'btn-primary btn-lg'"
+              >在线编辑</router-link>
+              <button v-if="canWithdraw" class="btn btn-block" type="button" @click="withdrawReview">撤回审核</button>
             </div>
           </template>
-          <dl class="aside-meta">
-            <div><dt>类型</dt><dd>{{ TYPE_LABELS[cap.type] }}</dd></div>
-            <div><dt>分类</dt><dd>{{ shelfName || '—' }}</dd></div>
-            <div><dt>版本</dt><dd>v{{ cap.version }}</dd></div>
-            <div><dt>可见性</dt><dd>{{ VISIBILITY_LABELS[cap.visibility] }}</dd></div>
-            <div><dt>分发方式</dt><dd>{{ DISTRIBUTION_LABELS[cap.distribution] || cap.distribution || '—' }}</dd></div>
-            <div v-if="accessRestrictions.length"><dt>访问限制</dt><dd>{{ accessRestrictions.join('；') }}</dd></div>
-            <div><dt>默认风险</dt><dd>{{ RISK_DEFAULT_LABELS[cap.risk_default] || cap.risk_default || '—' }}</dd></div>
-            <div><dt>数据域</dt><dd>{{ cap.data_domain || '—' }}</dd></div>
-            <div v-if="cap.category"><dt>分类</dt><dd>{{ cap.category }}</dd></div>
-            <div><dt>作者</dt><dd>{{ cap.author_name || '-' }}</dd></div>
-            <div v-if="cap.slug"><dt>标准名</dt><dd class="mono">{{ cap.slug }}</dd></div>
-            <div v-if="provenance.origin"><dt>来源</dt><dd>{{ provenance.registry_name || provenance.origin }}<span v-if="provenance.license" class="muted"> · {{ provenance.license }}</span></dd></div>
-            <div v-if="requiresBinary"><dt>依赖 CLI</dt><dd class="mono">{{ requiresBinary }}<span v-if="cap.requires.min_version" class="muted"> ≥ {{ cap.requires.min_version }}</span></dd></div>
-            <div v-if="requiresAuth"><dt>依赖登录</dt><dd class="mono">{{ requiresAuth }}</dd></div>
-            <div v-if="(cap.required_scopes || []).length"><dt>调用 scope</dt><dd class="mono">{{ (cap.required_scopes || []).join(', ') }}</dd></div>
-            <div v-if="isMcp"><dt>传输</dt><dd>{{ mcpTransport }}</dd></div>
-            <div v-if="isMcp && isPublished"><dt>试用</dt><dd>{{ mcpTrial.label }}</dd></div>
-            <div v-if="isMcp && mcpToolRows.length"><dt>工具</dt><dd>{{ mcpToolRows.length }} 个</dd></div>
-            <div v-if="isMcp && mcpEnvRows.length"><dt>环境变量</dt><dd>{{ mcpEnvRows.length }} 项</dd></div>
-            <div><dt>更新</dt><dd>{{ formatDate(cap.updated_at) }}</dd></div>
-          </dl>
         </div>
-
-        <div class="panel aside-card">
-          <h3>评分与评论</h3>
-          <div class="rating-form">
-            <select v-model="rating.score" class="select" style="max-width: 90px">
-              <option v-for="s in [5, 4, 3, 2, 1]" :key="s" :value="s">{{ s }} ★</option>
-            </select>
-            <input v-model="rating.comment" class="input" placeholder="写下你的评价" @keyup.enter="submitRating" />
-            <button class="btn btn-primary btn-sm" type="button" @click="submitRating">提交</button>
+        <div class="rating-card">
+          <h2 class="install-title">评分与评论</h2>
+          <div v-if="!authState.token" class="install-lead">
+            <router-link :to="{ path: '/login', query: { redirect: route.fullPath } }">登录</router-link>
+            后可以评分
           </div>
-          <div v-if="ratings.length === 0" class="muted">暂无评价</div>
-          <div v-for="r in ratings" :key="r.id" class="rating-item">
-            <div class="flex-between">
-              <strong>{{ r.username }}</strong>
-              <span style="color: var(--warning)">{{ stars(r.score) }}</span>
+          <div v-else class="rating-form">
+            <div class="rating-stars" role="radiogroup" aria-label="评分" @mouseleave="ratingHover = 0">
+              <button
+                v-for="s in 5"
+                :key="s"
+                type="button"
+                class="rating-star"
+                :class="{ on: s <= (ratingHover || rating.score), pop: ratingPop === s }"
+                role="radio"
+                :aria-checked="rating.score === s"
+                :aria-label="`${s} 星`"
+                @mouseenter="ratingHover = s"
+                @focus="ratingHover = s"
+                @blur="ratingHover = 0"
+                @click="setRating(s)"
+              >★</button>
             </div>
-            <div class="muted">{{ r.comment || '（无评论）' }}</div>
+            <input v-model="rating.comment" class="input" placeholder="写下你的评价" @keyup.enter="submitRating" />
+            <button class="btn btn-primary btn-sm" type="button" :disabled="ratingBusy" @click="submitRating">{{ ratingBusy ? '提交中…' : '提交' }}</button>
           </div>
+          <div class="rating-list">
+            <div v-if="ratings.length === 0" class="muted rating-empty">暂无评价</div>
+            <div v-for="r in visibleRatings" :key="r.id" class="rating-item">
+              <div class="flex-between">
+                <strong>{{ r.username }}</strong>
+                <span class="stat-stars">{{ stars(r.score) }}</span>
+              </div>
+              <div class="muted">{{ r.comment || '（无评论）' }}</div>
+            </div>
+            <button
+              v-if="ratings.length > 3"
+              class="aside-link"
+              type="button"
+              @click="ratingsExpanded = !ratingsExpanded"
+            >{{ ratingsExpanded ? '收起评价' : `查看全部 ${ratings.length} 条评价` }}</button>
+          </div>
+        </div>
+        <div class="panel resource-card">
+          <p class="action-kicker">信息</p>
+          <dl class="resource-list">
+            <div v-if="cap.category"><dt>分类</dt><dd>{{ cap.category }}</dd></div>
+            <div><dt>交付</dt><dd>{{ distributionPlain(cap.distribution) }}</dd></div>
+          </dl>
+          <p v-if="platformSecretsReady === false" class="aside-hint meta-warn">云端密钥还没配齐，配好后才能试用。</p>
+          <details class="aside-fold">
+            <summary>更多</summary>
+            <dl class="aside-meta">
+              <div><dt>谁能看</dt><dd>{{ VISIBILITY_LABELS[cap.visibility] || cap.visibility }}</dd></div>
+              <div v-if="accessRestrictions.length"><dt>访问</dt><dd>{{ accessRestrictions.join('；') }}</dd></div>
+              <div v-if="isMcp"><dt>连接方式</dt><dd>{{ mcpTransport }}</dd></div>
+              <div><dt>货架</dt><dd>{{ shelfName || '—' }}</dd></div>
+              <div><dt>风险</dt><dd>{{ RISK_DEFAULT_LABELS[cap.risk_default] || cap.risk_default || '—' }}</dd></div>
+              <div><dt>数据域</dt><dd>{{ cap.data_domain || '—' }}</dd></div>
+              <div v-if="cap.slug"><dt>标准名</dt><dd class="mono">{{ cap.slug }}</dd></div>
+              <div v-if="provenance.origin"><dt>来源</dt><dd>{{ provenance.registry_name || provenance.origin }}</dd></div>
+              <div v-if="requiresBinary"><dt>依赖 CLI</dt><dd class="mono">{{ requiresBinary }}</dd></div>
+              <div v-if="isMcp && mcpToolRows.length"><dt>工具</dt><dd>{{ mcpToolRows.length }} 个</dd></div>
+            </dl>
+          </details>
         </div>
       </aside>
     </div>
     <ConfirmActionModal
-      :show="confirmRemove"
-      title="确定移除？"
-      :body="`移除后，「${cap.name}」将不再出现在自定义列表中，不影响目录上架状态。`"
-      ok-text="移除"
-      @ok="removeMine"
-      @cancel="confirmRemove = false"
+      :show="!!confirmState"
+      :title="confirmState?.title || ''"
+      :body="confirmState?.body || ''"
+      :ok-text="confirmState?.okText || '确定'"
+      :danger="!!confirmState?.danger"
+      @ok="onConfirmOk"
+      @cancel="confirmState = null"
     />
     <DebugCapabilityModal
       :show="!!debugCap"
       :cap="debugCap"
-      :title="debugCap?.type === 'agent' ? '试用专家' : (debugCap?.type === 'mcp' ? '试用连接器' : '云端试用')"
+      :title="trialLabel(debugCap?.type)"
       @close="debugCap = null"
     />
   </div>
 </template>
 
 <style scoped>
+.detail {
+  padding: 0 0 48px;
+}
 .detail-crumb {
   display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
   font-size: 13px; margin-bottom: 14px;
 }
 .detail-crumb a { color: var(--muted); }
 .detail-crumb a:hover { color: var(--primary); }
+.detail-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-right: 6px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+}
+.detail-back:hover { background: var(--panel-2); color: var(--primary); }
 .detail-hero {
-  display: grid;
-  grid-template-columns: 72px minmax(0, 1fr);
-  gap: 20px;
-  margin-bottom: 20px;
-  padding: 24px;
-  align-items: start;
+  margin: 0 0 18px;
+  padding: 20px 24px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
   box-shadow: var(--shadow);
 }
+.hero-top {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+.hero-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.hero-cta { flex: none; width: 148px; }
+.hero-hint {
+  margin: 10px 0 0;
+  max-width: 40rem;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted);
+}
 .detail-hero-icon {
-  width: 72px; height: 72px; border-radius: 18px;
-  background: linear-gradient(145deg, #2f6bff, #1f56e0);
-  color: #fff; font-size: 28px; font-weight: 700;
+  width: 56px; height: 56px; border-radius: 12px;
+  background: var(--primary);
+  color: #fff; font-size: 22px; font-weight: 650;
   display: flex; align-items: center; justify-content: center;
-  box-shadow: 0 8px 20px rgba(47, 107, 255, 0.25);
 }
 .icon-img { object-fit: cover; }
 .detail-hero-icon.icon-img { background: var(--panel-2); }
@@ -2537,15 +3000,37 @@ onMounted(() => {
   object-fit: cover; background: var(--panel-2);
 }
 .icon-preview-fallback {
-  background: linear-gradient(145deg, #2f6bff, #1f56e0);
+  background: linear-gradient(145deg, var(--primary), var(--primary-2));
   color: #fff; font-size: 26px; font-weight: 700;
 }
 .detail-hero-main { min-width: 0; }
 .detail-hero-badges { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
 .detail-title {
-  margin: 0; font-size: clamp(26px, 3vw, 36px); line-height: 1.2;
+  margin: 0;
+  font-size: clamp(23px, 2.6vw, 28px); line-height: 1.25;
   letter-spacing: -0.02em; font-weight: 700;
-  display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px;
+}
+.hero-slug {
+  margin: 4px 0 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px; line-height: 20px; color: var(--muted);
+}
+.hero-source {
+  margin: 8px 0 0;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  font-size: 13px; color: var(--text);
+}
+.hero-facts {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  margin-top: 20px; font-size: 13px; color: var(--muted);
+}
+.fact-pill {
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 12px;
+  color: var(--muted);
 }
 .detail-ver {
   font-size: 16px; font-weight: 600; color: var(--muted);
@@ -2553,59 +3038,105 @@ onMounted(() => {
   border-radius: 999px; padding: 2px 10px;
 }
 .detail-tagline {
-  margin: 12px 0 0; color: var(--muted); font-size: 15px;
-  line-height: 1.65; max-width: 48rem;
+  margin: 16px 0 0; color: var(--text); font-size: 15px;
+  line-height: 26px; max-width: 920px;
 }
-.detail-byline { margin-top: 10px; font-size: 13px; display: flex; flex-wrap: wrap; gap: 6px; }
-.detail-kpis {
-  display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px;
+.detail-byline { margin-top: 6px; font-size: 13px; display: flex; flex-wrap: wrap; gap: 6px; }
+.stat-line {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  margin-top: 12px; font-size: 13px; color: var(--muted);
 }
-.kpi {
-  min-width: 96px; padding: 10px 12px; border-radius: 12px;
-  background: var(--panel-2); border: 1px solid var(--border);
-}
-.kpi strong { display: block; font-size: 18px; letter-spacing: -0.02em; }
-.kpi span { color: var(--muted); font-size: 12px; }
-.kpi-trust { color: var(--success); font-size: 16px !important; }
+.stat-stars { color: #e0a106; letter-spacing: 1px; }
+.stat-dot { color: var(--border-strong); }
 .detail-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .detail-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.55fr) minmax(280px, 0.85fr);
-  gap: 20px;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 40px;
   align-items: start;
 }
-.detail-main, .detail-aside { display: flex; flex-direction: column; gap: 16px; }
+.detail-main {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+.detail-aside { display: flex; flex-direction: column; gap: 12px; }
 .detail-tabs {
-  display: flex; flex-wrap: wrap; gap: 4px;
-  padding: 4px; background: #fff; border: 1px solid var(--border);
-  border-radius: 12px; box-shadow: var(--shadow);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  margin-bottom: 4px; padding: 0;
+  background: transparent; border: none;
+  border-radius: 0; box-shadow: none;
 }
 .detail-tab {
-  border: none; background: transparent; color: var(--muted);
-  padding: 8px 14px; border-radius: 10px; cursor: pointer; font-size: 13px;
+  border: 1px solid var(--border); background: var(--panel); color: var(--muted);
+  padding: 8px 14px; border-radius: 999px; cursor: pointer; font-size: 13px;
 }
-.detail-tab:hover { color: var(--text); background: var(--panel-2); }
-.detail-tab.active { color: var(--primary); background: var(--primary-soft); font-weight: 600; }
+.detail-tab:hover { color: var(--text); background: var(--panel); border-color: var(--primary); }
+.detail-tab.active {
+  color: #fff; background: var(--primary); border-color: var(--primary); font-weight: 500;
+}
+.detail-main .intro-stack { gap: 16px; }
+.install-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+  box-shadow: var(--shadow);
+}
+.install-title {
+  margin: 0;
+  text-align: center;
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 24px;
+}
+.install-lead {
+  margin: 16px 0 0;
+  text-align: center;
+  font-size: 12px;
+  line-height: 22px;
+  color: var(--muted);
+}
+.install-actions { margin-top: 16px; }
+.install-actions .btn { width: 100%; height: 40px; }
+.install-extra { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.install-ghost {
+  width: 100%;
+  height: 40px;
+  background: var(--panel);
+  border-color: var(--border-strong);
+  box-shadow: none;
+}
+.install-ghost:hover { background: var(--panel-2); color: var(--text); border-color: var(--border-strong); }
 .sticky-card { position: sticky; top: 16px; z-index: 1; }
-.owner-progress {
-  display: flex; flex-wrap: wrap; gap: 6px 4px; align-items: stretch;
-  padding: 12px 14px;
+.owner-progress.panel {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  margin-bottom: 16px; padding: 12px 16px;
 }
 .owner-progress-step {
-  display: flex; align-items: center; gap: 6px;
-  flex: 1 1 auto; min-width: 88px;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px 3px 3px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--panel-2);
   font-size: 12px; color: var(--muted);
 }
 .owner-progress-step .n {
-  width: 22px; height: 22px; border-radius: 50%;
+  width: 20px; height: 20px; border-radius: 50%;
   display: inline-flex; align-items: center; justify-content: center;
-  border: 1px solid var(--border); background: var(--panel-2);
-  font-weight: 600; font-size: 11px;
+  background: var(--panel); border: 1px solid var(--border);
+  font-weight: 650; font-size: 11px;
 }
-.owner-progress-step.done { color: var(--text); }
-.owner-progress-step.done .n { background: var(--primary-soft); border-color: var(--primary); color: var(--primary); }
-.owner-progress-step.active { color: var(--primary); font-weight: 600; }
-.owner-progress-step.active .n { background: var(--primary); border-color: var(--primary); color: #fff; }
+.owner-progress-step.done { color: var(--text); background: var(--primary-soft); border-color: transparent; }
+.owner-progress-step.done .n { background: var(--panel); border-color: transparent; color: var(--primary); }
+.owner-progress-step.active { color: #fff; font-weight: 600; background: var(--primary); border-color: var(--primary); }
+.owner-progress-step.active .n { background: var(--panel); border-color: transparent; color: var(--primary); }
+.action-kicker {
+  margin: 0 0 10px; font-size: 12px; font-weight: 650;
+  color: var(--muted); letter-spacing: 0.04em;
+}
 .aside-cta { display: flex; flex-direction: column; gap: 8px; }
 .btn-block { width: 100%; justify-content: center; }
 .btn-lg { padding: 11px 20px; font-size: 15px; font-weight: 600; }
@@ -2618,7 +3149,8 @@ onMounted(() => {
   flex: 1; min-width: 0; color: #e2e8f0; font-size: 12px;
   background: transparent; border: none; word-break: break-all;
 }
-.aside-hint { margin: 12px 0 0; font-size: 12px; line-height: 1.55; }
+.aside-hint { margin: 10px 0 0; font-size: 12px; line-height: 1.6; }
+.meta-warn { margin: 0 0 8px; color: #b7791f; }
 .aside-deny { color: var(--danger); }
 .access-lists { display: grid; gap: 12px; max-width: 640px; }
 .role-options { display: flex; flex-wrap: wrap; gap: 14px; }
@@ -2627,22 +3159,127 @@ onMounted(() => {
   font-size: 13px; cursor: pointer;
 }
 .aside-more {
-  display: flex; flex-wrap: wrap; gap: 8px 14px;
-  margin-top: 12px;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 8px;
+  margin: 2px 0 6px;
 }
+.action-card .aside-link { text-decoration: none; }
+.action-card .aside-link:hover { text-decoration: underline; }
 .aside-link {
   border: none; background: transparent; padding: 0;
   color: var(--muted); font-size: 12px; cursor: pointer; text-decoration: underline;
 }
 .aside-link:hover { color: var(--primary); }
+.aside-link.danger,
+.aside-link.danger:hover { color: var(--danger); }
+.intro-stack { display: flex; flex-direction: column; gap: 16px; }
+.overview {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.overview .guide-block + .guide-block {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+.overview-note { margin: 0; font-size: 13px; color: var(--muted); }
+.readme-fallback { min-width: 0; }
+.fallback-facts { margin: 12px 0 0; display: grid; gap: 0; }
+.fallback-facts > div {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.fallback-facts > div:last-child { border-bottom: none; }
+.fallback-facts dt { margin: 0; color: var(--muted); font-weight: 500; }
+.fallback-facts dd { margin: 0; color: var(--text); }
+.fallback-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.fallback-section { margin-top: 14px; }
+.fallback-k {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.fallback-cta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.resource-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 8px 16px 12px;
+}
+.resource-card .action-kicker { letter-spacing: 0; color: var(--text); font-size: 13px; margin: 10px 0 4px; }
+.resource-list { margin: 0; }
+.resource-list > div {
+  display: flex; justify-content: space-between; gap: 16px;
+  padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 13px;
+}
+.resource-list > div:last-child { border-bottom: none; }
+.resource-list dt { margin: 0; color: var(--muted); }
+.resource-list dd { margin: 0; text-align: right; }
+.tab-split {
+  margin-left: auto; align-self: center;
+  padding: 0 8px; border: none;
+  font-size: 11px; color: var(--muted);
+}
+.more-usage { margin-top: 4px; }
+.more-usage > summary {
+  cursor: pointer; font-size: 13px; font-weight: 600; color: var(--muted);
+  list-style: none;
+}
+.more-usage > summary::-webkit-details-marker { display: none; }
+.more-usage > summary:hover { color: var(--text); }
+.more-usage .guide-block:first-of-type { margin-top: 14px; }
+.check-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.check-item {
+  display: flex; align-items: flex-start; gap: 8px;
+  min-height: 28px; font-size: 13px; cursor: pointer;
+}
+.check-label { flex: 1; min-width: 0; }
+.auto-tag {
+  font-style: normal; font-size: 11px; font-weight: 500;
+  color: #0e9f5c; background: rgba(18, 183, 106, 0.1);
+  border-radius: 999px; padding: 1px 8px; white-space: nowrap;
+}
+.action-card textarea { width: 100%; min-height: 0; margin: 0 0 8px; }
+.action-card {
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  padding: 16px;
+}
+.meta-card { padding: 6px 16px 10px; box-shadow: none; }
+.aside-fold { margin-top: 8px; }
+.aside-fold > summary {
+  cursor: pointer; list-style: none;
+  display: flex; align-items: center; justify-content: space-between;
+  min-height: 32px; font-size: 12px; color: var(--muted);
+}
+.aside-fold > summary::-webkit-details-marker { display: none; }
+.aside-fold > summary::after {
+  content: '';
+  width: 6px; height: 6px; flex: none;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  transform: rotate(45deg) translateY(-2px);
+}
+.aside-fold[open] > summary::after { transform: rotate(-135deg) translateY(-1px); }
+.aside-fold > summary:hover { color: var(--text); }
+.aside-fold .aside-meta { margin-top: 4px; padding-top: 4px; border-top: none; }
 .aside-meta {
-  margin: 16px 0 0; padding-top: 14px; border-top: 1px solid var(--border);
+  margin: 0; padding-top: 0; border-top: none;
   display: grid; gap: 8px;
 }
-.aside-meta > div { display: grid; grid-template-columns: 64px 1fr; gap: 8px; font-size: 13px; }
+.aside-meta > div { display: grid; grid-template-columns: 72px 1fr; gap: 8px; font-size: 13px; }
 .aside-meta dt { margin: 0; color: var(--muted); }
 .aside-meta dd { margin: 0; color: var(--text); }
-.detail-section-title { margin: 0 0 16px; font-size: 20px; font-weight: 650; }
+.detail-section-title { margin: 0 0 14px; font-size: 16px; font-weight: 650; }
+.detail-main .table { margin: 0; }
+.detail-main .table th { font-size: 12px; background: transparent; }
 /* 管理 tab 分组标题：把「基本信息 / 发布操作 / 治理」分开，避免堆叠 */
 .manage-group {
   margin: 22px 0 8px;
@@ -2744,10 +3381,40 @@ onMounted(() => {
 .package-name { word-break: break-all; }
 .package-size { flex-shrink: 0; font-variant-numeric: tabular-nums; }
 .package-checksum { margin-top: 8px; font-size: 11px; }
-.rating-form { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.rating-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 20px 16px 8px;
+}
+.rating-form {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  margin-top: 14px;
+}
+.rating-form .input { width: 100%; min-width: 0; }
+.rating-list { margin-top: 12px; }
+.rating-empty { padding: 8px 0 12px; font-size: 13px; }
+.rating-stars { display: flex; justify-content: center; gap: 2px; }
+.rating-form .btn { width: 100%; }
+.rating-star {
+  border: none; background: transparent; padding: 0 1px;
+  font-size: 26px; line-height: 1; color: var(--border-strong); cursor: pointer;
+  transition: color .15s ease, transform .18s cubic-bezier(.2, 1.4, .4, 1);
+}
+.rating-star.on { color: #f5b400; }
+.rating-star.pop { animation: star-pop .32s ease; }
+@keyframes star-pop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.32); }
+  100% { transform: scale(1); }
+}
 .rating-item { padding: 10px 0; border-bottom: 1px solid var(--border); }
 .rating-item:last-child { border-bottom: none; }
-.a2a-panel { border: 1px dashed #7a5cff; }
+.a2a-panel { border: none; }
 .url-code {
   background: var(--panel-2); padding: 4px 10px; border-radius: 6px;
   font-size: 12px; color: #2451c7; word-break: break-all;
@@ -2770,8 +3437,11 @@ onMounted(() => {
 .mt-8 { margin-top: 8px; } .mt-12 { margin-top: 12px; } .mt-16 { margin-top: 16px; } .mt-24 { margin-top: 24px; }
 h3 { margin: 0 0 12px; }
 @media (max-width: 960px) {
-  .detail-hero, .detail-layout { grid-template-columns: 1fr; }
-  .detail-hero-icon { width: 56px; height: 56px; font-size: 22px; border-radius: 14px; }
+  .detail-layout { grid-template-columns: 1fr; gap: 20px; }
+  .detail-aside { order: -1; }
+  .hero-top { grid-template-columns: 48px minmax(0, 1fr); gap: 14px; }
+  .detail-title { font-size: 22px; line-height: 30px; }
+  .detail-hero-icon { width: 48px; height: 48px; font-size: 18px; border-radius: 10px; }
   .sticky-card { position: static; }
 }
 </style>

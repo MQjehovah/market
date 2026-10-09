@@ -87,6 +87,7 @@ async def create_workflow(data: WorkflowCreate, db: DbSession, user: CurrentUser
 
     cap = Capability(
         name=name,
+        display_name=(data.display_name or "").strip(),
         description=data.description,
         type="workflow",
         version=data.version,

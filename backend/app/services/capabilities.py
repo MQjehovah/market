@@ -60,7 +60,8 @@ STATUS_FLOW: dict[str, set[str]] = {
 
 EDITABLE_STATUSES = {"draft", "returned", "rejected"}
 DELETABLE_STATUSES = {"draft", "returned", "rejected", "reviewing"}
-UPLOADABLE_STATUSES = EDITABLE_STATUSES | {"reviewing"}
+# 审核中的包冻结：要改先撤回，避免审的和交的不是同一份
+UPLOADABLE_STATUSES = set(EDITABLE_STATUSES)
 # workflow 内容在画布维护，提交审核不强制 zip
 PACKAGE_REQUIRED_TYPES = {"agent", "tool", "skill", "mcp", "plugin"}
 
@@ -579,6 +580,11 @@ async def review_capability(
     action: str,
     comment: str = "",
 ) -> Capability:
+    if cap.author_id == reviewer.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "不能审核自己提交的能力")
+    comment = (comment or "").strip()
+    if action in {"reject", "return"} and not comment:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "拒绝或打回需要填写审核意见")
     if action == "take":
         if cap.status != "reviewing":
             raise HTTPException(status.HTTP_409_CONFLICT, "该能力不在待审状态")
@@ -595,10 +601,11 @@ async def review_capability(
     author = await db.get(User, cap.author_id)
     if author is not None:
         labels = {"approve": "已通过审核并发布", "reject": "被驳回", "return": "被打回修改"}
+        shown = (cap.display_name or "").strip() or cap.name
         db.add(
             Notification(
                 user_id=author.id,
-                title=f"能力 {cap.name} v{cap.version} {labels[action]}",
+                title=f"能力 {shown} v{cap.version} {labels[action]}",
                 body=comment or f"管理员已完成审核：{labels[action]}",
                 link=f"/capabilities/{cap.id}",
             )

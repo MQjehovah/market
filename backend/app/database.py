@@ -151,6 +151,14 @@ async def _auto_migrate(conn) -> None:
                 sync_conn.exec_driver_sql(
                     "ALTER TABLE user_capabilities ADD COLUMN enabled BOOLEAN DEFAULT 1"
                 )
+        if "service_tokens" in tables:
+            st_cols = {c["name"] for c in inspector.get_columns("service_tokens")}
+            if "revoked_at" not in st_cols:
+                # PostgreSQL 没有 DATETIME，对应类型是 TIMESTAMP
+                ts_type = "TIMESTAMP" if sync_conn.dialect.name == "postgresql" else "DATETIME"
+                sync_conn.exec_driver_sql(
+                    f"ALTER TABLE service_tokens ADD COLUMN revoked_at {ts_type}"
+                )
         if "notifications" in tables:
             n_cols = {c["name"] for c in inspector.get_columns("notifications")}
             if "link" not in n_cols:
@@ -178,6 +186,10 @@ async def _auto_migrate(conn) -> None:
             if "department" not in user_cols:
                 sync_conn.exec_driver_sql(
                     "ALTER TABLE users ADD COLUMN department VARCHAR(100) DEFAULT ''"
+                )
+            if "router_key_ciphertext" not in user_cols:
+                sync_conn.exec_driver_sql(
+                    "ALTER TABLE users ADD COLUMN router_key_ciphertext TEXT DEFAULT ''"
                 )
             # 发布者角色已取消：历史 publisher 统一并入 user
             sync_conn.exec_driver_sql("UPDATE users SET role = 'user' WHERE role = 'publisher'")

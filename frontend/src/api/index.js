@@ -44,7 +44,8 @@ function errorMessage(detail) {
 
 async function request(path, options = {}) {
   const headers = { ...(options.headers || {}) }
-  if (authState.token) {
+  const hadToken = Boolean(authState.token)
+  if (hadToken) {
     headers.Authorization = `Bearer ${authState.token}`
   }
   const isForm = typeof FormData !== 'undefined' && options.body instanceof FormData
@@ -59,7 +60,8 @@ async function request(path, options = {}) {
     body = null
   }
   if (!res.ok) {
-    if (res.status === 401 && !AUTH_NO_REDIRECT.has(path)) {
+    // 只有「带着登录态却被拒绝」才清会话。匿名访问本就需要登录的接口时，留在当前页。
+    if (res.status === 401 && hadToken && !AUTH_NO_REDIRECT.has(path)) {
       await redirectToLogin()
     }
     throw new ApiError(res.status, errorMessage(body?.detail), body?.detail)

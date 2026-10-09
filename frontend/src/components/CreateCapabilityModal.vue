@@ -4,17 +4,13 @@ import { useRouter } from 'vue-router'
 import { api } from '../api'
 import MultiSelect from './MultiSelect.vue'
 import {
-  ORCH_LABELS,
-  PACKAGE_HINTS,
   PUBLISH_INTENTS,
-  REVIEW_CHECKLIST,
   SHELVES,
   TYPE_CATEGORIES,
   TYPE_LABELS,
   VISIBLE_CREATE_KINDS,
   HIDDEN_BROWSE_KINDS,
-  DISTRIBUTION_LABELS,
-  RISK_DEFAULT_LABELS,
+  reviewChecklistFor,
   ROLE_LABELS,
   canOnlineEdit,
   kindHintFor,
@@ -30,9 +26,11 @@ const emit = defineEmits(['close', 'created'])
 const router = useRouter()
 
 const step = ref('intent')
+const intentKey = ref('')
 const form = reactive({
   shelf: 'recipe',
   name: '',
+  displayName: '',
   type: 'agent',
   version: '0.1.0',
   description: '',
@@ -78,14 +76,24 @@ watch(
   }
 )
 
-const shelfList = computed(() =>
-  Object.values(SHELVES).filter((s) => s.key !== 'install')
-)
 const kindsInShelf = computed(() => {
+  if (intentKey.value === 'workflow') return ['workflow']
+  if (intentKey.value === 'recipe') return ['agent']
   const visible = VISIBLE_CREATE_KINDS[form.shelf]
-  if (visible) return visible
+  if (visible) return visible.filter((k) => k !== 'workflow')
   return (SHELVES[form.shelf]?.kinds || []).filter((k) => !HIDDEN_BROWSE_KINDS.includes(k))
 })
+const createChecks = computed(() => reviewChecklistFor({ type: form.type }).map((item) => item.text))
+const DIST_CHOICES = [
+  { value: 'both', label: '云端 + 本地' },
+  { value: 'remote', label: '仅云端' },
+  { value: 'local', label: '仅本地' }
+]
+const RISK_CHOICES = [
+  { value: 'read', label: '只读' },
+  { value: 'write', label: '写入' },
+  { value: 'destructive', label: '破坏性' }
+]
 const kindHint = computed(() => kindHintFor({ type: form.type, distribution: form.distribution }))
 const footHint = computed(() => {
   if (form.type === 'workflow') return '创建后进入编排画布；无需上传 zip'
@@ -126,22 +134,13 @@ function categories() {
 
 function selectIntent(key) {
   const intent = PUBLISH_INTENTS.find((i) => i.key === key)
-  form.shelf = key
-  form.type = intent?.defaultType || SHELVES[key]?.kinds?.[0] || 'agent'
+  if (!intent) return
+  intentKey.value = key
+  form.shelf = intent.shelf
+  form.type = intent.defaultType
   form.category = ''
   error.value = ''
   step.value = 'form'
-}
-
-function selectShelf(key) {
-  form.shelf = key
-  const visible = VISIBLE_CREATE_KINDS[key]
-  if (visible?.length) form.type = visible[0]
-  else if (key === 'brick') form.type = 'skill'
-  else if (key === 'recipe') form.type = 'agent'
-  else form.type = SHELVES[key]?.kinds?.[0] || 'agent'
-  form.category = ''
-  error.value = ''
 }
 
 function selectType(type) {
@@ -150,22 +149,12 @@ function selectType(type) {
   error.value = ''
 }
 
-function openWorkflowEditor() {
-  emit('close')
-  router.push({
-    path: '/workflows/new',
-    query: {
-      name: form.name.trim(),
-      version: form.version.trim(),
-      description: form.description.trim()
-    }
-  })
-}
-
 async function create() {
   error.value = ''
-  if (!form.name.trim() || !form.version.trim()) {
-    error.value = '请填写能力名称和版本号'
+  const displayName = form.displayName.trim() || form.name.trim()
+  const logicalName = form.name.trim() || displayName
+  if (!displayName || !form.version.trim()) {
+    error.value = '请填写展示名和版本号'
     return
   }
   const tags = form.tags
@@ -180,7 +169,8 @@ async function create() {
     let cap
     let accessWarning = ''
     const common = {
-      name: form.name.trim(),
+      name: logicalName,
+      display_name: displayName,
       description: form.description,
       version: form.version.trim(),
       category: form.category,
@@ -223,10 +213,6 @@ async function create() {
     }
     emit('created', cap, accessWarning ? { warning: accessWarning } : {})
     emit('close')
-    if (accessWarning) {
-      // 跳转会立即卸载本页、父级 notice 画不出来：有警示时留在列表页展示
-      return
-    }
     router.push(nextRouteAfterCreate(cap))
   } catch (e) {
     error.value = e.message
@@ -246,7 +232,7 @@ async function create() {
 
       <template v-if="step === 'intent'">
         <div class="muted" style="font-size: 13px; line-height: 1.5; margin-bottom: 12px">
-          主叙事：专家 + 依赖。技能是说明书，连接器是手；先发专家，再按需发可复用的技能 / 连接器。
+          先选一种。展示名会出现在目录上，逻辑名不填就用展示名。
         </div>
         <div class="intent-grid">
           <button
@@ -261,7 +247,7 @@ async function create() {
           </button>
         </div>
         <div class="modal-foot">
-          <span class="muted" style="font-size: 12px">也可稍后在表单里切换货架</span>
+          <span class="muted" style="font-size: 12px">选错了可以返回重选</span>
           <button class="btn" type="button" @click="emit('close')">取消</button>
         </div>
       </template>
@@ -269,24 +255,7 @@ async function create() {
       <template v-else>
         <button class="btn btn-sm mb-12" type="button" @click="step = 'intent'">← 重选意图</button>
 
-        <div class="field">
-          <label>货架</label>
-          <div class="shelf-grid">
-            <button
-              v-for="s in shelfList"
-              :key="s.key"
-              type="button"
-              class="shelf-card"
-              :class="{ active: form.shelf === s.key }"
-              @click="selectShelf(s.key)"
-            >
-              <strong>{{ s.label }}</strong>
-              <span>{{ s.description }}</span>
-            </button>
-          </div>
-        </div>
-
-        <div class="field mt-12">
+        <div v-if="kindsInShelf.length > 1" class="field">
           <label>类型</label>
           <div class="kind-row">
             <button
@@ -298,34 +267,34 @@ async function create() {
               @click="selectType(k)"
             >
               {{ TYPE_LABELS[k] }}
-              <em v-if="k === 'tool'">（编排节点）</em>
             </button>
           </div>
-          <div v-if="kindHint" class="kind-hint muted">
-            <div><strong>是什么：</strong>{{ kindHint.what }}</div>
-            <div><strong>装到哪：</strong>{{ kindHint.where }}</div>
-            <div><strong>谁执行：</strong>{{ kindHint.whoRuns }}</div>
-            <div class="mt-8"><strong>包结构：</strong>{{ PACKAGE_HINTS[form.type] }}</div>
-          </div>
+        </div>
+        <div v-if="kindHint" class="kind-hint muted" :class="{ 'mt-12': kindsInShelf.length <= 1 }">
+          <div><strong>是什么：</strong>{{ kindHint.what }}</div>
+          <div><strong>怎么用：</strong>{{ kindHint.where }}</div>
+          <div><strong>谁来跑：</strong>{{ kindHint.whoRuns }}</div>
         </div>
 
         <div v-if="form.type === 'agent'" class="alert mt-12" style="font-size: 13px">
-          有 <code>TEAM.md</code> 时为<strong>{{ ORCH_LABELS.team.name }}</strong>（角色协作，在零号员工执行）。
-          不要用能力编排 Workflow 去替代 TEAM.md。
-          依赖的 skill / mcp 可先上架再引用，或直接内嵌在专家包内。
+          专家在零号员工里回答。多人协作时在包里放 TEAM.md。编排是另一条路，不要拿它代替专家。
         </div>
         <div v-if="form.type === 'workflow'" class="alert mt-12" style="font-size: 13px">
-          <strong>{{ ORCH_LABELS.capability.name }}</strong>：节点是已上架能力，只在云端执行，不进 Agent 目录。
-          与 TEAM.md <strong>平行</strong>，禁止节点互转。
+          编排在云端按节点执行，节点用已经上架的能力。它和专家是两种东西。
+        </div>
+
+        <div class="field mt-12">
+          <label>展示名</label>
+          <input v-model="form.displayName" class="input" placeholder="目录上显示的名字，如：月度经营复盘" />
         </div>
 
         <div class="grid mt-12" style="grid-template-columns: 1fr 1fr">
           <div class="field">
-            <label>名称</label>
-            <input v-model="form.name" class="input" placeholder="全局唯一逻辑名" />
+            <label>逻辑名</label>
+            <input v-model="form.name" class="input" placeholder="不填则与展示名相同" />
           </div>
           <div class="field">
-            <label>版本（语义化）</label>
+            <label>版本</label>
             <input v-model="form.version" class="input" placeholder="0.1.0" />
           </div>
         </div>
@@ -349,27 +318,34 @@ async function create() {
             </select>
           </div>
           <div class="field">
-            <label>可见范围（治理）</label>
-            <select v-model="form.visibility" class="select">
-              <option value="private">仅自己（草稿协作）</option>
-              <option value="team">部分用户 / 团队</option>
-              <option value="internal">企业内部（全员可见）</option>
-              <option value="public">更大范围（公开）</option>
-            </select>
+            <label>标签（逗号分隔）</label>
+            <input v-model="form.tags" class="input" placeholder="如：工单, BMS" />
           </div>
         </div>
 
-        <div class="grid mt-12" style="grid-template-columns: 1fr 1fr">
-          <div class="field">
-            <label>调用权限</label>
-            <select v-model="form.access_policy" class="select">
-              <option value="open">开放：登录用户可加入并调用</option>
-              <option value="admin_only">仅管理员</option>
-              <option value="restricted">白名单</option>
-            </select>
+        <details class="mt-12">
+          <summary class="muted" style="cursor: pointer; font-size: 13px">更多设置（可见范围、权限、交付）</summary>
+          <div class="grid mt-12" style="grid-template-columns: 1fr 1fr">
+            <div class="field">
+              <label>谁能看见</label>
+              <select v-model="form.visibility" class="select">
+                <option value="private">仅自己</option>
+                <option value="team">部分用户 / 团队</option>
+                <option value="internal">企业内部</option>
+                <option value="public">公开</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>谁能调用</label>
+              <select v-model="form.access_policy" class="select">
+                <option value="open">登录用户都可加入</option>
+                <option value="admin_only">仅管理员</option>
+                <option value="restricted">指定名单</option>
+              </select>
+            </div>
           </div>
-          <div v-if="form.access_policy === 'restricted'" class="field">
-            <label>白名单用户（多选，工号）</label>
+          <div v-if="form.access_policy === 'restricted'" class="field mt-12">
+            <label>用户名单</label>
             <MultiSelect
               v-model="form.allowedUsers"
               :options="userOptions"
@@ -377,72 +353,53 @@ async function create() {
               allow-create
             />
           </div>
-        </div>
-
-        <div v-if="form.access_policy === 'restricted'" class="grid mt-12" style="grid-template-columns: 1fr 1fr">
-          <div class="field">
-            <label>部门白名单（多选，留空不限）</label>
-            <MultiSelect
-              v-model="form.allowedDepartments"
-              :options="departmentOptions"
-              placeholder="搜索并选择部门（可手输新增）"
-              allow-create
-            />
-          </div>
-          <div class="field">
-            <label>角色白名单（勾选，留空不限）</label>
-            <div class="role-options">
-              <label v-for="key in ACCESS_ROLE_KEYS" :key="key" class="role-option">
-                <input v-model="form.allowedRoles" type="checkbox" :value="key" />
-                <span>{{ ROLE_LABELS[key] }}</span>
-              </label>
+          <div v-if="form.access_policy === 'restricted'" class="grid mt-12" style="grid-template-columns: 1fr 1fr">
+            <div class="field">
+              <label>部门名单（留空不限）</label>
+              <MultiSelect
+                v-model="form.allowedDepartments"
+                :options="departmentOptions"
+                placeholder="搜索并选择部门（可手输新增）"
+                allow-create
+              />
+            </div>
+            <div class="field">
+              <label>角色名单（留空不限）</label>
+              <div class="role-options">
+                <label v-for="key in ACCESS_ROLE_KEYS" :key="key" class="role-option">
+                  <input v-model="form.allowedRoles" type="checkbox" :value="key" />
+                  <span>{{ ROLE_LABELS[key] }}</span>
+                </label>
+              </div>
             </div>
           </div>
-        </div>
-
-        <div class="grid mt-12" style="grid-template-columns: 1fr 1fr">
-          <div class="field">
-            <label>分发方式</label>
-            <select v-model="form.distribution" class="select">
-              <option v-for="(label, key) in DISTRIBUTION_LABELS" :key="key" :value="key">
-                {{ label }}（{{ key }}）
-              </option>
-            </select>
+          <div class="grid mt-12" style="grid-template-columns: 1fr 1fr">
+            <div class="field">
+              <label>在哪里用</label>
+              <select v-model="form.distribution" class="select">
+                <option v-for="item in DIST_CHOICES" :key="item.value" :value="item.value">{{ item.label }}</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>默认风险</label>
+              <select v-model="form.risk_default" class="select">
+                <option v-for="item in RISK_CHOICES" :key="item.value" :value="item.value">{{ item.label }}</option>
+              </select>
+            </div>
           </div>
-          <div class="field">
-            <label>默认风险</label>
-            <select v-model="form.risk_default" class="select">
-              <option v-for="(label, key) in RISK_DEFAULT_LABELS" :key="key" :value="key">
-                {{ label }}（{{ key }}）
-              </option>
-            </select>
+          <div class="field mt-12">
+            <label>数据域</label>
+            <input
+              v-model="form.data_domain"
+              class="input"
+              maxlength="64"
+              placeholder="设备/客户/财务/知识…"
+            />
           </div>
-        </div>
-
-        <div class="field mt-12">
-          <label>数据域（≤64 字）</label>
-          <input
-            v-model="form.data_domain"
-            class="input"
-            maxlength="64"
-            placeholder="设备/客户/财务/知识…"
-          />
-        </div>
-
-        <div class="field mt-12">
-          <label>标签（逗号分隔）</label>
-          <input v-model="form.tags" class="input" placeholder="如：工单, BMS" />
-        </div>
+        </details>
 
         <div v-if="form.type === 'workflow'" class="field mt-12">
-          <label>Workflow 画布（能力编排）</label>
-          <button class="btn btn-primary" style="width: 100%" type="button" @click="openWorkflowEditor">
-            直接打开空白画布（跳过本表单创建）
-          </button>
-          <div class="muted mt-8" style="font-size: 12px">
-            或填写名称后点「创建并打开画布」，将自动进入该 Workflow 的编辑器。
-          </div>
-          <details class="mt-8">
+          <details>
             <summary class="muted" style="cursor: pointer; font-size: 12px">高级：粘贴 workflow.json</summary>
             <textarea
               v-model="form.workflowJson"
@@ -454,9 +411,9 @@ async function create() {
         </div>
 
         <details class="mt-12">
-          <summary class="muted" style="cursor: pointer; font-size: 12px">提交审核前请自检</summary>
+          <summary class="muted" style="cursor: pointer; font-size: 12px">提交时会检查这些</summary>
           <ul class="checklist muted">
-            <li v-for="(item, i) in REVIEW_CHECKLIST" :key="i">{{ item }}</li>
+            <li v-for="(item, i) in createChecks" :key="i">{{ item }}</li>
           </ul>
         </details>
 
@@ -545,27 +502,6 @@ async function create() {
   font-size: 13px;
   color: var(--muted);
   line-height: 1.45;
-}
-.shelf-grid { display: grid; grid-template-columns: 1fr; gap: 8px; }
-.shelf-card {
-  text-align: left;
-  background: var(--panel-2);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 10px 12px;
-  cursor: pointer;
-  color: var(--text);
-}
-.shelf-card span {
-  display: block;
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--muted);
-  line-height: 1.4;
-}
-.shelf-card.active {
-  border-color: var(--primary);
-  background: rgba(79, 140, 255, 0.12);
 }
 .kind-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .kind-chip {

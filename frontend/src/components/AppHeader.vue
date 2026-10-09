@@ -1,20 +1,21 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
 import { authState, clearAuth } from '../stores/auth'
+import { notifyState, loadNotifications, clearNotifications, markNoticeRead, markAllRead } from '../stores/notifications'
 import { adminState } from '../stores/admin'
 import { roleLabel } from '../utils/format'
 import logoUrl from '../assets/logo.svg'
 
 const router = useRouter()
 const route = useRoute()
-const notifications = ref([])
 const showNotify = ref(false)
+const navOpen = ref(false)
 
 const isLoggedIn = computed(() => Boolean(authState.token))
 const isAdmin = computed(() => authState.user?.role === 'admin')
-const unreadCount = computed(() => notifications.value.filter((n) => !n.read).length)
+const unreadCount = computed(() => notifyState.items.filter((n) => !n.read).length)
 const roleText = computed(() => roleLabel(authState.user?.role))
 const userLabel = computed(
   () => authState.user?.name || authState.user?.username || '未登录'
@@ -43,16 +44,12 @@ function goProfile() {
   router.push('/profile')
 }
 
-async function loadNotifications() {
+async function refreshNotifications() {
   if (!isLoggedIn.value) {
-    notifications.value = []
+    clearNotifications()
     return
   }
-  try {
-    notifications.value = await api.get('/notifications')
-  } catch {
-    notifications.value = []
-  }
+  await loadNotifications()
 }
 
 async function loadAdminBadge() {
@@ -70,39 +67,64 @@ async function loadAdminBadge() {
 
 async function openNotice(n) {
   showNotify.value = false
+  if (!n.read) await markNoticeRead(n)
   if (n.link && n.link.startsWith('/') && !n.link.startsWith('//')) {
-    if (!n.read) {
-      n.read = true
-      api.post(`/notifications/${n.id}/read`).catch(() => {})
-    }
     router.push(n.link)
   }
 }
 
 async function readAll() {
-  await api.post('/notifications/read-all')
-  await loadNotifications()
+  try {
+    await markAllRead()
+  } catch {
+    /* 保持原列表 */
+  }
 }
 
 function logout() {
   clearAuth()
+  clearNotifications()
   router.push('/')
 }
 
 onMounted(() => {
-  loadNotifications()
+  refreshNotifications()
   loadAdminBadge()
 })
 watch(() => authState.token, () => {
-  loadNotifications()
+  refreshNotifications()
   loadAdminBadge()
 })
 watch(isAdmin, loadAdminBadge)
+watch(() => route.fullPath, () => {
+  navOpen.value = false
+})
+watch(navOpen, (open) => {
+  document.body.style.overflow = open ? 'hidden' : ''
+})
+onUnmounted(() => {
+  document.body.style.overflow = ''
+})
 </script>
 
 <template>
-  <aside class="side-nav">
+  <div class="app-nav">
+    <header class="mobile-bar">
+      <button
+        type="button"
+        class="nav-toggle"
+        :aria-expanded="navOpen ? 'true' : 'false'"
+        aria-controls="side-nav"
+        @click="navOpen = !navOpen"
+      >
+        {{ navOpen ? '关闭' : '菜单' }}
+      </button>
+      <router-link to="/" class="mobile-brand">企业AI能力平台</router-link>
+    </header>
+    <div v-if="navOpen" class="nav-scrim" @click="navOpen = false"></div>
+  <aside id="side-nav" class="side-nav" :class="{ open: navOpen }">
     <div class="side-top">
+      <button type="button" class="nav-close" aria-label="关闭菜单" @click="navOpen = false">关闭</button>
       <router-link to="/" class="brand" title="发现 · 安装 · 发布 · 治理">
         <img class="brand-logo" :src="logoUrl" alt="Rosiwit" />
         <span class="brand-text">
@@ -143,7 +165,7 @@ watch(isAdmin, loadAdminBadge)
             审批中心
           </router-link>
         </template>
-        <router-link v-else to="/login" class="nav-item">登录后管理</router-link>
+        <p v-else class="nav-hint">登录后可加入和发布</p>
       </div>
 
       <div v-if="isAdmin" class="nav-group">
@@ -248,9 +270,10 @@ watch(isAdmin, loadAdminBadge)
           <strong>通知</strong>
           <button class="btn btn-sm" type="button" @click="readAll">全部已读</button>
         </div>
-        <div v-if="notifications.length === 0" class="muted mt-8">暂无通知</div>
+        <div v-if="notifyState.error" class="muted mt-8">{{ notifyState.error }}</div>
+        <div v-else-if="notifyState.items.length === 0" class="muted mt-8">暂无通知</div>
         <button
-          v-for="n in notifications"
+          v-for="n in notifyState.items"
           :key="n.id"
           type="button"
           class="notify-item"
@@ -263,15 +286,23 @@ watch(isAdmin, loadAdminBadge)
       </div>
     </div>
   </aside>
+  </div>
 </template>
 
 <style scoped>
-.side-nav {
+.app-nav {
   width: 232px;
   flex: none;
   height: 100vh;
   position: sticky;
   top: 0;
+}
+.mobile-bar,
+.nav-scrim,
+.nav-close { display: none; }
+.side-nav {
+  width: 100%;
+  height: 100%;
   display: flex;
   flex-direction: column;
   background: #fff;
@@ -304,6 +335,13 @@ watch(isAdmin, loadAdminBadge)
   flex: 1;
   overflow: auto;
   padding: 4px 10px 16px;
+}
+.nav-hint {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
 }
 .nav-group { margin-top: 14px; }
 .nav-label {
@@ -450,14 +488,68 @@ watch(isAdmin, loadAdminBadge)
 }
 .notify-item.link { cursor: pointer; }
 .notify-item.link:hover { color: var(--primary); }
-.notify-item.unread { color: var(--text); }
+.notify-item.unread { font-weight: 650; border-left: 3px solid var(--primary); padding-left: 8px; }
 .notify-item:last-child { border-bottom: none; }
 .btn-block { width: 100%; justify-content: center; }
 .guest-actions { display: flex; flex-direction: column; }
 .mt-8 { margin-top: 8px; }
 
 @media (max-width: 900px) {
-  .side-nav { width: 196px; }
-  .brand-text small { display: none; }
+  .app-nav {
+    width: 100%;
+    height: auto;
+    position: static;
+  }
+  .mobile-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: 52px;
+    padding: 0 12px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 45;
+  }
+  .nav-toggle,
+  .nav-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border-strong);
+    background: var(--panel);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .mobile-brand {
+    color: var(--text);
+    font-weight: 700;
+    font-size: 14px;
+  }
+  .nav-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: var(--overlay);
+    z-index: 60;
+  }
+  .side-nav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: min(280px, 86vw);
+    height: 100vh;
+    transform: translateX(-105%);
+    transition: transform .2s ease;
+    z-index: 70;
+    box-shadow: var(--shadow-lg);
+  }
+  .side-nav.open { transform: none; }
+  .nav-close { margin: 0 0 8px auto; }
+  .side-top { display: flex; flex-direction: column; }
 }
 </style>

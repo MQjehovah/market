@@ -17,6 +17,21 @@ def test_tokenize_keeps_phrase_and_bigrams():
     assert "理工" in terms
 
 
+def test_function_word_bigrams_do_not_match():
+    from types import SimpleNamespace
+
+    cap = SimpleNamespace(
+        name="subagent",
+        category="",
+        tags=[],
+        description="子代理工具。有的任务可以拆开，不会自动释放。",
+        readme_md="通过 session_id 可以复用",
+    )
+    score, matched = score_capability(cap, tokenize_query("zzz不会有的词xyz"))
+    assert score == 0
+    assert matched == []
+
+
 def test_score_prefers_name_over_description():
     from types import SimpleNamespace
 

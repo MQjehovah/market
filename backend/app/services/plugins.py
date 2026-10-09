@@ -1019,6 +1019,9 @@ async def cascade_plugin_components(
                 await delete_capability_row(db, row, commit=False)
             elif row.status in ("published", "deprecated"):
                 row.status = "deprecated"
+                schema = dict(row.input_schema or {})
+                if schema.pop("parent_plugin_id", None) is not None:
+                    row.input_schema = schema
         elif action == "deprecate":
             if row.status == "published":
                 row.status = "deprecated"

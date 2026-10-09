@@ -36,7 +36,7 @@ async def create_service_token(
     expires_days: int | None = 365,
     user_id: str | None = None,
 ) -> tuple[ServiceToken, str]:
-    cleaned = [s.strip() for s in (scopes or ["runtime", "gateway", "sync"]) if s.strip()]
+    cleaned = [s.strip() for s in (scopes or ["gateway", "sync"]) if s.strip()]
     bad = [s for s in cleaned if s not in ALLOWED_SCOPES]
     if bad:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"未知 scope: {', '.join(bad)}")
@@ -153,6 +153,7 @@ async def revoke_service_token(db: AsyncSession, token_id: str) -> ServiceToken:
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "服务令牌不存在")
     row.revoked = True
+    row.revoked_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.commit()
     await db.refresh(row)
     return row

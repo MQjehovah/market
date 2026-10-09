@@ -53,6 +53,7 @@ async def build_stats(db: AsyncSession, user: User, scope: str = "all") -> Stats
                 {
                     "id": cap.id,
                     "name": cap.name,
+                    "display_name": (getattr(cap, "display_name", None) or "").strip(),
                     "version": cap.version,
                     "type": cap.type,
                     "count": count,

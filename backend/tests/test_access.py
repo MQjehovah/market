@@ -205,8 +205,8 @@ async def test_admin_only_capability(client, publisher_headers, admin_headers, u
 @pytest.mark.asyncio
 async def test_restricted_whitelist_capability(client, publisher_headers, admin_headers, user_headers):
     name = "whitelist-tool"
-    # 由管理员创建（作者=admin），发布者是非作者、非白名单用户
-    await _publish_capability(client, admin_headers, admin_headers, name, "tool", _tool_zip(name))
+    # 作者=publisher（管理员审核，不可自审）；白名单用户=user，非白名单=另建新账号
+    await _publish_capability(client, publisher_headers, admin_headers, name, "tool", _tool_zip(name))
     r = await client.get("/api/capabilities", params={"q": name})
     cap_id = r.json()["items"][0]["id"]
     await _set_access(client, admin_headers, cap_id, "restricted", ["user"])
@@ -225,13 +225,30 @@ async def test_restricted_whitelist_capability(client, publisher_headers, admin_
 
     # 非白名单、非作者的用户：订阅即被拒，调用也无权限
     r = await client.post(
-        "/api/my/capabilities", headers=publisher_headers, json={"capability_id": cap_id}
+        "/api/admin/users",
+        headers=admin_headers,
+        json={
+            "username": "wl-outsider",
+            "email": "wl-outsider@example.com",
+            "password": "secret123",
+            "role": "user",
+        },
+    )
+    assert r.status_code == 201, r.text
+    r = await client.post(
+        "/api/auth/login", json={"username": "wl-outsider", "password": "secret123"}
+    )
+    assert r.status_code == 200, r.text
+    outsider_headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+    r = await client.post(
+        "/api/my/capabilities", headers=outsider_headers, json={"capability_id": cap_id}
     )
     assert r.status_code == 403
     assert "白名单" in r.json()["detail"]
     r = await client.post(
         f"/api/runtime/tools/{name}/invoke",
-        headers=publisher_headers,
+        headers=outsider_headers,
         json={"params": {"text": "hi"}},
     )
     assert r.status_code == 403

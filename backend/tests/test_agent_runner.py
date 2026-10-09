@@ -50,11 +50,18 @@ async def test_runtime_task_real_llm(client, publisher_headers, admin_headers, m
         client, publisher_headers, admin_headers, persona, "agent", _agent_zip(persona)
     )
 
+    seen = {}
+
     async def fake_chat(messages, tools):
+        seen["ctx"] = agent_runner._llm_ctx.get()
         return {"choices": [{"message": {"role": "assistant", "content": "真实回答：你好"}}]}
 
     monkeypatch.setattr(agent_runner, "is_llm_configured", lambda: True)
     monkeypatch.setattr(agent_runner, "_chat_completion", fake_chat)
+    monkeypatch.setattr(
+        "app.services.router_key.personal_gateway_credentials",
+        lambda user: ("http://gw/v1", "sk-test", "model"),
+    )
 
     r = await client.post(
         f"/api/runtime/agents/{persona}/tasks",
@@ -67,6 +74,7 @@ async def test_runtime_task_real_llm(client, publisher_headers, admin_headers, m
     assert body["output"] == "真实回答：你好"
     assert body["agent"] == persona
     assert body["tool_calls"] == 0
+    assert seen["ctx"] == ("http://gw/v1", "sk-test", "model")
 
 
 @pytest.mark.asyncio
@@ -105,6 +113,10 @@ async def test_agent_loop_executes_tool_calls(client, publisher_headers, admin_h
 
     monkeypatch.setattr(agent_runner, "is_llm_configured", lambda: True)
     monkeypatch.setattr(agent_runner, "_chat_completion", fake_chat)
+    monkeypatch.setattr(
+        "app.services.router_key.personal_gateway_credentials",
+        lambda user: ("http://gw/v1", "sk-test", "model"),
+    )
 
     r = await client.post(
         f"/api/runtime/agents/{persona}/tasks",
@@ -202,6 +214,10 @@ async def test_agent_skill_tool_activation(client, publisher_headers, admin_head
 
     monkeypatch.setattr(agent_runner, "is_llm_configured", lambda: True)
     monkeypatch.setattr(agent_runner, "_chat_completion", fake_chat)
+    monkeypatch.setattr(
+        "app.services.router_key.personal_gateway_credentials",
+        lambda user: ("http://gw/v1", "sk-test", "model"),
+    )
 
     r = await client.post(
         f"/api/runtime/agents/{persona}/tasks",

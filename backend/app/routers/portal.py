@@ -558,6 +558,15 @@ async def scopes_meta():
     return {"scopes": scope_catalog()}
 
 
+_TAG_NOISE = {
+    "plugin-component",
+    "agent", "agents", "skill", "skills", "mcp", "plugin", "plugins",
+    "tool", "tools", "workflow", "hook", "hooks", "command", "rule",
+    "技能", "专家", "连接器", "能力编排", "编排函数", "能力包", "规则", "命令",
+    "迁移", "内置", "内置工具", "persona", "安装包", "示例",
+}
+
+
 @router.get("/meta/tags", response_model=TagsMetaOut)
 async def tags_meta(db: DbSession):
     """已上架且 internal/public 可见能力的标签聚合 Top 30（过滤 plugin-component）。"""
@@ -573,7 +582,7 @@ async def tags_meta(db: DbSession):
     for tags in rows:
         for item in tags or []:
             name = str(item).strip()
-            if name and name != "plugin-component":
+            if name and name.lower() not in _TAG_NOISE and name not in _TAG_NOISE:
                 counter[name] += 1
     top = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))[:30]
     return TagsMetaOut(tags=[name for name, _count in top])
@@ -611,7 +620,9 @@ async def capability_detail(cap_id: str, db: DbSession, user: OptionalUser):
         out.used_by = await find_used_by(db, cap)
     parent_id = (cap.input_schema or {}).get("parent_plugin_id")
     if parent_id:
-        out.parent_plugin_id = str(parent_id)
+        parent = next((c for c in visible if str(c.id) == str(parent_id)), None)
+        if parent is not None:
+            out.parent_plugin_id = str(parent.id)
     return out
 
 

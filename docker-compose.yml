@@ -44,7 +44,10 @@ services:
       - ARTIFACT_DIR=${ARTIFACT_DIR:-./data/artifacts}
       - LLM_BASE_URL=${LLM_BASE_URL:-}
       - LLM_API_KEY=${LLM_API_KEY:-}
-      - LLM_MODEL=${LLM_MODEL:-}
+      - LLM_MODEL=${LLM_MODEL:-deepseek-flash}
+      # 与桌面端 routerAdminUrl / routerUrl 一致。网关根带 /v1，因为市场直接请求 /chat/completions。
+      - ROUTER_ADMIN_URL=${ROUTER_ADMIN_URL:-https://ai.xzrobot.com/router}
+      - ROUTER_BASE_URL=${ROUTER_BASE_URL:-https://ai.xzrobot.com/router/v1}
       - AGENT_MAX_ITERATIONS=${AGENT_MAX_ITERATIONS:-10}
       - RUNTIME_ACCESS_ROLES=${RUNTIME_ACCESS_ROLES:-admin}
       # 多 worker 水平扩展(默认 1); 网关 MCP 流式会话无状态(默认 1=开, 多 worker 必需)

@@ -1,6 +1,6 @@
 <script setup>
 /**
- * 管理台「云端试用」弹出面板：从 AdminView 拆出，减轻主文件体积。
+ * 管理台「试用」弹出面板：从 AdminView 拆出，减轻主文件体积。
  */
 import { TYPE_LABELS } from '../utils/format'
 
@@ -28,7 +28,7 @@ function onName(e) {
       :class="{ 'btn-primary': show }"
       @click="emit('update:show', !show)"
     >
-      云端试用
+      试用
     </button>
     <div v-if="show" class="trial-pop panel">
       <div class="muted" style="font-size: 12px; margin-bottom: 10px">

@@ -326,6 +326,10 @@ class CapabilityOut(CapabilityBase):
     # 桌面消费投影；plugin 的已发布子能力（与 input_schema.components 同源）
     consumers: dict[str, Any] = Field(default_factory=dict)
     components: list[dict[str, Any]] = Field(default_factory=list)
+    # 最近一次「提交审核」时间；治理队列用它，而不是会随改包变化的 updated_at
+    submitted_at: datetime | None = None
+    # 同名同类型当前已上架版本；审新版本时用来提示通过后旧版会弃用
+    live_version: str = ""
 
 
 class CapabilityPage(BaseModel):
@@ -460,7 +464,7 @@ class CapabilitySecretsOut(BaseModel):
 
 class ServiceTokenCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
-    scopes: list[str] = Field(default_factory=lambda: ["runtime", "gateway", "sync"])
+    scopes: list[str] = Field(default_factory=lambda: ["gateway", "sync"])
     expires_days: int | None = Field(default=365, ge=1, le=3650)
     # 绑定已有用户；留空则自动创建 svc_<slug> 服务账号
     user_id: str | None = None
@@ -478,6 +482,7 @@ class ServiceTokenOut(BaseModel):
     expires_at: datetime | None = None
     last_used_at: datetime | None = None
     revoked: bool = False
+    revoked_at: datetime | None = None
     created_by: str
     created_at: datetime
 
@@ -571,6 +576,7 @@ class AgentBindingOut(BaseModel):
 
 class WorkflowCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
+    display_name: str = Field(default="", max_length=255)
     description: str = Field(default="", max_length=20000)
     version: str = Field(default="0.1.0", max_length=50)
     category: str = Field(default="能力编排", max_length=100)
