@@ -521,14 +521,16 @@ async def authorize_capability_gateway(
         dist = getattr(cap, "distribution", None) or "both"
         if dist == "local":
             return None, 403, {"detail": f"能力 {cap.name} 仅支持本地分发（distribution=local）"}
-        if (getattr(cap, "binding", None) or "service") == "user":
+        from app.services.capability_secrets import is_user_bound
+
+        if is_user_bound(cap):
             # 安全边界：relay 端点按“端点级”缓存已解析配置（GatewayEndpoints.cache_config），
             # 并发会话间无法安全隔离每位调用者的用户凭据（存在跨用户复用风险），
-            # 因此用户级能力不支持网关直连，一律引导走逐请求运行时（/api/runtime/*）。
+            # 因此用户级能力（binding=user / user_only）不支持网关直连，一律引导走逐请求运行时（/api/runtime/*）。
             return None, 403, {
                 "detail": (
-                    f"能力 {cap.name} 按用户身份执行（binding=user），不支持网关直连；"
-                    "请经市场运行时以用户身份调用（/api/runtime/*，如 market_execute）"
+                    f"能力 {cap.name} 按用户身份执行（binding={getattr(cap, 'binding', None) or 'user'}），"
+                    "不支持网关直连；请经市场运行时以用户身份调用（/api/runtime/*，如 market_execute）"
                 )
             }
         try:

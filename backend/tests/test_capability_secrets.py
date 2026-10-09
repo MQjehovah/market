@@ -915,7 +915,7 @@ async def _put_user_secret(client, headers, key: str, value: str, scope: str = "
 
 @pytest.mark.asyncio
 async def test_user_binding_relay_rejected(client, publisher_headers, admin_headers, user_headers):
-    """binding=user 的能力禁止网关直连（relay），一律引导走逐请求 runtime。"""
+    """binding=user / user_only 的能力禁止网关直连（relay），一律引导走逐请求 runtime。"""
     from app.services.mcp_gateway import authorize_capability_gateway
 
     name = "用户级relay拒绝能力"
@@ -936,6 +936,16 @@ async def test_user_binding_relay_rejected(client, publisher_headers, admin_head
         assert cfg is None
         assert status_code == 403, body
         assert "binding=user" in body["detail"]
+
+    # user_only 同样禁止网关直连（平台身份无兜底）
+    await _set_binding(client, admin_headers, cap_id, "user_only")
+    for headers in (admin_headers, user_headers):
+        cfg, status_code, body = await authorize_capability_gateway(
+            _scope(headers["Authorization"]), name
+        )
+        assert cfg is None
+        assert status_code == 403, body
+        assert "binding=user_only" in body["detail"]
 
 
 @pytest.mark.asyncio
