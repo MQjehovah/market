@@ -91,7 +91,7 @@ onMounted(load)
             <tr><td class="muted">邮箱</td><td>{{ user?.email || '—' }}</td></tr>
             <tr v-if="user?.phone"><td class="muted">手机</td><td>{{ user.phone }}</td></tr>
             <tr><td class="muted">角色</td><td>{{ roleLabel(user?.role) }}</td></tr>
-            <tr><td class="muted">部门</td><td>{{ user?.department || '未填写' }}</td></tr>
+            <tr><td class="muted">部门</td><td>{{ user?.department || '—' }}</td></tr>
             <tr><td class="muted">注册时间</td><td>{{ formatDate(user?.created_at) }}</td></tr>
           </tbody>
         </table>

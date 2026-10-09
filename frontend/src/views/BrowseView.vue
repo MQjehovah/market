@@ -569,7 +569,7 @@ watch(
       </section>
       <section v-if="ratedCaps.length" class="discover-block">
         <div class="discover-head">
-          <h3>下载热榜 · 高分</h3>
+          <h3>高分能力</h3>
           <button class="btn btn-sm" type="button" @click="useSort('rating')">查看更多</button>
         </div>
         <div class="grid grid-3">

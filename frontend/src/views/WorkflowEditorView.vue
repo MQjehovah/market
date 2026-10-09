@@ -884,7 +884,13 @@ function stateLabel(state) {
         >
           {{ submitting ? '提交中…' : '提交审核' }}
         </button>
-        <button v-if="canTest" class="btn btn-sm btn-success" :disabled="running" @click="startRun">
+        <button
+          v-if="canTest"
+          class="btn btn-sm"
+          :class="{ 'btn-success': !(canEdit && meta.id && isOpenDraft(meta.status)) }"
+          :disabled="running"
+          @click="startRun"
+        >
           {{ running ? '运行中…' : '▶ 试运行' }}
         </button>
       </div>
@@ -1250,7 +1256,8 @@ function stateLabel(state) {
             <div>• 从左侧添加节点，拖拽节点底部手柄连接上下游；分支节点（条件/分类）有多个输出口</div>
             <div>• 市场能力节点引用已发布的 tool / agent / skill / mcp；连接器支持 op=call 调用工具</div>
             <div>• 变量：${input.字段} 引用入参；Dify 语法以 #node.field#（双花括号包裹）引用上游输出</div>
-            <div>• 保存后为草稿，可在上方提交审核，通过后才会上架</div>
+            <div v-if="canEdit && meta.id && isOpenDraft(meta.status)">• 保存后为草稿，可在上方提交审核，通过后才会上架</div>
+            <div v-else>• 保存后为草稿。要提交审核，请到「我的能力」操作，通过后才会上架</div>
           </div>
         </template>
       </aside>

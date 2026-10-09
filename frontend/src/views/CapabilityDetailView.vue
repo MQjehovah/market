@@ -1362,7 +1362,7 @@ async function removeIcon(confirmed = false) {
     confirmState.value = {
       kind: 'delete-icon',
       title: '删除能力头像？',
-      body: '删除后回退为类型默认图标。',
+      body: '删除后显示名称首字。',
       okText: '删除',
       danger: true
     }
@@ -2009,7 +2009,7 @@ onMounted(() => {
                   :to="{ path: '/login', query: { redirect: route.fullPath } }"
                   class="btn btn-primary"
                 >登录后试用</router-link>
-                <span v-else-if="!joined" class="muted" style="font-size: 13px">先点右上角「加入」，再试用。</span>
+                <span v-else-if="!joined" class="muted" style="font-size: 13px">先在右侧加入，再试用。</span>
               </div>
             </div>
             <p v-if="parentPluginId" class="overview-note">
@@ -2506,10 +2506,10 @@ onMounted(() => {
               <h3>版本管理</h3>
               <div class="muted" style="font-size: 12px; margin-bottom: 8px">
                 <template v-if="['published', 'deprecated'].includes(cap.status)">
-                  已发布内容请先创建新版本草稿；可在在线编辑完善后提交审核。
+                  已发布内容请先创建新版本草稿，在线编辑完善后再提交审核。
                 </template>
                 <template v-else-if="preferOnlineEdit">
-                  草稿可在在线编辑完善（保存会生成能力包）后提交审核。
+                  草稿请在线编辑完善（保存会生成能力包），再提交审核。
                 </template>
                 <template v-else>草稿需在编辑页完善内容后再提交审核。</template>
               </div>
@@ -2530,7 +2530,7 @@ onMounted(() => {
           <div v-if="isOwner || isAdmin" class="panel">
             <h3>能力头像</h3>
             <p class="muted" style="font-size: 13px; margin: 6px 0 0">
-              建议使用 1:1 图片；选择后自动居中裁剪为 512×512 上传（PNG/JPG/WebP，≤256KB）。无头像时展示类型默认图标。
+              建议使用 1:1 图片；选择后自动居中裁剪为 512×512 上传（PNG/JPG/WebP，≤256KB）。没有头像时显示名称首字。
             </p>
             <div class="flex mt-16" style="align-items: center; gap: 16px; flex-wrap: wrap">
               <img
@@ -2638,7 +2638,6 @@ onMounted(() => {
 
           <h3 class="manage-group">发布操作</h3>
             <div v-if="canSubmit || canWithdraw || canDelete || preferOnlineEdit || isAdmin" class="panel">
-            <h3>操作</h3>
             <div class="flex flex-wrap" style="gap: 8px">
               <button
                 v-if="preferOnlineEdit && !canRevise"
