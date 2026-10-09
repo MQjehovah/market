@@ -10,18 +10,23 @@ import pytest
 from test_workflow import _publish_capability
 
 
-def _mcp_zip(
-    name: str, env: dict[str, str] | None = None, user_env: list[str] | None = None
-) -> bytes:
-    """构造带 connection.json env/user_env 声明的 mcp 能力包（不需要真实可运行）。"""
+# 固定配置项（binding 只决定值来源：平台值/个人值）
+_ERP_ENV = {
+    "ERP_API_BASE_URL": "${ERP_API_BASE_URL}",
+    "ERP_USERNAME": "${ERP_USERNAME}",
+    "ERP_PASSWORD": "${ERP_PASSWORD}",
+}
+_ERP_ENV_KEYS = ["ERP_API_BASE_URL", "ERP_PASSWORD", "ERP_USERNAME"]
+
+
+def _mcp_zip(name: str, env: dict[str, str] | None = None) -> bytes:
+    """构造带 connection.json env 声明（固定配置项）的 mcp 能力包（不需要真实可运行）。"""
     conn: dict = {
         "transport": "stdio",
         "command": sys.executable,
         "args": ["implementation/server.py"],
         "env": env or {},
     }
-    if user_env:
-        conn["user_env"] = list(user_env)
     files = {
         "mcp.json": json.dumps({"name": name, "description": "平台密钥测试"}).encode("utf-8"),
         "connection.json": json.dumps(conn).encode("utf-8"),
@@ -925,7 +930,7 @@ async def test_user_binding_relay_rejected(client, publisher_headers, admin_head
         admin_headers,
         name,
         "mcp",
-        _mcp_zip(name, {"ERP_API_BASE_URL": "${ERP_API_BASE_URL}"}, user_env=["ERP_USERNAME", "ERP_PASSWORD"]),
+        _mcp_zip(name, _ERP_ENV),
     )
     await _set_binding(client, admin_headers, cap_id, "user")
 
@@ -954,14 +959,13 @@ async def test_runtime_user_binding_injects_user_env_and_fail_closed(
 ):
     """user 级能力 runtime 逐请求注入提问者凭据：缺键 403、不回退平台账号、用户值注入。"""
     name = "用户级注入能力"
-    user_keys = ["ERP_USERNAME", "ERP_PASSWORD"]
     cap_id = await _publish_capability(
         client,
         publisher_headers,
         admin_headers,
         name,
         "mcp",
-        _mcp_zip(name, {"ERP_API_BASE_URL": "${ERP_API_BASE_URL}"}, user_env=user_keys),
+        _mcp_zip(name, _ERP_ENV),
     )
     await _set_binding(client, admin_headers, cap_id, "user")
     await _set_platform_secret(client, admin_headers, cap_id, "ERP_API_BASE_URL", "https://erp.internal")
@@ -998,7 +1002,7 @@ async def test_runtime_user_binding_injects_user_env_and_fail_closed(
 
     monkeypatch.setattr("app.services.mcp_bridge.MCPBridge", _FakeBridge)
 
-    # 1) 未填任何凭据 → 403 fail-closed，提示缺失键（平台 ERP_USERNAME 不兜底）
+    # 1) 未填任何凭据 → 403 fail-closed，提示全部缺失配置项（平台 ERP_USERNAME 不兜底）
     r = await client.post(
         f"/api/runtime/mcp/{name}/call",
         headers=user_headers,
@@ -1006,9 +1010,9 @@ async def test_runtime_user_binding_injects_user_env_and_fail_closed(
     )
     assert r.status_code == 403, r.text
     detail = r.json()["detail"]
-    assert "ERP_USERNAME" in detail and "ERP_PASSWORD" in detail
+    assert "ERP_API_BASE_URL" in detail and "ERP_USERNAME" in detail and "ERP_PASSWORD" in detail
 
-    # 2) 只填一个 → 仍 403（不得用平台值补齐另一个）
+    # 2) 只填一个 → 仍 403（不得用平台值补齐其它配置项）
     await _put_user_secret(client, user_headers, "ERP_PASSWORD", "u-pass", scope=cap_id)
     r = await client.post(
         f"/api/runtime/mcp/{name}/call",
@@ -1018,15 +1022,26 @@ async def test_runtime_user_binding_injects_user_env_and_fail_closed(
     assert r.status_code == 403, r.text
     assert "ERP_USERNAME" in r.json()["detail"]
 
-    # 3) 填齐（能力域 scope）→ 200；用户值按提问者注入，平台键正常提供
+    # 3) 填齐（能力域 scope）→ 200；用户值按提问者注入，平台值仍独立保留
     await _put_user_secret(client, user_headers, "ERP_USERNAME", "u-name", scope=cap_id)
     r = await client.post(
         f"/api/runtime/mcp/{name}/call",
         headers=user_headers,
         json={"tool": "mcp_x_get", "params": {}},
     )
+    assert r.status_code == 403, r.text  # 还缺 ERP_API_BASE_URL（固定配置项之一）
+    await _put_user_secret(client, user_headers, "ERP_API_BASE_URL", "https://u-erp", scope=cap_id)
+    r = await client.post(
+        f"/api/runtime/mcp/{name}/call",
+        headers=user_headers,
+        json={"tool": "mcp_x_get", "params": {}},
+    )
     assert r.status_code == 200, r.text
-    assert captured["user_env"] == {"ERP_USERNAME": "u-name", "ERP_PASSWORD": "u-pass"}
+    assert captured["user_env"] == {
+        "ERP_API_BASE_URL": "https://u-erp",
+        "ERP_USERNAME": "u-name",
+        "ERP_PASSWORD": "u-pass",
+    }
     assert captured["env"]["ERP_API_BASE_URL"] == "https://erp.internal"
 
     # 4) 调试连接（connect）同口径：缺键 403，填齐后注入
@@ -1045,14 +1060,13 @@ async def test_user_creds_missing_marks_403_for_admin_retry(
     （X-Market-Error-Code: user_credentials_missing，agent 管理员据此重试）；
     服务令牌（平台身份，admin scope）直接用平台凭据（重试通道）。"""
     name = "个人优先平台重试能力"
-    user_keys = ["ERP_USERNAME", "ERP_PASSWORD"]
     cap_id = await _publish_capability(
         client,
         publisher_headers,
         admin_headers,
         name,
         "mcp",
-        _mcp_zip(name, {"ERP_API_BASE_URL": "${ERP_API_BASE_URL}"}, user_env=user_keys),
+        _mcp_zip(name, _ERP_ENV),
     )
     await _set_binding(client, admin_headers, cap_id, "user")
     await _set_platform_secret(client, admin_headers, cap_id, "ERP_API_BASE_URL", "https://erp.internal")
@@ -1117,11 +1131,12 @@ async def test_user_creds_missing_marks_403_for_admin_retry(
     )
     assert r.status_code == 200, r.text
     assert captured["user_env"] == {
+        "ERP_API_BASE_URL": "https://erp.internal",
         "ERP_USERNAME": "s_platform",
         "ERP_PASSWORD": "s_platform_pw",
     }
 
-    # 3) 个人凭据部分填写仍视为缺失（整体重试语义）；填齐后按个人凭据执行
+    # 3) 个人凭据部分填写仍视为缺失（整体重试语义）；填齐全部配置项后按个人凭据执行
     await _put_user_secret(client, user_headers, "ERP_USERNAME", "u-name", scope=cap_id)
     r = await client.post(
         f"/api/runtime/mcp/{name}/call",
@@ -1137,8 +1152,20 @@ async def test_user_creds_missing_marks_403_for_admin_retry(
         headers=user_headers,
         json={"tool": "mcp_x_get", "params": {}},
     )
+    assert r.status_code == 403, r.text  # 还缺 ERP_API_BASE_URL
+
+    await _put_user_secret(client, user_headers, "ERP_API_BASE_URL", "https://u-erp", scope=cap_id)
+    r = await client.post(
+        f"/api/runtime/mcp/{name}/call",
+        headers=user_headers,
+        json={"tool": "mcp_x_get", "params": {}},
+    )
     assert r.status_code == 200, r.text
-    assert captured["user_env"] == {"ERP_USERNAME": "u-name", "ERP_PASSWORD": "u-pass"}
+    assert captured["user_env"] == {
+        "ERP_API_BASE_URL": "https://u-erp",
+        "ERP_USERNAME": "u-name",
+        "ERP_PASSWORD": "u-pass",
+    }
 
     # 4) 平台密钥删除后：平台身份也 403（提示平台密钥；无个人重试标记）
     r = await client.delete(
@@ -1164,14 +1191,13 @@ async def test_user_only_binding_rejects_service_identity(
     """binding=user_only（仅用户身份）：平台身份一律 403 无兜底（即使平台密钥齐全）；
     用户缺个人凭据 403 但不带管理员重试标记（无平台可兜底）；填齐后按个人凭据执行。"""
     name = "仅用户身份能力"
-    user_keys = ["ERP_USERNAME", "ERP_PASSWORD"]
     cap_id = await _publish_capability(
         client,
         publisher_headers,
         admin_headers,
         name,
         "mcp",
-        _mcp_zip(name, {"ERP_API_BASE_URL": "${ERP_API_BASE_URL}"}, user_env=user_keys),
+        _mcp_zip(name, _ERP_ENV),
     )
     out = await _set_binding(client, admin_headers, cap_id, "user_only")
     assert out["binding"] == "user_only"
@@ -1239,16 +1265,21 @@ async def test_user_only_binding_rejects_service_identity(
     assert "配置凭据" in r.json()["detail"]
     assert r.headers.get("X-Market-Error-Code") is None
 
-    # 3) 填齐个人凭据 → 按个人身份执行
+    # 3) 填齐全部配置项 → 按个人身份执行
     await _put_user_secret(client, user_headers, "ERP_USERNAME", "u-name", scope=cap_id)
     await _put_user_secret(client, user_headers, "ERP_PASSWORD", "u-pass", scope=cap_id)
+    await _put_user_secret(client, user_headers, "ERP_API_BASE_URL", "https://u-erp", scope=cap_id)
     r = await client.post(
         f"/api/runtime/mcp/{name}/call",
         headers=user_headers,
         json={"tool": "mcp_x_get", "params": {}},
     )
     assert r.status_code == 200, r.text
-    assert captured["user_env"] == {"ERP_USERNAME": "u-name", "ERP_PASSWORD": "u-pass"}
+    assert captured["user_env"] == {
+        "ERP_API_BASE_URL": "https://u-erp",
+        "ERP_USERNAME": "u-name",
+        "ERP_PASSWORD": "u-pass",
+    }
 
 
 def test_merge_user_env_overlay_strips_and_prioritizes():
@@ -1304,7 +1335,7 @@ async def test_binding_endpoint_updates_all_versions(client, publisher_headers, 
 
 @pytest.mark.asyncio
 async def test_secrets_status_auto_user_keys(client, publisher_headers, admin_headers, user_headers):
-    """只传 capability_id 时状态接口按 user_env 声明判定；平台密钥响应带 user_env 清单。"""
+    """只传 capability_id 时状态接口按能力的固定配置项（env）判定。"""
     name = "用户级状态能力"
     cap_id = await _publish_capability(
         client,
@@ -1312,23 +1343,23 @@ async def test_secrets_status_auto_user_keys(client, publisher_headers, admin_he
         admin_headers,
         name,
         "mcp",
-        _mcp_zip(name, {"ERP_API_BASE_URL": "${ERP_API_BASE_URL}"}, user_env=["ERP_USERNAME", "ERP_PASSWORD"]),
+        _mcp_zip(name, _ERP_ENV),
     )
 
-    # 平台密钥响应：平台键与用户键分组可见
+    # 平台密钥响应：声明项即固定配置项（平台/个人共用同一清单）
     r = await client.get(f"/api/capabilities/{cap_id}/platform-secrets", headers=publisher_headers)
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["declared_env"] == ["ERP_API_BASE_URL"]
-    assert body["user_env"] == ["ERP_PASSWORD", "ERP_USERNAME"]
+    assert body["declared_env"] == _ERP_ENV_KEYS
+    assert "user_env" not in body
 
     r = await client.get(
         "/api/my/secrets/status", headers=user_headers, params={"capability_id": cap_id}
     )
     assert r.status_code == 200, r.text
     b = r.json()
-    assert b["required"] == ["ERP_PASSWORD", "ERP_USERNAME"]
-    assert b["missing"] == ["ERP_PASSWORD", "ERP_USERNAME"]
+    assert b["required"] == _ERP_ENV_KEYS
+    assert b["missing"] == _ERP_ENV_KEYS
     assert b["complete"] is False
 
     await _put_user_secret(client, user_headers, "ERP_USERNAME", "u", scope=cap_id)
@@ -1337,4 +1368,4 @@ async def test_secrets_status_auto_user_keys(client, publisher_headers, admin_he
     )
     b = r.json()
     assert b["filled"] == ["ERP_USERNAME"]
-    assert b["missing"] == ["ERP_PASSWORD"]
+    assert b["missing"] == ["ERP_API_BASE_URL", "ERP_PASSWORD"]

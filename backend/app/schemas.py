@@ -456,12 +456,10 @@ class CapabilitySecretItemOut(BaseModel):
 
 
 class CapabilitySecretsOut(BaseModel):
-    """平台密钥元数据（不含明文）+ 能力声明的 env 键。"""
+    """平台密钥元数据（不含明文）+ 能力声明的固定配置项（env）键。"""
 
     items: list[CapabilitySecretItemOut] = Field(default_factory=list)
     declared_env: list[str] = Field(default_factory=list)
-    # 用户级键（binding=user 时由每位提问者在「我的凭据」自填，逐调用注入）
-    user_env: list[str] = Field(default_factory=list)
 
 
 class ServiceTokenCreate(BaseModel):

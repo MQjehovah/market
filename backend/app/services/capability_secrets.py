@@ -134,9 +134,10 @@ async def resolve_capability_env(db: AsyncSession, name: str) -> dict[str, str]:
 
 
 def declared_env_keys(cap) -> list[str]:
-    """能力声明的环境变量名：input_schema 的 required_env/env，回退包内 connection.json env。
+    """能力声明的环境变量名（固定配置项）：input_schema 的 required_env/env，回退包内 connection.json env。
 
     与 dashboard 投影（services/dashboard_consume.py）的口径保持一致，便于前端提示。
+    binding=user/user_only 时，个人凭据键即本清单（配置项固定，平台/个人只是值来源不同）。
     """
     schema = getattr(cap, "input_schema", None) or {}
     keys: list[str] = []
@@ -160,40 +161,6 @@ def declared_env_keys(cap) -> list[str]:
         except Exception as exc:  # noqa: BLE001
             logger.debug(
                 "declared_env 读取能力包失败 cap=%s: %s", getattr(cap, "name", "?"), exc
-            )
-    return sorted(dict.fromkeys(keys))
-
-
-def _declared_keys_of(value) -> list[str]:
-    """env/user_env 声明归一化：dict 取键名，list 取元素，其余忽略。"""
-    if isinstance(value, dict):
-        return [str(k) for k in value if str(k).strip()]
-    if isinstance(value, list):
-        return [str(k) for k in value if str(k).strip()]
-    return []
-
-
-def declared_user_env_keys(cap) -> list[str]:
-    """能力声明的用户键：input_schema.user_env，回退包内 connection.json 的 user_env。
-
-    user_env 键属于提问者个人凭据（binding=user 时逐调用注入），不是平台密钥；
-    前端「我的凭据」表单与运行时缺键校验都以本清单为准。
-    """
-    schema = getattr(cap, "input_schema", None) or {}
-    keys: list[str] = []
-    if isinstance(schema, dict):
-        keys.extend(_declared_keys_of(schema.get("user_env")))
-    if not keys and getattr(cap, "type", "") == "mcp":
-        try:
-            from app.services.mcp_gateway import read_package_files
-
-            raw = read_package_files(cap).get("connection.json")
-            conn = json.loads(raw.decode("utf-8-sig")) if raw else {}
-            if isinstance(conn, dict):
-                keys.extend(_declared_keys_of(conn.get("user_env")))
-        except Exception as exc:  # noqa: BLE001
-            logger.debug(
-                "declared user_env 读取能力包失败 cap=%s: %s", getattr(cap, "name", "?"), exc
             )
     return sorted(dict.fromkeys(keys))
 
@@ -236,10 +203,10 @@ async def resolve_user_bound_env(
 ) -> tuple[dict[str, str], list[str]]:
     """解析 user 级能力的**个人**凭据，返回 ``(env, missing_keys)``。
 
-    missing 非空即 fail-closed（由调用方决定提示/管理员重试）；能力未声明 user_env
-    时返回空集合（无个人凭据需求）。
+    missing 非空即 fail-closed（由调用方决定提示/管理员重试）；能力未声明配置项时
+    返回空集合（无个人凭据需求）。
     """
-    keys = declared_user_env_keys(cap)
+    keys = declared_env_keys(cap)
     if not keys:
         return {}, []
     env = await resolve_user_env(db, user_id, capability_id=cap.id, keys=keys)
@@ -260,7 +227,7 @@ async def resolve_user_bound_env_for(
     - **服务令牌**（平台身份）→ 直接用平台凭据（缺平台键即计入 missing）；
     - **用户令牌** → 个人凭据，缺任一键即计入 missing（由调用方 fail-closed）。
     """
-    keys = declared_user_env_keys(cap)
+    keys = declared_env_keys(cap)
     if not keys:
         return {}, []
     if is_service_identity(user):

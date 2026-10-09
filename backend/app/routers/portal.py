@@ -52,7 +52,6 @@ from app.services.capability_icons import (
 from app.services.capability_secrets import (
     canonical_capability_author_id,
     declared_env_keys,
-    declared_user_env_keys,
     delete_capability_secret,
     list_capability_secrets,
     upsert_capability_secrets_bulk,
@@ -905,7 +904,6 @@ async def _platform_secrets_out(db: DbSession, cap: Capability) -> CapabilitySec
             for row in rows
         ],
         declared_env=declared_env_keys(cap),
-        user_env=declared_user_env_keys(cap),
     )
 
 

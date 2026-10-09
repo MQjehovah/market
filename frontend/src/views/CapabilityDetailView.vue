@@ -849,20 +849,23 @@ const bindingLabel = computed(
     ({ service: '平台身份', user: '用户+平台', user_only: '仅用户' })[currentBinding.value] || '平台身份'
 )
 
-/** 该档位是否需要个人凭据（校验是否已声明用户键） */
-function needsUserEnv(binding) {
+/** 该档位是否使用个人值（切换前校验：能力须声明配置项） */
+function needsPersonalConfig(binding) {
   return binding === 'user' || binding === 'user_only'
 }
 
-/** 能力声明的用户键：优先平台密钥接口的 user_env（含 connection.json 回退），否则取 input_schema.user_env */
-const declaredUserEnvKeys = computed(() => {
-  const fromPlatform = platformSecrets.value?.user_env
+/** 能力的固定配置项键（env/required_env）：个人凭据填写与切换校验以它为准 */
+const declaredConfigKeys = computed(() => {
+  const fromPlatform = platformSecrets.value?.declared_env
   if (Array.isArray(fromPlatform) && fromPlatform.length) {
     return fromPlatform.map((k) => String(k).trim()).filter(Boolean)
   }
-  const keys = cap.value?.input_schema?.user_env
-  if (Array.isArray(keys)) return keys.map((k) => String(k).trim()).filter(Boolean)
-  return []
+  const schema = cap.value?.input_schema
+  if (!schema) return []
+  const keys = []
+  if (Array.isArray(schema.required_env)) keys.push(...schema.required_env)
+  if (schema.env && typeof schema.env === 'object') keys.push(...Object.keys(schema.env))
+  return [...new Set(keys.map((k) => String(k).trim()).filter(Boolean))]
 })
 
 async function saveBinding() {
@@ -875,9 +878,9 @@ async function saveBinding() {
     bindingNotice.value = '执行身份未变化'
     return
   }
-  if (needsUserEnv(next) && !declaredUserEnvKeys.value.length) {
+  if (needsPersonalConfig(next) && !declaredConfigKeys.value.length) {
     bindingError.value =
-      '该能力未声明用户键（user_env）：切换到该档位后不会要求个人凭据，且平台轨会跳过它。建议先在发布包 connection.json 声明 user_env 并重新发布，再切换。'
+      '该能力未声明配置项（env）：切换到该档位后没有可填的个人配置，且平台轨会跳过它。建议先在发布包 connection.json 声明 env 项并重新发布，再切换。'
     return
   }
   bindingSaving.value = true
@@ -2289,11 +2292,11 @@ onMounted(() => {
                   <span class="muted" style="font-size: 12px">当前：{{ bindingLabel }}</span>
                 </div>
                 <p
-                  v-if="needsUserEnv(bindingDraft) && !declaredUserEnvKeys.length"
+                  v-if="needsPersonalConfig(bindingDraft) && !declaredConfigKeys.length"
                   class="muted"
                   style="font-size: 12px; margin: 8px 0 0; color: #c45656"
                 >
-                  该能力未声明用户键（user_env），切换后不会要求个人凭据（建议先补声明再切换）。
+                  该能力未声明配置项（env），切换后没有可填的个人配置（建议先补声明再切换）。
                 </p>
                 <div class="flex" style="gap: 8px; margin-top: 12px; flex-wrap: wrap">
                   <button class="btn btn-primary btn-sm" type="button" :disabled="bindingSaving" @click="saveBinding">
