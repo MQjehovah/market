@@ -214,7 +214,12 @@ class InstallPolicyUpdate(BaseModel):
 
 
 class BindingUpdate(BaseModel):
-    """执行身份绑定：user=按提问者（当前用户 token）执行 / service=服务身份。"""
+    """执行身份绑定：user=按提问者（当前用户 token）执行 / service=服务身份。
+
+    user 级凭据：用户令牌按个人凭据执行（缺则 403 + X-Market-Error-Code:
+    user_credentials_missing，agent 侧管理员据此以平台身份重试一次）；
+    服务令牌（平台身份）直接用平台凭据；普通用户缺个人凭据一律拒绝（fail-closed）。
+    """
 
     binding: Literal["user", "service"]
 
@@ -449,6 +454,8 @@ class CapabilitySecretsOut(BaseModel):
 
     items: list[CapabilitySecretItemOut] = Field(default_factory=list)
     declared_env: list[str] = Field(default_factory=list)
+    # 用户级键（binding=user 时由每位提问者在「我的凭据」自填，逐调用注入）
+    user_env: list[str] = Field(default_factory=list)
 
 
 class ServiceTokenCreate(BaseModel):

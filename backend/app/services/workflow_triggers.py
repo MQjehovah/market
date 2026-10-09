@@ -27,6 +27,7 @@ logger = logging.getLogger("market.workflow_triggers")
 
 _STATE: dict[str, str] = {}
 _task: asyncio.Task | None = None
+_stop: asyncio.Event | None = None
 
 
 def _state_path() -> str:
@@ -236,10 +237,12 @@ async def _run_due() -> int:
 
 
 def start_scheduler() -> None:
-    global _task
+    global _task, _stop
     if _task is not None:
         return
     _load_state()
+    stop = asyncio.Event()
+    _stop = stop
 
     async def _loop() -> None:
         while True:
@@ -247,14 +250,37 @@ def start_scheduler() -> None:
                 await _run_due()
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"[sched] 调度循环异常: {e}")
-            await asyncio.sleep(60)
+            try:
+                # 可中断等待：收到停止信号立即退出，避免固定 sleep(60) 拖慢关闭
+                await asyncio.wait_for(stop.wait(), timeout=60)
+                return
+            except asyncio.TimeoutError:
+                continue
 
     _task = asyncio.create_task(_loop())
     logger.info("[sched] 工作流定时触发器已启动（每 60s 扫描）")
 
 
-def stop_scheduler() -> None:
-    global _task
-    if _task is not None:
-        _task.cancel()
-        _task = None
+async def stop_scheduler(timeout: float = 5.0) -> None:
+    """优雅停止调度循环：先让当前一轮扫描跑完再退出（不打断进行中的 DB 操作）。
+
+    直接 cancel 正在执行 DB 查询的任务会让 SQLAlchemy greenlet 清理与 aiosqlite
+    连接生命周期相撞，留下无法完成的 Future 卡死事件循环关闭（测试 teardown 曾因
+    此永久挂起）；仅在超时后兜底 cancel。
+    """
+    global _task, _stop
+    task, _task = _task, None
+    stop, _stop = _stop, None
+    if task is None:
+        return
+    if stop is not None:
+        stop.set()
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout)
+    except asyncio.TimeoutError:
+        logger.warning("[sched] 停止超时，强制取消定时任务")
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass

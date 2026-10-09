@@ -62,7 +62,7 @@ async def test_runtime_task_real_llm(client, publisher_headers, admin_headers, m
         json={"task": "打个招呼"},
     )
     assert r.status_code == 200, r.text
-    body = r.json()
+    body = r.json()["result"]
     assert body["mode"] == "llm"
     assert body["output"] == "真实回答：你好"
     assert body["agent"] == persona
@@ -112,7 +112,7 @@ async def test_agent_loop_executes_tool_calls(client, publisher_headers, admin_h
         json={"task": "调用工具"},
     )
     assert r.status_code == 200, r.text
-    body = r.json()
+    body = r.json()["result"]
     assert body["mode"] == "llm"
     assert body["output"] == "工具结果已处理"
     assert body["tool_calls"] == 1
@@ -209,7 +209,7 @@ async def test_agent_skill_tool_activation(client, publisher_headers, admin_head
         json={"task": "做一次开发"},
     )
     assert r.status_code == 200, r.text
-    body = r.json()
+    body = r.json()["result"]
     assert body["tool_calls"] == 1
     assert body["output"] == "已按技能完成"
     # 执行轨迹：包含 skill 调用步骤与返回结果步骤

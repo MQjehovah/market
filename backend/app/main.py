@@ -57,7 +57,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        stop_scheduler()
+        await stop_scheduler()
         await gateway_registry.shutdown()
 
 

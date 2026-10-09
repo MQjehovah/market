@@ -51,10 +51,10 @@ async def test_mcp_debug_connect_and_call(client, publisher_headers, admin_heade
         client, publisher_headers, admin_headers, name, "mcp", _mcp_zip(name)
     )
 
-    # 真实连接并发现工具
+    # 真实连接并发现工具（runtime 统一信封：内层 result）
     r = await client.post(f"/api/runtime/mcp/{name}/connect", headers=admin_headers)
     assert r.status_code == 200, r.text
-    body = r.json()
+    body = r.json()["result"]
     assert body["connected"] is True
     assert body["error"] == ""
     assert len(body["tools"]) == 1
@@ -69,7 +69,7 @@ async def test_mcp_debug_connect_and_call(client, publisher_headers, admin_heade
         json={"tool": tool["name"], "params": {"text": "hi"}},
     )
     assert r.status_code == 200, r.text
-    assert r.json()["result"] == "echo:hi"
+    assert r.json()["result"]["result"] == "echo:hi"
 
     # 不存在的工具返回 404 并提示可用工具
     r = await client.post(

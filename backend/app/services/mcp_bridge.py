@@ -47,13 +47,17 @@ class MCPBridge:
         self._env = dict(env or {})
 
     async def connect_capability(
-        self, mcp_name: str, cap, env: dict[str, str] | None = None
+        self, mcp_name: str, cap, env: dict[str, str] | None = None,
+        user_env: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """连接一个 MCP 能力包，返回连接结果信息。
 
         env：本次连接的平台密钥覆盖层（能力级），优先于实例级 env。
+        user_env：用户级凭据（binding=user 时由调用方按提问者解析）：同名键先从
+            包内 env 声明中剔除（禁止包内字面量/平台值兜底），再作为覆盖层注入
+            占位符解析与 stdio env。
         """
-        from app.services.secret_vault import attach_platform_env
+        from app.services.secret_vault import attach_platform_env, merge_user_env_overlay
 
         files = _read_package(cap)
         raw = files.get("connection.json")
@@ -118,7 +122,12 @@ class MCPBridge:
             except Exception as exc:  # noqa: BLE001 — HTTPException 等
                 detail = getattr(exc, "detail", str(exc))
                 return {"name": mcp_name, "connected": False, "error": f"出网校验失败: {detail}"}
-        config = attach_platform_env(dict(config), {**self._env, **(env or {})})
+        merged_env, overlay = merge_user_env_overlay(
+            config.get("env"), {**self._env, **(env or {})}, user_env
+        )
+        config = dict(config)
+        config["env"] = merged_env
+        config = attach_platform_env(config, overlay)
         try:
             async with asyncio.timeout(CONNECT_TIMEOUT):
                 session = await self._stack.enter_async_context(

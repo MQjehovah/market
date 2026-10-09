@@ -30,22 +30,19 @@ from app.services.marketplace import (
     resolve_capability,
 )
 from app.services.capabilities import to_capability_out
-from app.services.service_tokens import is_service_token
+from app.services.service_tokens import is_service_token, require_service_scope
 
 router = APIRouter(prefix="/api/runtime", tags=["runtime"])
 
 
 async def current_runtime_user(user: CurrentUser) -> User:
-    """运行时接口仅接受用户令牌（Bearer）；服务令牌等 M2M 身份不可调用。
+    """运行时接口身份准入：用户令牌本人，或带 ``admin`` scope 的服务令牌。
 
-    身份即 token 用户本人；授权走 ``require_runtime_access``（作者 / 管理员 /
-    已加入「我的能力」且通过统一访问谓词）。
+    服务令牌代表**平台身份**（agent 管理员个人凭据缺失后的重试用通道，或本就无
+    市场用户令牌的系统任务）。普通用户令牌一律按提问者身份执行（个人凭据 fail-closed）。
     """
     if is_service_token(user):
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            "运行时接口仅接受用户令牌（Bearer），服务令牌不可调用",
-        )
+        require_service_scope(user, "admin")
     return user
 
 
@@ -146,7 +143,10 @@ async def install(name: str, data: RuntimeInstallRequest, db: DbSession, user: R
 @router.post("/mcp/{name}/connect")
 async def mcp_connect(name: str, db: DbSession, user: RuntimeUser):
     """真实连接 MCP 能力包并发现其工具（调试/试用用）。"""
-    from app.services.capability_secrets import resolve_capability_env
+    from app.services.capability_secrets import (
+        require_user_bound_env,
+        resolve_capability_env,
+    )
     from app.services.mcp_bridge import MCPBridge
     from app.services.mcp_gateway import load_gateway_config_by_name
 
@@ -160,11 +160,16 @@ async def mcp_connect(name: str, db: DbSession, user: RuntimeUser):
     await require_runtime_access(user, cap, db)
     if cap.type != "mcp":
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{name} 不是连接器能力")
-    # 平台轨统一注入平台密钥（按能力名，与调用者身份无关）
+    # 平台轨统一注入平台密钥（按能力名，与调用者身份无关）；user 级能力按身份解析：
+    # 用户令牌 → 个人凭据（缺则 403 + 机器可读标记，agent 管理员据此以平台身份重试）；
+    # 服务令牌（平台身份）→ 直接用平台凭据
     platform_env = await resolve_capability_env(db, cap.name)
+    user_env: dict[str, str] = {}
+    if (getattr(cap, "binding", None) or "service") == "user":
+        user_env = await require_user_bound_env(db, cap, user, platform_env=platform_env)
     bridge = MCPBridge(gateway_loader=_gateway_loader, env=platform_env)
     try:
-        info = await bridge.connect_capability(name, cap)
+        info = await bridge.connect_capability(name, cap, user_env=user_env)
         await record_usage(db, user, cap, "mcp_connect", {"tools": len(bridge.tool_defs)})
         await db.commit()
         await db.refresh(cap)
@@ -181,7 +186,7 @@ async def mcp_connect(name: str, db: DbSession, user: RuntimeUser):
                 }
                   for t in bridge.tool_defs
               ],
-            "secrets_injected": sorted(platform_env.keys()),
+            "secrets_injected": sorted({**platform_env, **user_env}.keys()),
         })
     finally:
         await bridge.close()
@@ -196,7 +201,10 @@ async def mcp_call(
     x_conversation_id: str | None = Header(default=None, alias="X-Conversation-Id"),
 ):
     """调用 MCP 能力包暴露的某个工具（调试/试用用，每次调用独立连接）。"""
-    from app.services.capability_secrets import resolve_capability_env
+    from app.services.capability_secrets import (
+        require_user_bound_env,
+        resolve_capability_env,
+    )
     from app.services.mcp_bridge import MCPBridge
     from app.services.mcp_gateway import load_gateway_config_by_name
 
@@ -211,13 +219,18 @@ async def mcp_call(
     await require_runtime_access(user, cap, db)
     if cap.type != "mcp":
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{name} 不是连接器能力")
-    # 平台轨统一注入平台密钥（按能力名，与调用者身份无关）
+    # 平台轨统一注入平台密钥（按能力名，与调用者身份无关）；user 级能力按身份解析：
+    # 用户令牌 → 个人凭据（缺则 403 + 机器可读标记，agent 管理员据此以平台身份重试）；
+    # 服务令牌（平台身份）→ 直接用平台凭据
     platform_env = await resolve_capability_env(db, cap.name)
+    user_env: dict[str, str] = {}
+    if (getattr(cap, "binding", None) or "service") == "user":
+        user_env = await require_user_bound_env(db, cap, user, platform_env=platform_env)
     bridge = MCPBridge(gateway_loader=_gateway_loader, env=platform_env)
     t0 = time.monotonic()
     result_status = "ok"
     try:
-        await bridge.connect_capability(cap.name, cap)
+        await bridge.connect_capability(cap.name, cap, user_env=user_env)
         if not bridge.has_tool(data.tool):
             raise HTTPException(
                 status.HTTP_404_NOT_FOUND,
@@ -282,7 +295,12 @@ async def health():
 
 
 @router.post("/agents/{name}/tasks", response_model=RuntimeResult)
-async def run_agent_task(name: str, data: RuntimeTaskRequest, db: DbSession, user: RuntimeUser):
+async def run_agent_task(
+    name: str,
+    data: RuntimeTaskRequest,
+    db: DbSession,
+    user: RuntimeUser,
+):
     """直接向 Agent 发送任务：LLM 已配置时真实执行（工具沙箱 + 工具调用循环），否则模拟。"""
     from app.services.agent_runner import run_agent
 

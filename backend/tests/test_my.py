@@ -67,10 +67,10 @@ async def test_owner_can_invoke_without_joining(client, publisher_headers, admin
 
 
 @pytest.mark.asyncio
-async def test_install_policy_default_on_and_required(
-    client, publisher_headers, admin_headers, user_headers
+async def test_required_policy_and_account_provisioned_defaults(
+    client, publisher_headers, admin_headers, user_headers, monkeypatch
 ):
-    """default_on 登录/拉列表时自动加入；required 禁止移除。"""
+    """账户级默认开通（新建账号时按 DEFAULT_CAPABILITIES 一次性开通）+ required 禁止移除。"""
     auto_name = "auto-join-tool"
     must_name = "must-keep-tool"
     await _publish_capability(
@@ -84,25 +84,37 @@ async def test_install_policy_default_on_and_required(
     r = await client.get("/api/capabilities", params={"q": must_name})
     must_id = r.json()["items"][0]["id"]
 
+    # 账户级默认开通：新建账号时一次性开通配置的能力（非能力属性 install_policy）
+    monkeypatch.setattr(
+        "app.services.install_policy.default_capability_names", lambda: [auto_name]
+    )
     r = await client.post(
-        f"/api/capabilities/{auto_id}/install-policy",
+        "/api/admin/users",
         headers=admin_headers,
-        json={"install_policy": "default_on"},
+        json={
+            "username": "provisioned-user",
+            "email": "provisioned-user@example.com",
+            "password": "secret123",
+            "role": "user",
+        },
+    )
+    assert r.status_code == 201, r.text
+    r = await client.post(
+        "/api/auth/login", json={"username": "provisioned-user", "password": "secret123"}
     )
     assert r.status_code == 200, r.text
+    provisioned_headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    r = await client.get("/api/my/capabilities?scope=added", headers=provisioned_headers)
+    assert r.status_code == 200
+    assert any(c["id"] == auto_id for c in r.json())
+
+    # required 仍为能力属性：可手动加入，但不可移除
     r = await client.post(
         f"/api/capabilities/{must_id}/install-policy",
         headers=admin_headers,
         json={"install_policy": "required"},
     )
     assert r.status_code == 200, r.text
-
-    # 拉「我的能力」会同步 default_on
-    r = await client.get("/api/my/capabilities?scope=added", headers=user_headers)
-    assert r.status_code == 200
-    assert any(c["id"] == auto_id for c in r.json())
-
-    # required 也可手动加入，但不可移除
     r = await client.post(
         "/api/my/capabilities", headers=user_headers, json={"capability_id": must_id}
     )
@@ -348,9 +360,9 @@ async def test_join_agent_skips_denied_dependency(
 
 @pytest.mark.asyncio
 async def test_default_on_follows_name_across_republish(
-    client, publisher_headers, admin_headers, user_headers
+    client, publisher_headers, admin_headers, monkeypatch
 ):
-    """default_on 重发布后不重复加入新版本行（订阅按能力名判定）。"""
+    """账户级默认开通按能力名判定：重发布后不重复加入新版本行。"""
     from sqlalchemy import select
 
     from app.database import SessionLocal
@@ -360,15 +372,28 @@ async def test_default_on_follows_name_across_republish(
     cap_id = await _publish_capability(
         client, publisher_headers, admin_headers, name, "tool", _tool_zip(name)
     )
+    monkeypatch.setattr(
+        "app.services.install_policy.default_capability_names", lambda: [name]
+    )
     r = await client.post(
-        f"/api/capabilities/{cap_id}/install-policy",
+        "/api/admin/users",
         headers=admin_headers,
-        json={"install_policy": "default_on"},
+        json={
+            "username": "repub-user",
+            "email": "repub-user@example.com",
+            "password": "secret123",
+            "role": "user",
+        },
+    )
+    assert r.status_code == 201, r.text
+    r = await client.post(
+        "/api/auth/login", json={"username": "repub-user", "password": "secret123"}
     )
     assert r.status_code == 200, r.text
+    repub_headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
 
-    # 首次拉列表自动加入当前版本
-    r = await client.get("/api/my/capabilities?scope=added", headers=user_headers)
+    # 开通时加入当前版本
+    r = await client.get("/api/my/capabilities?scope=added", headers=repub_headers)
     assert any(c["name"] == name for c in r.json())
 
     # 重发布 1.0.1
@@ -394,10 +419,10 @@ async def test_default_on_follows_name_across_republish(
     )
     assert r.status_code == 200, r.text
 
-    # 再次拉列表：同名已加入，不再新增新版本订阅行
-    r = await client.get("/api/my/capabilities?scope=added", headers=user_headers)
+    # 重发布后：同名已加入，不再新增新版本订阅行
+    r = await client.get("/api/my/capabilities?scope=added", headers=repub_headers)
     assert r.status_code == 200
-    r = await client.get("/api/auth/me", headers=user_headers)
+    r = await client.get("/api/auth/me", headers=repub_headers)
     uid = r.json()["id"]
     async with SessionLocal() as db:
         rows = (

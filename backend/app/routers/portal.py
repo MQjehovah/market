@@ -52,6 +52,7 @@ from app.services.capability_icons import (
 from app.services.capability_secrets import (
     canonical_capability_author_id,
     declared_env_keys,
+    declared_user_env_keys,
     delete_capability_secret,
     list_capability_secrets,
     upsert_capability_secrets_bulk,
@@ -292,7 +293,8 @@ async def task_search_capabilities(
 ):
     """按要办的事搜索：关键词打分 + 依赖/used_by 扩展，分组返回助手/技能/连接器/安装包。
 
-    可见性与「可直接调用」标记一律按当前 Bearer 用户（无 token 为匿名视角）。
+    可见性与「可直接调用」标记一律按当前 Bearer 用户（无 token 为匿名视角）；
+    服务令牌按绑定账号视角（agent 管理员无市场用户令牌时以此检索）。
     """
     query = (q or "").strip()
     if not query:
@@ -766,13 +768,21 @@ async def update_install_policy(
 async def update_binding(
     cap_id: str, data: BindingUpdate, db: DbSession, user: CurrentUser
 ):
-    """执行身份绑定：user=按提问者（当前用户 token, 走 /api/runtime/*） / service=服务身份。"""
+    """执行身份绑定：user=按提问者（当前用户 token, 走 /api/runtime/*） / service=服务身份。
+
+    能力级单选：按能力名跨版本统一生效，避免新旧版本行为分裂。
+    user 级凭据：用户令牌按个人凭据执行（缺则 403 + ``X-Market-Error-Code:
+    user_credentials_missing`` 标记，agent 侧管理员据此以平台身份重试一次）；
+    服务令牌（平台身份）直接用平台凭据。普通用户缺个人凭据则拒绝（fail-closed）。
+    """
     cap = await db.get(Capability, cap_id)
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
     if user.role != "admin" and cap.author_id != user.id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "只有作者或管理员可以设置绑定")
-    cap.binding = data.binding
+    rows = (await db.scalars(select(Capability).where(Capability.name == cap.name))).all()
+    for row in rows:
+        row.binding = data.binding
     await db.commit()
     await db.refresh(cap)
     return _to_out(cap)
@@ -884,6 +894,7 @@ async def _platform_secrets_out(db: DbSession, cap: Capability) -> CapabilitySec
             for row in rows
         ],
         declared_env=declared_env_keys(cap),
+        user_env=declared_user_env_keys(cap),
     )
 
 

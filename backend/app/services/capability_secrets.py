@@ -15,7 +15,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Capability, CapabilitySecret
 from app.services.capabilities import parse_semver
-from app.services.secret_vault import decrypt_value, encrypt_value, validate_key_name
+from app.services.secret_vault import (
+    decrypt_value,
+    encrypt_value,
+    resolve_user_env,
+    validate_key_name,
+)
 
 logger = logging.getLogger("market.capability_secrets")
 
@@ -157,3 +162,138 @@ def declared_env_keys(cap) -> list[str]:
                 "declared_env 读取能力包失败 cap=%s: %s", getattr(cap, "name", "?"), exc
             )
     return sorted(dict.fromkeys(keys))
+
+
+def _declared_keys_of(value) -> list[str]:
+    """env/user_env 声明归一化：dict 取键名，list 取元素，其余忽略。"""
+    if isinstance(value, dict):
+        return [str(k) for k in value if str(k).strip()]
+    if isinstance(value, list):
+        return [str(k) for k in value if str(k).strip()]
+    return []
+
+
+def declared_user_env_keys(cap) -> list[str]:
+    """能力声明的用户键：input_schema.user_env，回退包内 connection.json 的 user_env。
+
+    user_env 键属于提问者个人凭据（binding=user 时逐调用注入），不是平台密钥；
+    前端「我的凭据」表单与运行时缺键校验都以本清单为准。
+    """
+    schema = getattr(cap, "input_schema", None) or {}
+    keys: list[str] = []
+    if isinstance(schema, dict):
+        keys.extend(_declared_keys_of(schema.get("user_env")))
+    if not keys and getattr(cap, "type", "") == "mcp":
+        try:
+            from app.services.mcp_gateway import read_package_files
+
+            raw = read_package_files(cap).get("connection.json")
+            conn = json.loads(raw.decode("utf-8-sig")) if raw else {}
+            if isinstance(conn, dict):
+                keys.extend(_declared_keys_of(conn.get("user_env")))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "declared user_env 读取能力包失败 cap=%s: %s", getattr(cap, "name", "?"), exc
+            )
+    return sorted(dict.fromkeys(keys))
+
+
+# 「个人凭据缺失」机器可读标记（响应头）：agent 侧据此在管理员身份下用平台凭据重试。
+# 与 agent/src/tools/market_execute.py 的常量保持一致，改动需双端同步。
+USER_CREDS_MISSING_CODE = "user_credentials_missing"
+USER_CREDS_MISSING_HEADER = "X-Market-Error-Code"
+
+
+def is_user_bound(cap) -> bool:
+    """能力是否按提问者身份执行（binding=user）；默认 service（平台身份）。"""
+    return (getattr(cap, "binding", None) or "service") == "user"
+
+
+def is_service_identity(user) -> bool:
+    """调用者是否服务令牌身份（纯平台身份，无个人维度）。
+
+    使用场景：agent 管理员/系统任务以服务令牌调用 runtime（个人凭据缺失后重试、
+    或本就没有市场用户令牌时直接执行），market 直接以平台凭据执行。
+    """
+    from app.services.service_tokens import is_service_token
+
+    return is_service_token(user)
+
+
+async def resolve_user_bound_env(
+    db: AsyncSession,
+    user_id: str,
+    cap,
+) -> tuple[dict[str, str], list[str]]:
+    """解析 user 级能力的**个人**凭据，返回 ``(env, missing_keys)``。
+
+    missing 非空即 fail-closed（由调用方决定提示/管理员重试）；能力未声明 user_env
+    时返回空集合（无个人凭据需求）。
+    """
+    keys = declared_user_env_keys(cap)
+    if not keys:
+        return {}, []
+    env = await resolve_user_env(db, user_id, capability_id=cap.id, keys=keys)
+    env = {k: v for k, v in env.items() if (v or "").strip()}
+    missing = [k for k in keys if k not in env]
+    return env, missing
+
+
+async def resolve_user_bound_env_for(
+    db: AsyncSession,
+    cap,
+    user,
+    *,
+    platform_env: dict[str, str] | None = None,
+) -> tuple[dict[str, str], list[str]]:
+    """user 级能力的执行凭据（按调用者身份分流，market 不判断任何角色）。
+
+    - **服务令牌**（平台身份）→ 直接用平台凭据（缺平台键即计入 missing）；
+    - **用户令牌** → 个人凭据，缺任一键即计入 missing（由调用方 fail-closed）。
+    """
+    keys = declared_user_env_keys(cap)
+    if not keys:
+        return {}, []
+    if is_service_identity(user):
+        plat = platform_env
+        if plat is None:
+            plat = await resolve_capability_env(db, cap.name)
+        env: dict[str, str] = {}
+        for key in keys:
+            value = (plat.get(key) or "").strip()
+            if value:
+                env[key] = value
+        return env, [k for k in keys if k not in env]
+    return await resolve_user_bound_env(db, user.id, cap)
+
+
+async def require_user_bound_env(
+    db: AsyncSession,
+    cap,
+    user,
+    platform_env: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """user 级能力执行凭据（fail-closed 校验版）。
+
+    平台身份（服务令牌）缺平台密钥 → 403 提示管理员配置；
+    用户令牌缺个人凭据 → 403（带 ``X-Market-Error-Code: user_credentials_missing``
+    响应头，agent 侧管理员据此以平台身份重试一次）。
+    """
+    if platform_env is None:
+        platform_env = await resolve_capability_env(db, cap.name)
+    env, missing = await resolve_user_bound_env_for(db, cap, user, platform_env=platform_env)
+    if missing:
+        what = "、".join(missing)
+        if is_service_identity(user):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                f"该能力按平台身份执行，缺少平台密钥：{what}；"
+                "请管理员在能力详情中配置平台密钥后重试",
+            )
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            f"该能力按你的身份执行，缺少必需凭据：{what}；"
+            "请先在能力市场「我的凭据」中填写后重试",
+            headers={USER_CREDS_MISSING_HEADER: USER_CREDS_MISSING_CODE},
+        )
+    return env

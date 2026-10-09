@@ -204,17 +204,36 @@ async def run_agent(
             return None
 
     bridge = MCPBridge(gateway_loader=_gateway_loader)
-    from app.services.capability_secrets import resolve_capability_env
+    from app.services.capability_secrets import (
+        resolve_capability_env,
+        resolve_user_bound_env_for,
+    )
 
     try:
         mcp_info: list[dict[str, Any]] = []
         for m in runtime.get("mcps") or []:
             try:
                 mcp_cap = await resolve_capability(db, user, m["name"])
-                # 平台轨：注入该能力名的平台密钥（与调用者身份无关）
+                # 平台轨：注入该能力名的平台密钥（与调用者身份无关）；user 级能力
+                # 按身份取执行凭据（服务令牌→平台；用户令牌→个人凭据 fail-closed）
                 cap_env = await resolve_capability_env(db, mcp_cap.name)
+                user_env: dict[str, str] = {}
+                if (getattr(mcp_cap, "binding", None) or "service") == "user":
+                    user_env, missing = await resolve_user_bound_env_for(
+                        db, mcp_cap, user, platform_env=cap_env
+                    )
+                    if missing:
+                        mcp_info.append(
+                            {
+                                "name": m["name"],
+                                "connected": False,
+                                "error": "按用户身份执行，缺少必需凭据："
+                                + "、".join(missing),
+                            }
+                        )
+                        continue
                 mcp_info.append(
-                    await bridge.connect_capability(m["name"], mcp_cap, env=cap_env)
+                    await bridge.connect_capability(m["name"], mcp_cap, env=cap_env, user_env=user_env)
                 )
             except Exception as exc:  # noqa: BLE001
                 mcp_info.append({"name": m["name"], "connected": False, "error": str(exc)[:200]})

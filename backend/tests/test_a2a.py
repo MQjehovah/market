@@ -89,13 +89,34 @@ async def test_tasks_cancel_terminal_task(client, admin_headers):
 
 
 @pytest.mark.asyncio
-async def test_normal_user_cannot_send_a2a_task(client, user_headers):
-    """A2A 委派属于外部调用，普通用户无授权会被拒绝。"""
+async def test_non_owner_user_cannot_send_a2a_task(client, admin_headers):
+    """A2A 委派需要运行时准入：非作者且未加入「我的能力」的普通用户被拒绝。
+
+    （seed 能力的作者是内置 user 账号，作者本人天然有权限；此用例用全新非作者用户验证门禁。）
+    """
     r = await client.get("/api/capabilities", params={"q": "数字中台"})
     agent_id = r.json()["items"][0]["id"]
+
+    r = await client.post(
+        "/api/admin/users",
+        headers=admin_headers,
+        json={
+            "username": "a2a-outsider",
+            "email": "a2a-outsider@example.com",
+            "password": "secret123",
+            "role": "user",
+        },
+    )
+    assert r.status_code == 201, r.text
+    r = await client.post(
+        "/api/auth/login", json={"username": "a2a-outsider", "password": "secret123"}
+    )
+    assert r.status_code == 200, r.text
+    outsider_headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
+
     r = await client.post(
         f"/api/a2a/agents/{agent_id}/a2a",
-        headers=user_headers,
+        headers=outsider_headers,
         json={
             "jsonrpc": "2.0",
             "id": "req-denied",

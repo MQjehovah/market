@@ -12,6 +12,7 @@ from sqlalchemy.orm import joinedload
 from app.auth import hash_password
 from app.database import SessionLocal
 from app.models import Capability, User
+from app.services.install_policy import ensure_default_on_joins
 from app.services.marketplace import resolve_capability
 from app.services.visibility import is_capability_visible, visibility_condition
 from test_workflow import _publish_capability
@@ -164,11 +165,28 @@ async def test_runtime_invoke_records_usage(client, admin_headers):
 
 
 @pytest.mark.asyncio
-async def test_normal_user_cannot_invoke_runtime(client, user_headers):
-    """外部调用需授权：普通用户不能直接调用/执行能力。"""
+async def test_non_author_user_cannot_invoke_runtime(client, admin_headers):
+    """外部调用需授权：非作者且未加入「我的能力」的普通用户不能直接执行能力。"""
+    r = await client.post(
+        "/api/admin/users",
+        headers=admin_headers,
+        json={
+            "username": "rt-outsider",
+            "email": "rt-outsider@example.com",
+            "password": "secret123",
+            "role": "user",
+        },
+    )
+    assert r.status_code == 201, r.text
+    r = await client.post(
+        "/api/auth/login", json={"username": "rt-outsider", "password": "secret123"}
+    )
+    assert r.status_code == 200, r.text
+    outsider_headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
+
     r = await client.post(
         "/api/runtime/tools/%E6%96%87%E4%BB%B6%E5%93%88%E5%B8%8C%E8%AE%A1%E7%AE%97/invoke",
-        headers=user_headers,
+        headers=outsider_headers,
         json={"params": {"path": "/tmp/a.txt"}},
     )
     assert r.status_code == 403
@@ -179,27 +197,28 @@ async def test_normal_user_cannot_invoke_runtime(client, user_headers):
 async def test_mcp_discover(client, user_headers):
     r = await client.get("/api/runtime/mcp/discover", headers=user_headers)
     assert r.status_code == 200
-    names = [item["name"] for item in r.json()["discovered"]]
+    names = [item["name"] for item in r.json()["result"]["discovered"]]
     assert "PostgreSQL 连接器" in names
 
 
 @pytest.mark.asyncio
-async def test_rating_and_subscription(client, user_headers):
+async def test_rating_and_subscription(client, publisher_headers):
     r = await client.get("/api/capabilities", params={"q": "文件哈希"})
     cap_id = r.json()["items"][0]["id"]
+    # 评分：用非作者账号（作者不能给自己的能力评分）
     r = await client.post(
         f"/api/capabilities/{cap_id}/ratings",
-        headers=user_headers,
+        headers=publisher_headers,
         json={"score": 4, "comment": "不错"},
     )
     assert r.status_code == 201
 
     r = await client.post(
-        "/api/subscriptions", headers=user_headers, json={"capability_name": "文件哈希计算"}
+        "/api/subscriptions", headers=publisher_headers, json={"capability_name": "文件哈希计算"}
     )
     assert r.status_code == 201
 
-    r = await client.get("/api/notifications", headers=user_headers)
+    r = await client.get("/api/notifications", headers=publisher_headers)
     assert r.status_code == 200
 
 
@@ -251,30 +270,45 @@ async def test_visibility_private(client, publisher_headers, user_headers):
 
 @pytest.mark.asyncio
 async def test_team_visibility_resolvable_by_teammate(client):
-    """team 可见能力：同团队可解析；非同团队与匿名均 404。"""
+    """team 可见能力：与作者同团队可解析；非同团队与匿名均 404（作者本人不受限）。"""
     async with SessionLocal() as db:
+        cap = await db.scalar(select(Capability).where(Capability.visibility == "team"))
+        assert cap is not None, "seed 缺少 team 可见性能力"
+        cap_name = cap.name
+        author = await db.get(User, cap.author_id)
+        assert author is not None
+        author.team = "可见性验证团队"  # 种子作者团队可能为空；本用例内固定
+
         teammate = User(
             username="mate",
             email="mate@example.com",
             password_hash=hash_password("teammate-secret-123"),
             role="user",
-            team="中台团队",  # 与 publisher 同队
+            team="可见性验证团队",  # 与作者同队
         )
-        db.add(teammate)
+        outsider = User(
+            username="mate-outsider",
+            email="mate-outsider@example.com",
+            password_hash=hash_password("outsider-secret-123"),
+            role="user",
+            team="其他团队",
+        )
+        db.add_all([teammate, outsider])
         await db.commit()
         await db.refresh(teammate)
-        cap = await resolve_capability(db, teammate, "代码审查专家")
-        assert cap.name == "代码审查专家"
+        await db.refresh(outsider)
+        cap = await resolve_capability(db, teammate, cap_name)
+        assert cap.name == cap_name
 
     async with SessionLocal() as db:
-        outsider = await db.scalar(select(User).where(User.username == "user"))
+        outsider = await db.scalar(select(User).where(User.username == "mate-outsider"))
         with pytest.raises(HTTPException) as exc:
-            await resolve_capability(db, outsider, "代码审查专家")
+            await resolve_capability(db, outsider, cap_name)
         assert exc.value.status_code == 404
 
     async with SessionLocal() as db:
         with pytest.raises(HTTPException) as exc:
-            await resolve_capability(db, None, "代码审查专家")
+            await resolve_capability(db, None, cap_name)
         assert exc.value.status_code == 404
 
 
@@ -671,23 +705,27 @@ async def test_runtime_author_unrestricted_by_department(
 
 @pytest.mark.asyncio
 async def test_default_on_respects_access_predicate(
-    client, publisher_headers, admin_headers, user_headers
+    client, publisher_headers, admin_headers, user_headers, monkeypatch
 ):
-    """default_on 自动加入尊重访问谓词：未命中不加入，命中后自动加入。"""
+    """账户级默认开通尊重访问谓词：部门不命中不加入，命中才加入。"""
     cap_id = await _publish_tool(client, publisher_headers, admin_headers, "default-dept-tool")
-    r = await client.post(
-        f"/api/capabilities/{cap_id}/install-policy",
-        headers=admin_headers,
-        json={"install_policy": "default_on"},
-    )
-    assert r.status_code == 200, r.text
     await _set_access(client, admin_headers, cap_id, "restricted", allowed_departments=["研发部"])
+    monkeypatch.setattr(
+        "app.services.install_policy.default_capability_names", lambda: ["default-dept-tool"]
+    )
 
+    await _set_user_department("user", "非研发部")
+    async with SessionLocal() as db:
+        user_row = await db.scalar(select(User).where(User.username == "user"))
+        await ensure_default_on_joins(db, user_row)
     r = await client.get("/api/my/capabilities?scope=added", headers=user_headers)
     assert r.status_code == 200
     assert not any(c["id"] == cap_id for c in r.json())
 
     await _set_user_department("user", "研发部")
+    async with SessionLocal() as db:
+        user_row = await db.scalar(select(User).where(User.username == "user"))
+        await ensure_default_on_joins(db, user_row)
     r = await client.get("/api/my/capabilities?scope=added", headers=user_headers)
     assert r.status_code == 200
     assert any(c["id"] == cap_id for c in r.json())
@@ -695,18 +733,18 @@ async def test_default_on_respects_access_predicate(
 
 @pytest.mark.asyncio
 async def test_default_on_skips_invisible_capabilities(
-    client, publisher_headers, admin_headers, user_headers
+    client, publisher_headers, admin_headers, user_headers, monkeypatch
 ):
-    """default_on + private/team 不可见：不自动加入；同团队可见者才加入。"""
+    """账户级默认开通 + private/team 不可见：不加入；同团队可见者才加入。"""
     async with SessionLocal() as db:
         publisher = await db.scalar(select(User).where(User.username == "publisher"))
+        publisher.team = "默认开通团队"
         private_cap = Capability(
             name="default-private-tool",
             type="tool",
             version="1.0.0",
             status="published",
             visibility="private",
-            install_policy="default_on",
             author_id=publisher.id,
             organization=publisher.organization,
         )
@@ -716,7 +754,6 @@ async def test_default_on_skips_invisible_capabilities(
             version="1.0.0",
             status="published",
             visibility="team",
-            install_policy="default_on",
             author_id=publisher.id,
             organization=publisher.organization,
         )
@@ -725,12 +762,20 @@ async def test_default_on_skips_invisible_capabilities(
             email="default-teammate@example.com",
             password_hash=hash_password("teammate-secret-123"),
             role="user",
-            team="中台团队",
+            team="默认开通团队",
         )
         db.add_all([private_cap, team_cap, teammate])
         await db.commit()
         private_id, team_id = private_cap.id, team_cap.id
 
+    monkeypatch.setattr(
+        "app.services.install_policy.default_capability_names",
+        lambda: ["default-private-tool", "default-team-tool"],
+    )
+
+    async with SessionLocal() as db:
+        user_row = await db.scalar(select(User).where(User.username == "user"))
+        await ensure_default_on_joins(db, user_row)
     r = await client.get("/api/my/capabilities?scope=added", headers=user_headers)
     assert r.status_code == 200
     ids = {c["id"] for c in r.json()}
@@ -742,6 +787,9 @@ async def test_default_on_skips_invisible_capabilities(
     )
     assert r.status_code == 200
     teammate_headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    async with SessionLocal() as db:
+        mate = await db.scalar(select(User).where(User.username == "default-teammate"))
+        await ensure_default_on_joins(db, mate)
     r = await client.get("/api/my/capabilities?scope=added", headers=teammate_headers)
     assert r.status_code == 200
     ids = {c["id"] for c in r.json()}
@@ -751,9 +799,9 @@ async def test_default_on_skips_invisible_capabilities(
 
 @pytest.mark.asyncio
 async def test_default_on_plugin_joins_only_accessible_components(
-    client, publisher_headers, admin_headers, user_headers
+    client, publisher_headers, admin_headers, user_headers, monkeypatch
 ):
-    """default_on plugin：只自动加入有权限的组件，无权限组件跳过。"""
+    """账户级默认开通 plugin：只加入有权限的组件，无权限组件跳过。"""
     from test_plugin import _plugin_zip
 
     r = await client.post(
@@ -776,15 +824,16 @@ async def test_default_on_plugin_joins_only_accessible_components(
         headers=admin_headers,
         json={"action": "approve"},
     )
-    r = await client.post(
-        f"/api/capabilities/{plugin_id}/install-policy",
-        headers=admin_headers,
-        json={"install_policy": "default_on"},
-    )
-    assert r.status_code == 200, r.text
 
     blocked = next(c for c in comps if c["type"] == "skill")
     await _set_access(client, publisher_headers, blocked["capability_id"], "admin_only")
+
+    monkeypatch.setattr(
+        "app.services.install_policy.default_capability_names", lambda: ["默认权限插件"]
+    )
+    async with SessionLocal() as db:
+        user_row = await db.scalar(select(User).where(User.username == "user"))
+        await ensure_default_on_joins(db, user_row)
 
     r = await client.get(
         "/api/my/capabilities?scope=added&include_components=true", headers=user_headers

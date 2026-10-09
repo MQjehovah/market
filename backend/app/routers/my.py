@@ -445,8 +445,18 @@ async def secrets_status(
     keys: str = "",
     capability_id: str = "",
 ):
-    """检查 required keys 是否已在托管中填齐。keys 为逗号分隔。"""
+    """检查 required keys 是否已在托管中填齐。keys 为逗号分隔。
+
+    只传 capability_id 时，自动按能力的用户键声明（user_env）判定，
+    便于详情页「凭据」表单直接调用。
+    """
     required = [k.strip() for k in keys.split(",") if k.strip()]
+    if not required and capability_id:
+        from app.services.capability_secrets import declared_user_env_keys
+
+        cap = await db.get(Capability, capability_id)
+        if cap is not None:
+            required = declared_user_env_keys(cap)
     status = await secret_status(
         db, user.id, required_keys=required, capability_id=capability_id or None
     )

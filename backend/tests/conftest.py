@@ -24,6 +24,12 @@ get_settings.cache_clear()
 from app.database import Base, engine
 from app.main import app
 
+# 测试提速：种子/登录各处按默认 bcrypt 12 轮哈希，每用例要跑多次（>0.25s/次）。
+# 仅测试进程降为 4 轮（校验按存量哈希轮数走，行为不变），全量可省数分钟。
+from app import auth as _auth  # noqa: E402
+
+_auth.pwd_context.update(bcrypt__rounds=4)
+
 
 @pytest.fixture(scope="session")
 def event_loop():
@@ -37,6 +43,23 @@ async def _dispose_engine_at_end():
     """会话结束释放连接池：否则 aiosqlite 非守护线程会让 pytest 进程卡在退出。"""
     yield
     await engine.dispose()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _disable_workflow_scheduler():
+    """测试禁用工作流定时触发器（生产由 main.py lifespan 启动）。
+
+    测试库是 :memory: + StaticPool 单连接：后台调度循环与用例并发读写会在同一条
+    连接上互相回滚/换连接（表现为刚插入的行查不到，governance 用例 404），且 DB
+    调用进行中被取消会留下无法完成的 Future、卡死事件循环关闭（进程挂起）。
+    调度器本身无直接单测，禁用不影响覆盖。
+    """
+    from app.services import workflow_triggers
+
+    original = workflow_triggers.start_scheduler
+    workflow_triggers.start_scheduler = lambda: None
+    yield
+    workflow_triggers.start_scheduler = original
 
 
 @pytest.fixture

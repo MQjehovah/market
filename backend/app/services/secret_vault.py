@@ -236,6 +236,26 @@ def attach_user_env(config: dict[str, Any], user_env: dict[str, str]) -> dict[st
     return cfg
 
 
+def merge_user_env_overlay(
+    config_env: dict[str, Any] | None,
+    platform_env: dict[str, str] | None,
+    user_env: dict[str, str] | None,
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """构造连接 env 与覆盖层：用户键先从包内 env 剔除，再由用户值注入（禁止兜底）。
+
+    返回 ``(config_env, overlay)``：overlay 供 ``${VAR}`` 占位符解析与 stdio env
+    合并使用，用户值优先于平台值；同名用户键不会以包内字面量/平台值残留。
+    """
+    cfg_env = dict(config_env or {})
+    overlay: dict[str, str] = {str(k): str(v) for k, v in (platform_env or {}).items()}
+    if user_env:
+        user_values = {str(k): str(v) for k, v in user_env.items() if str(v).strip()}
+        if user_values:
+            cfg_env = {k: v for k, v in cfg_env.items() if k not in user_values}
+            overlay.update(user_values)
+    return cfg_env, overlay
+
+
 def attach_platform_env(config: dict[str, Any], platform_env: dict[str, str]) -> dict[str, Any]:
     """把能力级平台密钥挂到 connect 配置上（合并逻辑与 attach_user_env 一致）。"""
     return attach_user_env(config, platform_env)

@@ -307,7 +307,7 @@ async def test_mcp_bridge_gateway_transport(
 
     r = await client.post(f"/api/runtime/mcp/{name}/connect", headers=admin_headers)
     assert r.status_code == 200, r.text
-    body = r.json()
+    body = r.json()["result"]
     assert body["connected"] is True, body
     assert {t["name"] for t in body["tools"]} == {"mcp_gateway_cap_add", "mcp_gateway_cap_echo"}
 
@@ -318,7 +318,7 @@ async def test_mcp_bridge_gateway_transport(
         json={"tool": tool["name"], "params": {"a": 6, "b": 7}},
     )
     assert r.status_code == 200, r.text
-    assert r.json()["result"] == "13"
+    assert r.json()["result"]["result"] == "13"
 
 
 @pytest.mark.asyncio

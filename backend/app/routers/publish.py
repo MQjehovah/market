@@ -321,6 +321,13 @@ async def upload_artifact(cap_id: str, db: DbSession, user: CurrentUser, file: U
         from app.services.mcp_editor import public_env_map
 
         headers = conn.get("headers") if isinstance(conn.get("headers"), dict) else {}
+        raw_user_env = conn.get("user_env")
+        if isinstance(raw_user_env, dict):
+            user_env_keys = [str(k) for k in raw_user_env if str(k).strip()]
+        elif isinstance(raw_user_env, list):
+            user_env_keys = [str(k) for k in raw_user_env if str(k).strip()]
+        else:
+            user_env_keys = []
         cap.input_schema = {
             "kind": "mcp",
             "name": meta.get("name") or cap.name,
@@ -334,6 +341,7 @@ async def upload_artifact(cap_id: str, db: DbSession, user: CurrentUser, file: U
             "header_keys": [str(k) for k in headers.keys()],
             "required_env": [str(k) for k in env.keys()],
             "env": public_env_map(env),
+            "user_env": sorted(dict.fromkeys(user_env_keys)),
             "tools": tools_summary,
         }
     if cap.type == "workflow" and details.get("meta"):

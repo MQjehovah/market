@@ -94,6 +94,13 @@ def build_package(args) -> str:
         env[k.strip()] = v.strip()
     if env:
         conn["env"] = env
+    user_env = [k.strip() for k in (args.user_env or []) if k.strip()]
+    if user_env:
+        # 用户键：binding=user 时由每位提问者在市场「我的凭据」自填，逐调用注入
+        for k in user_env:
+            if k in env:
+                print(f"  [warn] 用户键 {k} 同时出现在 --env（平台键）中，已保留平台声明")
+        conn["user_env"] = user_env
     mcp_meta = {"name": args.name, "description": args.description, "version": args.version}
     sec = {"notes": args.security_notes or "凭证走 ${VAR} 占位符（在市场「我的密钥」中配置）"}
     readme = f"# {args.name}\n\n{args.description}\n\n- 传输：stdio（平台侧解压 implementation 后拉起）\n- 依赖：见实现代码 import（市场镜像预装 requests/rich/pymysql/websockets 等）\n"
@@ -134,6 +141,9 @@ def main() -> int:
     ap.add_argument("--server", required=True, help="server 入口 .py 路径")
     ap.add_argument("--extra", action="append", help="随包附件（如 env_guard.py），可多次")
     ap.add_argument("--env", action="append", help="connection.json 的 env 键值（KEY=VALUE），可多次；值用 ${VAR} 占位符")
+    ap.add_argument("--user-env", action="append", help="用户键名（如 ERP_USERNAME），可多次；binding=user 时由每位用户自填")
+    ap.add_argument("--binding", default="service", choices=["user", "service"],
+                    help="执行身份绑定：service=平台级（平台密钥）/ user=用户级（提问者个人凭据）")
     ap.add_argument("--description", default="")
     ap.add_argument("--risk", default="write", choices=["read", "write", "destructive"])
     ap.add_argument("--distribution", default="both", choices=["local", "remote", "both"])
@@ -155,10 +165,19 @@ def main() -> int:
         "name": args.name, "type": "mcp", "version": args.version,
         "description": args.description, "distribution": args.distribution,
         "risk_default": args.risk, "visibility": "internal", "install_policy": "optional",
+        "binding": args.binding,
     }
     cap_id = resolve_cap_id(args.market, admin, args.name, args.version, payload)
     if not cap_id:
         return 1
+
+    # binding 幂等落定（含复用旧草稿的场景；按能力名跨版本统一）
+    st, d = http("POST", f"{args.market}/api/capabilities/{cap_id}/binding", admin,
+                 body={"binding": args.binding})
+    if st != 200:
+        print(f"  设置 binding 失败: {st} {str(d)[:200]}")
+        return 1
+    print(f"  binding={args.binding}")
 
     raw, ctype = multipart(pack)
     st, d = http("POST", f"{args.market}/api/publish/capabilities/{cap_id}/artifact", admin, raw=raw, ctype=ctype)
@@ -175,7 +194,9 @@ def main() -> int:
         if not (isinstance(d, dict) and d.get("status") == "published"):
             return 1
 
-    if args.verify_token_file:
+    if args.verify_token_file and args.binding != "service":
+        print("  （user 级能力不支持 relay 直连，跳过 --verify-token-file 验证）")
+    if args.verify_token_file and args.binding == "service":
         svc = open(args.verify_token_file, encoding="utf-8").read().strip()
         session = {}
 

@@ -401,16 +401,24 @@ async def fetch_agent_persona(db: AsyncSession, user: User, cap: Capability) -> 
     }
 
 
-async def install_mcp(db: AsyncSession, user: User, cap: Capability, config: dict[str, Any]) -> dict[str, Any]:
+async def install_mcp(
+    db: AsyncSession,
+    user: User,
+    cap: Capability,
+    config: dict[str, Any],
+) -> dict[str, Any]:
     """安装 MCP：真实连接（stdio / HTTP / SSE / 网关），发现并返回工具列表。"""
     await record_usage(db, user, cap, "install", config)
-    from app.services.capability_secrets import resolve_capability_env
+    from app.services.capability_secrets import (
+        require_user_bound_env,
+        resolve_capability_env,
+    )
     from app.services.mcp_gateway import (
         load_gateway_config_by_name,
         probe_tools,
         read_package_files,
     )
-    from app.services.secret_vault import attach_platform_env
+    from app.services.secret_vault import attach_platform_env, merge_user_env_overlay
 
     files = read_package_files(cap)
     raw = files.get("connection.json")
@@ -448,9 +456,16 @@ async def install_mcp(db: AsyncSession, user: User, cap: Capability, config: dic
             "error": f"暂不支持 transport={transport}",
             "tools": [],
         }
-    # 平台轨统一注入能力级平台密钥（按能力名跨版本，全用户一致）
+    # 平台轨统一注入能力级平台密钥（按能力名跨版本、全用户一致）；user 级能力叠加
+    # 提问者个人凭据（个人优先；管理员个人缺省时平台兜底；普通用户缺则 403）
     platform_env = await resolve_capability_env(db, cap.name)
-    cfg = attach_platform_env(dict(cfg), platform_env)
+    user_env: dict[str, str] = {}
+    if (getattr(cap, "binding", None) or "service") == "user":
+        user_env = await require_user_bound_env(db, cap, user, platform_env=platform_env)
+    merged_env, overlay = merge_user_env_overlay(cfg.get("env"), platform_env, user_env)
+    cfg = dict(cfg)
+    cfg["env"] = merged_env
+    cfg = attach_platform_env(cfg, overlay)
     try:
         tools = await probe_tools(cfg, files)
     except Exception as exc:  # noqa: BLE001
@@ -469,7 +484,7 @@ async def install_mcp(db: AsyncSession, user: User, cap: Capability, config: dic
         "installed": True,
         "transport": cfg["transport"],
         "tools": [t["name"] for t in tools],
-        "secrets_injected": sorted(platform_env.keys()),
+        "secrets_injected": sorted({**platform_env, **user_env}.keys()),
     }
 
 

@@ -474,7 +474,7 @@ async def test_my_operations_follow_bearer_user(client, publisher_headers, admin
 
 @pytest.mark.asyncio
 async def test_runtime_bearer_user_access(client, publisher_headers, admin_headers):
-    """runtime 端点只认用户令牌：无 token 401、无准入 403、准入 200、服务令牌 403。"""
+    """runtime 端点身份：用户令牌（无 token 401、无准入 403、准入 200）；服务令牌当 Bearer 403。"""
     name = "rt-user-tool"
     cap_id = await _publish(client, publisher_headers, admin_headers, name, type_="tool")
     await _create_user(client, admin_headers, "rt-u")
@@ -499,16 +499,23 @@ async def test_runtime_bearer_user_access(client, publisher_headers, admin_heade
     r = await client.post(url, headers={**u_headers, "X-Act-As-Sub": "ghost"}, json=body)
     assert r.status_code == 200, r.text
 
-    # 服务令牌（即使绑定管理员）不可访问 runtime → 403
+    # 服务令牌当 Bearer：需 admin scope（平台身份通道）；无 admin scope → 403
     admin_id = (await client.get("/api/auth/me", headers=admin_headers)).json()["id"]
     _, token = await _make_token(
         client, admin_headers, ["runtime", "gateway", "sync"], user_id=admin_id
     )
     r = await client.post(url, headers=_bearer(token), json=body)
     assert r.status_code == 403, r.text
-    assert "服务令牌" in r.json()["detail"]
+    assert "admin" in r.json()["detail"]
     r = await client.get("/api/runtime/mcp/discover", headers=_bearer(token))
     assert r.status_code == 403, r.text
+
+    # 服务令牌带 admin scope（平台身份）→ 运行时可准入
+    _, admin_token = await _make_token(
+        client, admin_headers, ["admin"], user_id=admin_id
+    )
+    r = await client.post(url, headers=_bearer(admin_token), json=body)
+    assert r.status_code == 200, r.text
 
     # 用户 token 下 discover 正常
     r = await client.get("/api/runtime/mcp/discover", headers=u_headers)
