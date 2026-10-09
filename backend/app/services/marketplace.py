@@ -410,6 +410,7 @@ async def install_mcp(
     """安装 MCP：真实连接（stdio / HTTP / SSE / 网关），发现并返回工具列表。"""
     await record_usage(db, user, cap, "install", config)
     from app.services.capability_secrets import (
+        is_user_bound,
         require_user_bound_env,
         resolve_capability_env,
     )
@@ -457,10 +458,11 @@ async def install_mcp(
             "tools": [],
         }
     # 平台轨统一注入能力级平台密钥（按能力名跨版本、全用户一致）；user 级能力叠加
-    # 提问者个人凭据（个人优先；管理员个人缺省时平台兜底；普通用户缺则 403）
+    # 提问者个人凭据（个人优先；管理员个人缺省时平台兜底；普通用户缺则 403；
+    # user_only 平台身份一律拒绝）
     platform_env = await resolve_capability_env(db, cap.name)
     user_env: dict[str, str] = {}
-    if (getattr(cap, "binding", None) or "service") == "user":
+    if is_user_bound(cap):
         user_env = await require_user_bound_env(db, cap, user, platform_env=platform_env)
     merged_env, overlay = merge_user_env_overlay(cfg.get("env"), platform_env, user_env)
     cfg = dict(cfg)

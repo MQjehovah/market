@@ -1147,6 +1147,100 @@ async def test_user_creds_missing_marks_403_for_admin_retry(
     assert r.headers.get("X-Market-Error-Code") is None
 
 
+@pytest.mark.asyncio
+async def test_user_only_binding_rejects_service_identity(
+    client, publisher_headers, admin_headers, user_headers, monkeypatch
+):
+    """binding=user_only（仅用户身份）：平台身份一律 403 无兜底（即使平台密钥齐全）；
+    用户缺个人凭据 403 但不带管理员重试标记（无平台可兜底）；填齐后按个人凭据执行。"""
+    name = "仅用户身份能力"
+    user_keys = ["ERP_USERNAME", "ERP_PASSWORD"]
+    cap_id = await _publish_capability(
+        client,
+        publisher_headers,
+        admin_headers,
+        name,
+        "mcp",
+        _mcp_zip(name, {"ERP_API_BASE_URL": "${ERP_API_BASE_URL}"}, user_env=user_keys),
+    )
+    out = await _set_binding(client, admin_headers, cap_id, "user_only")
+    assert out["binding"] == "user_only"
+    await _set_platform_secret(client, admin_headers, cap_id, "ERP_API_BASE_URL", "https://erp.internal")
+    await _set_platform_secret(client, admin_headers, cap_id, "ERP_USERNAME", "s_platform")
+    await _set_platform_secret(client, admin_headers, cap_id, "ERP_PASSWORD", "s_platform_pw")
+    await _join(client, user_headers, cap_id)
+
+    me = await client.get("/api/auth/me", headers=admin_headers)
+    assert me.status_code == 200, me.text
+    r = await client.post(
+        "/api/admin/service-tokens",
+        headers=admin_headers,
+        json={"name": "user-only-test", "scopes": ["admin"], "user_id": me.json()["id"]},
+    )
+    assert r.status_code == 201, r.text
+    platform_token = r.json()["token"]
+
+    captured: dict = {}
+
+    class _FakeBridge:
+        def __init__(self, gateway_loader=None, env=None, **kwargs):
+            captured["env"] = dict(env or {})
+            self.tool_defs = [
+                {
+                    "type": "function",
+                    "function": {"name": "mcp_x_get", "description": "", "parameters": {}},
+                }
+            ]
+            self.tool_names = ["mcp_x_get"]
+
+        async def connect_capability(self, mcp_name, cap, env=None, user_env=None):
+            captured["user_env"] = dict(user_env or {})
+            return {"connected": True}
+
+        def has_tool(self, tool_name):
+            return tool_name in self.tool_names
+
+        async def call(self, tool, params):
+            return "ok"
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr("app.services.mcp_bridge.MCPBridge", _FakeBridge)
+
+    # 1) 服务令牌（平台身份，含管理员重试通道）→ 一律拒绝，即使平台密钥齐全
+    r = await client.post(
+        f"/api/runtime/mcp/{name}/call",
+        headers={"Authorization": f"Bearer {platform_token}"},
+        json={"tool": "mcp_x_get", "params": {}},
+    )
+    assert r.status_code == 403, r.text
+    assert "仅支持按用户身份" in r.json()["detail"]
+    assert r.headers.get("X-Market-Error-Code") is None
+    assert not captured.get("user_env")
+
+    # 2) 用户令牌缺个人凭据 → 403；user_only 不发管理员重试标记（无平台可兜底）
+    r = await client.post(
+        f"/api/runtime/mcp/{name}/call",
+        headers=user_headers,
+        json={"tool": "mcp_x_get", "params": {}},
+    )
+    assert r.status_code == 403, r.text
+    assert "配置凭据" in r.json()["detail"]
+    assert r.headers.get("X-Market-Error-Code") is None
+
+    # 3) 填齐个人凭据 → 按个人身份执行
+    await _put_user_secret(client, user_headers, "ERP_USERNAME", "u-name", scope=cap_id)
+    await _put_user_secret(client, user_headers, "ERP_PASSWORD", "u-pass", scope=cap_id)
+    r = await client.post(
+        f"/api/runtime/mcp/{name}/call",
+        headers=user_headers,
+        json={"tool": "mcp_x_get", "params": {}},
+    )
+    assert r.status_code == 200, r.text
+    assert captured["user_env"] == {"ERP_USERNAME": "u-name", "ERP_PASSWORD": "u-pass"}
+
+
 def test_merge_user_env_overlay_strips_and_prioritizes():
     """纯函数：用户键从包内 env 剔除、覆盖层用户值优先于平台同名值。"""
     from app.services.secret_vault import attach_platform_env, merge_user_env_overlay

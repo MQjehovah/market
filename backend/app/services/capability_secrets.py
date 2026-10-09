@@ -205,8 +205,17 @@ USER_CREDS_MISSING_HEADER = "X-Market-Error-Code"
 
 
 def is_user_bound(cap) -> bool:
-    """能力是否按提问者身份执行（binding=user）；默认 service（平台身份）。"""
-    return (getattr(cap, "binding", None) or "service") == "user"
+    """能力是否按提问者身份执行（binding=user / user_only）；默认 service（平台身份）。"""
+    return (getattr(cap, "binding", None) or "service") in ("user", "user_only")
+
+
+def is_user_only(cap) -> bool:
+    """能力是否仅允许用户身份执行（binding=user_only，不提供平台兜底）。
+
+    平台身份（服务令牌：管理员兜底重试/系统任务）一律拒绝；缺个人凭据也不发
+    管理员重试标记（无平台可兜底）。
+    """
+    return (getattr(cap, "binding", None) or "service") == "user_only"
 
 
 def is_service_identity(user) -> bool:
@@ -275,10 +284,16 @@ async def require_user_bound_env(
 ) -> dict[str, str]:
     """user 级能力执行凭据（fail-closed 校验版）。
 
+    user_only 能力：平台身份（服务令牌）一律 403 拒绝；缺个人凭据不发重试标记。
     平台身份（服务令牌）缺平台密钥 → 403 提示管理员配置；
-    用户令牌缺个人凭据 → 403（带 ``X-Market-Error-Code: user_credentials_missing``
+    用户令牌缺个人凭据 → 403（binding=user 带 ``X-Market-Error-Code: user_credentials_missing``
     响应头，agent 侧管理员据此以平台身份重试一次）。
     """
+    if is_user_only(cap) and is_service_identity(user):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "该能力仅支持按用户身份执行（不提供平台兜底）；请使用个人凭据调用",
+        )
     if platform_env is None:
         platform_env = await resolve_capability_env(db, cap.name)
     env, missing = await resolve_user_bound_env_for(db, cap, user, platform_env=platform_env)
@@ -290,10 +305,15 @@ async def require_user_bound_env(
                 f"该能力按平台身份执行，缺少平台密钥：{what}；"
                 "请管理员在能力详情中配置平台密钥后重试",
             )
+        # user_only 无平台可兜底: 不带管理员重试标记, 直接引导配置个人凭据
+        headers = (
+            None if is_user_only(cap)
+            else {USER_CREDS_MISSING_HEADER: USER_CREDS_MISSING_CODE}
+        )
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             f"该能力按你的身份执行，缺少必需凭据：{what}；"
             "请在能力市场该能力卡片上点击「配置凭据」填写后重试",
-            headers={USER_CREDS_MISSING_HEADER: USER_CREDS_MISSING_CODE},
+            headers=headers,
         )
     return env

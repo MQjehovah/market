@@ -144,6 +144,7 @@ async def install(name: str, data: RuntimeInstallRequest, db: DbSession, user: R
 async def mcp_connect(name: str, db: DbSession, user: RuntimeUser):
     """真实连接 MCP 能力包并发现其工具（调试/试用用）。"""
     from app.services.capability_secrets import (
+        is_user_bound,
         require_user_bound_env,
         resolve_capability_env,
     )
@@ -165,7 +166,7 @@ async def mcp_connect(name: str, db: DbSession, user: RuntimeUser):
     # 服务令牌（平台身份）→ 直接用平台凭据
     platform_env = await resolve_capability_env(db, cap.name)
     user_env: dict[str, str] = {}
-    if (getattr(cap, "binding", None) or "service") == "user":
+    if is_user_bound(cap):
         user_env = await require_user_bound_env(db, cap, user, platform_env=platform_env)
     bridge = MCPBridge(gateway_loader=_gateway_loader, env=platform_env)
     try:
@@ -202,6 +203,7 @@ async def mcp_call(
 ):
     """调用 MCP 能力包暴露的某个工具（调试/试用用，每次调用独立连接）。"""
     from app.services.capability_secrets import (
+        is_user_bound,
         require_user_bound_env,
         resolve_capability_env,
     )
@@ -224,7 +226,7 @@ async def mcp_call(
     # 服务令牌（平台身份）→ 直接用平台凭据
     platform_env = await resolve_capability_env(db, cap.name)
     user_env: dict[str, str] = {}
-    if (getattr(cap, "binding", None) or "service") == "user":
+    if is_user_bound(cap):
         user_env = await require_user_bound_env(db, cap, user, platform_env=platform_env)
     bridge = MCPBridge(gateway_loader=_gateway_loader, env=platform_env)
     t0 = time.monotonic()

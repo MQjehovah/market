@@ -131,7 +131,7 @@ class CapabilityBase(BaseModel):
     allowed_users: list[str] = Field(default_factory=list, description="restricted 时的白名单用户名")
     install_policy: Literal["optional", "default_on", "required"] = "optional"
     distribution: Literal["local", "remote", "both"] = "both"
-    binding: Literal["user", "service"] = "service"
+    binding: Literal["user", "service", "user_only"] = "service"
     risk_default: Literal["read", "write", "destructive"] = "read"
     data_domain: str = Field(default="", max_length=64)
 
@@ -190,7 +190,7 @@ class CapabilityUpdate(BaseModel):
     allowed_users: list[str] | None = None
     install_policy: Literal["optional", "default_on", "required"] | None = None
     distribution: Literal["local", "remote", "both"] | None = None
-    binding: Literal["user", "service"] | None = None
+    binding: Literal["user", "service", "user_only"] | None = None
     risk_default: Literal["read", "write", "destructive"] | None = None
     data_domain: str | None = Field(default=None, max_length=64)
 
@@ -214,14 +214,16 @@ class InstallPolicyUpdate(BaseModel):
 
 
 class BindingUpdate(BaseModel):
-    """执行身份绑定：user=按提问者（当前用户 token）执行 / service=服务身份。
+    """执行身份绑定：service=服务身份 / user=用户+平台（个人凭据优先，平台身份兜底）/
+    user_only=仅用户身份（平台身份一律拒绝，无兜底）。
 
-    user 级凭据：用户令牌按个人凭据执行（缺则 403 + X-Market-Error-Code:
-    user_credentials_missing，agent 侧管理员据此以平台身份重试一次）；
-    服务令牌（平台身份）直接用平台凭据；普通用户缺个人凭据一律拒绝（fail-closed）。
+    user 级凭据：用户令牌按个人凭据执行（binding=user 缺则 403 + X-Market-Error-Code:
+    user_credentials_missing，agent 侧管理员据此以平台身份重试一次；user_only 不发标记）；
+    服务令牌（平台身份）在 user 下直接用平台凭据，在 user_only 下 403 拒绝；
+    普通用户缺个人凭据一律拒绝（fail-closed）。
     """
 
-    binding: Literal["user", "service"]
+    binding: Literal["user", "service", "user_only"]
 
 
 class VersionCreate(BaseModel):

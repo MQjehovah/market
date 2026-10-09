@@ -839,7 +839,20 @@ const bindingSaving = ref(false)
 const bindingNotice = ref('')
 const bindingError = ref('')
 
-const currentBinding = computed(() => (cap.value?.binding === 'user' ? 'user' : 'service'))
+const currentBinding = computed(() => {
+  const v = cap.value?.binding
+  return v === 'user' || v === 'user_only' ? v : 'service'
+})
+
+const bindingLabel = computed(
+  () =>
+    ({ service: '平台身份', user: '用户+平台', user_only: '仅用户' })[currentBinding.value] || '平台身份'
+)
+
+/** 该档位是否需要个人凭据（校验是否已声明用户键） */
+function needsUserEnv(binding) {
+  return binding === 'user' || binding === 'user_only'
+}
 
 /** 能力声明的用户键：优先平台密钥接口的 user_env（含 connection.json 回退），否则取 input_schema.user_env */
 const declaredUserEnvKeys = computed(() => {
@@ -855,16 +868,16 @@ const declaredUserEnvKeys = computed(() => {
 async function saveBinding() {
   const capId = cap.value?.id
   if (!capId || bindingSaving.value) return
-  const next = bindingDraft.value === 'user' ? 'user' : 'service'
+  const next = ['user', 'user_only', 'service'].includes(bindingDraft.value) ? bindingDraft.value : 'service'
   bindingNotice.value = ''
   bindingError.value = ''
   if (next === currentBinding.value) {
     bindingNotice.value = '执行身份未变化'
     return
   }
-  if (next === 'user' && !declaredUserEnvKeys.value.length) {
+  if (needsUserEnv(next) && !declaredUserEnvKeys.value.length) {
     bindingError.value =
-      '该能力未声明用户键（user_env）：切换为用户身份后不会要求个人凭据，且平台轨会跳过它。建议先在发布包 connection.json 声明 user_env 并重新发布，再切换。'
+      '该能力未声明用户键（user_env）：切换到该档位后不会要求个人凭据，且平台轨会跳过它。建议先在发布包 connection.json 声明 user_env 并重新发布，再切换。'
     return
   }
   bindingSaving.value = true
@@ -872,9 +885,11 @@ async function saveBinding() {
     const res = await api.post(`/capabilities/${capId}/binding`, { binding: next })
     if (cap.value && res && res.binding) cap.value.binding = res.binding
     bindingNotice.value =
-      next === 'user'
-        ? '已切换为用户身份：按提问者个人凭据执行（员工端/桌面端能力卡片可配置）；平台轨将跳过该能力'
-        : '已切换为平台身份：全用户共用平台密钥执行'
+      next === 'user_only'
+        ? '已切换为仅用户身份：必须个人凭据；管理员/系统任务也不能执行（平台轨将跳过该能力）'
+        : next === 'user'
+          ? '已切换为用户+平台：个人凭据优先（员工端/桌面端能力卡片可配置），管理员/系统任务以平台密钥兜底'
+          : '已切换为平台身份：全用户共用平台密钥执行'
   } catch (e) {
     bindingError.value = e.message || '保存失败'
   } finally {
@@ -2255,7 +2270,7 @@ onMounted(() => {
               <div v-if="isOwner || isAdmin" class="env-fill-box">
                 <h4 class="env-fill-title">执行身份（binding）</h4>
                 <p class="muted" style="font-size: 13px; margin: 0 0 10px">
-                  平台身份（service）：全用户共用平台密钥执行。用户身份（user）：按提问者个人凭据执行——员工端/桌面端能力卡片「配置凭据」填写，缺凭据拒绝（管理员/系统以平台密钥兜底）。
+                  平台身份（service）：全用户共用平台密钥执行。用户+平台（user）：按提问者个人凭据执行——员工端/桌面端能力卡片「配置凭据」填写，普通用户缺凭据拒绝，管理员/系统任务以平台密钥兜底。仅用户（user_only）：必须个人凭据，平台身份（含管理员/系统任务）一律拒绝，强审计场景用。
                   按能力名跨版本统一生效。
                 </p>
                 <div class="flex" style="gap: 16px; flex-wrap: wrap; align-items: center">
@@ -2265,18 +2280,20 @@ onMounted(() => {
                   </label>
                   <label class="flex" style="gap: 6px; align-items: center; font-size: 13px; cursor: pointer">
                     <input v-model="bindingDraft" type="radio" value="user" />
-                    用户身份（user）
+                    用户+平台（user）
                   </label>
-                  <span class="muted" style="font-size: 12px">
-                    当前：{{ currentBinding === 'user' ? '用户身份' : '平台身份' }}
-                  </span>
+                  <label class="flex" style="gap: 6px; align-items: center; font-size: 13px; cursor: pointer">
+                    <input v-model="bindingDraft" type="radio" value="user_only" />
+                    仅用户（user_only）
+                  </label>
+                  <span class="muted" style="font-size: 12px">当前：{{ bindingLabel }}</span>
                 </div>
                 <p
-                  v-if="bindingDraft === 'user' && !declaredUserEnvKeys.length"
+                  v-if="needsUserEnv(bindingDraft) && !declaredUserEnvKeys.length"
                   class="muted"
                   style="font-size: 12px; margin: 8px 0 0; color: #c45656"
                 >
-                  该能力未声明用户键（user_env），切换为用户身份后不会要求个人凭据（建议先补声明再切换）。
+                  该能力未声明用户键（user_env），切换后不会要求个人凭据（建议先补声明再切换）。
                 </p>
                 <div class="flex" style="gap: 8px; margin-top: 12px; flex-wrap: wrap">
                   <button class="btn btn-primary btn-sm" type="button" :disabled="bindingSaving" @click="saveBinding">

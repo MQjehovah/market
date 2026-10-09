@@ -242,6 +242,9 @@ async def _run_agent_llm(
 
     bridge = MCPBridge(gateway_loader=_gateway_loader)
     from app.services.capability_secrets import (
+        is_service_identity,
+        is_user_bound,
+        is_user_only,
         resolve_capability_env,
         resolve_user_bound_env_for,
     )
@@ -252,10 +255,20 @@ async def _run_agent_llm(
             try:
                 mcp_cap = await resolve_capability(db, user, m["name"])
                 # 平台轨：注入该能力名的平台密钥（与调用者身份无关）；user 级能力
-                # 按身份取执行凭据（服务令牌→平台；用户令牌→个人凭据 fail-closed）
+                # 按身份取执行凭据（服务令牌→平台；用户令牌→个人凭据 fail-closed；
+                # user_only 平台身份一律拒绝）
                 cap_env = await resolve_capability_env(db, mcp_cap.name)
                 user_env: dict[str, str] = {}
-                if (getattr(mcp_cap, "binding", None) or "service") == "user":
+                if is_user_bound(mcp_cap):
+                    if is_user_only(mcp_cap) and is_service_identity(user):
+                        mcp_info.append(
+                            {
+                                "name": m["name"],
+                                "connected": False,
+                                "error": "该能力仅支持按用户身份执行（不提供平台兜底）",
+                            }
+                        )
+                        continue
                     user_env, missing = await resolve_user_bound_env_for(
                         db, mcp_cap, user, platform_env=cap_env
                     )
