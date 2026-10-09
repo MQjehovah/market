@@ -833,6 +833,63 @@ async function clearPlatformSecret(row, confirmed = false) {
   }
 }
 
+/** 执行身份绑定（binding）：service=平台身份(平台密钥共用) / user=用户身份(提问者个人凭据) */
+const bindingDraft = ref('')
+const bindingSaving = ref(false)
+const bindingNotice = ref('')
+const bindingError = ref('')
+
+const currentBinding = computed(() => (cap.value?.binding === 'user' ? 'user' : 'service'))
+
+/** 能力声明的用户键：优先平台密钥接口的 user_env（含 connection.json 回退），否则取 input_schema.user_env */
+const declaredUserEnvKeys = computed(() => {
+  const fromPlatform = platformSecrets.value?.user_env
+  if (Array.isArray(fromPlatform) && fromPlatform.length) {
+    return fromPlatform.map((k) => String(k).trim()).filter(Boolean)
+  }
+  const keys = cap.value?.input_schema?.user_env
+  if (Array.isArray(keys)) return keys.map((k) => String(k).trim()).filter(Boolean)
+  return []
+})
+
+async function saveBinding() {
+  const capId = cap.value?.id
+  if (!capId || bindingSaving.value) return
+  const next = bindingDraft.value === 'user' ? 'user' : 'service'
+  bindingNotice.value = ''
+  bindingError.value = ''
+  if (next === currentBinding.value) {
+    bindingNotice.value = '执行身份未变化'
+    return
+  }
+  if (next === 'user' && !declaredUserEnvKeys.value.length) {
+    bindingError.value =
+      '该能力未声明用户键（user_env）：切换为用户身份后不会要求个人凭据，且平台轨会跳过它。建议先在发布包 connection.json 声明 user_env 并重新发布，再切换。'
+    return
+  }
+  bindingSaving.value = true
+  try {
+    const res = await api.post(`/capabilities/${capId}/binding`, { binding: next })
+    if (cap.value && res && res.binding) cap.value.binding = res.binding
+    bindingNotice.value =
+      next === 'user'
+        ? '已切换为用户身份：按提问者个人凭据执行（员工端/桌面端能力卡片可配置）；平台轨将跳过该能力'
+        : '已切换为平台身份：全用户共用平台密钥执行'
+  } catch (e) {
+    bindingError.value = e.message || '保存失败'
+  } finally {
+    bindingSaving.value = false
+  }
+}
+
+watch(
+  () => cap.value?.binding,
+  () => {
+    bindingDraft.value = currentBinding.value
+  },
+  { immediate: true }
+)
+
 watch(
   () => [authState.token, authState.user?.id, authState.user?.role],
   () => {
@@ -2194,6 +2251,41 @@ onMounted(() => {
                   </tr>
                 </tbody>
               </table>
+
+              <div v-if="isOwner || isAdmin" class="env-fill-box">
+                <h4 class="env-fill-title">执行身份（binding）</h4>
+                <p class="muted" style="font-size: 13px; margin: 0 0 10px">
+                  平台身份（service）：全用户共用平台密钥执行。用户身份（user）：按提问者个人凭据执行——员工端/桌面端能力卡片「配置凭据」填写，缺凭据拒绝（管理员/系统以平台密钥兜底）。
+                  按能力名跨版本统一生效。
+                </p>
+                <div class="flex" style="gap: 16px; flex-wrap: wrap; align-items: center">
+                  <label class="flex" style="gap: 6px; align-items: center; font-size: 13px; cursor: pointer">
+                    <input v-model="bindingDraft" type="radio" value="service" />
+                    平台身份（service）
+                  </label>
+                  <label class="flex" style="gap: 6px; align-items: center; font-size: 13px; cursor: pointer">
+                    <input v-model="bindingDraft" type="radio" value="user" />
+                    用户身份（user）
+                  </label>
+                  <span class="muted" style="font-size: 12px">
+                    当前：{{ currentBinding === 'user' ? '用户身份' : '平台身份' }}
+                  </span>
+                </div>
+                <p
+                  v-if="bindingDraft === 'user' && !declaredUserEnvKeys.length"
+                  class="muted"
+                  style="font-size: 12px; margin: 8px 0 0; color: #c45656"
+                >
+                  该能力未声明用户键（user_env），切换为用户身份后不会要求个人凭据（建议先补声明再切换）。
+                </p>
+                <div class="flex" style="gap: 8px; margin-top: 12px; flex-wrap: wrap">
+                  <button class="btn btn-primary btn-sm" type="button" :disabled="bindingSaving" @click="saveBinding">
+                    {{ bindingSaving ? '保存中…' : '保存执行身份' }}
+                  </button>
+                </div>
+                <p v-if="bindingNotice" class="alert alert-success mt-12" style="font-size: 13px">{{ bindingNotice }}</p>
+                <p v-if="bindingError" class="alert alert-error mt-12" style="font-size: 13px">{{ bindingError }}</p>
+              </div>
 
               <div v-if="isMcp && (isOwner || isAdmin)" class="env-fill-box">
                 <h4 class="env-fill-title">平台密钥（云端注入 · 全用户共用）</h4>
