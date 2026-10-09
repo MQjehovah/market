@@ -1097,7 +1097,7 @@ async def test_user_creds_missing_marks_403_for_admin_retry(
     )
     assert r.status_code == 403, r.text
     assert r.headers.get("X-Market-Error-Code") == "user_credentials_missing"
-    assert "我的凭据" in r.json()["detail"]
+    assert "配置凭据" in r.json()["detail"]
 
     # 2) 服务令牌（平台身份）→ 直接用平台凭据（= 管理员重试通道）
     r = await client.post(

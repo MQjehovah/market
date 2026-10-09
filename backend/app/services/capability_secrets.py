@@ -293,7 +293,7 @@ async def require_user_bound_env(
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             f"该能力按你的身份执行，缺少必需凭据：{what}；"
-            "请先在能力市场「我的凭据」中填写后重试",
+            "请在能力市场该能力卡片上点击「配置凭据」填写后重试",
             headers={USER_CREDS_MISSING_HEADER: USER_CREDS_MISSING_CODE},
         )
     return env
