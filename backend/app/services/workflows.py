@@ -1056,6 +1056,25 @@ async def _execute_workflow_body(
         await record_usage(db, user, cap, "workflow_execute", {"input": input_data})
     await db.commit()
 
+    # 开始节点必填/默认值校验（编辑器试运行 / 运行应用 / 定时触发 统一口径）：
+    # 缺值且无默认值的必填项 → 执行直接失败并记录明确错误，不静默跳过。
+    start_node = next(
+        (n for n in nodes.values() if _canon_type(n.get("type")) == "start"), None
+    )
+    if start_node is not None:
+        for f in normalize_start_fields((start_node.get("params") or {}).get("fields")):
+            key = f["key"]
+            cur = input_data.get(key) if isinstance(input_data, dict) else None
+            if cur in (None, "") and f.get("default") not in (None, ""):
+                input_data[key] = f["default"]
+                cur = input_data[key]
+            if cur in (None, "") and f.get("required"):
+                execution.state = "failed"
+                execution.error = f"缺少必填输入：{f.get('label') or key}"
+                await db.commit()
+                await db.refresh(execution)
+                return execution
+
     await _run_schedule(
         db,
         user,

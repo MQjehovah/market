@@ -1,8 +1,9 @@
 """工作流触发器：定时(cron) + webhook 事件。
 
 - 定时：后台协程每 60s 扫描已发布的 workflow，命中 `trigger.cron` 则执行；`last_run` 落盘防重复。
+- 多 worker 部署下每个 worker 都会跑定时循环：以 O_EXCL 锁文件跨进程**原子领取**，
+  同一 (工作流, 分钟) 只会被一个 worker 触发一次，避免重复执行/重复发信。
 - webhook：`POST /api/runtime/workflows/{name}/trigger`（`X-Workflow-Token` 校验）。
-- 多 worker 部署下每个 worker 都会跑定时循环 → 需 `WORKERS=1` 或外部去重（见注释）。
 """
 
 from __future__ import annotations
@@ -50,6 +51,27 @@ def _save_state() -> None:
             json.dump(_STATE, f, ensure_ascii=False, indent=2)
     except Exception as e:  # noqa: BLE001
         logger.warning(f"定时状态保存失败: {e}")
+
+
+def _claim(cap_name: str, stamp: str) -> bool:
+    """跨进程原子领取一次触发（多 worker 防重）。
+
+    以 O_CREAT|O_EXCL 创建 (工作流, 分钟) 锁文件：成功者负责本次触发，
+    其余 worker 的创建尝试抛 FileExistsError 而跳过；异常时保守返回 False（宁可不触发不重复）。
+    """
+    try:
+        d = os.path.join(str(get_settings().data_dir), "sched_claims")
+        os.makedirs(d, exist_ok=True)
+        safe = "".join(ch if (ch.isalnum() or ch in "._-") else "_" for ch in cap_name)[:60] or "wf"
+        name = f"{safe}__{stamp.replace(' ', 'T').replace(':', '')}.lock"
+        fd = os.open(os.path.join(d, name), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        os.close(fd)
+        return True
+    except FileExistsError:
+        return False
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"定时领取失败({cap_name}): {e}")
+        return False
 
 
 def _field_match(field: str, value: int) -> bool:
@@ -221,6 +243,8 @@ async def _run_due() -> int:
             if not expr or not cron_due(expr, now):
                 continue
             if _STATE.get(cap.name) == stamp:
+                continue
+            if not _claim(cap.name, stamp):
                 continue
             _STATE[cap.name] = stamp
             _save_state()

@@ -33,6 +33,7 @@ services:
         condition: service_healthy
     environment:
       - APP_ENV=${APP_ENV:-production}
+      - TZ=Asia/Shanghai
       - ROOT_PATH=/market
       - PORT=8093
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
