@@ -18,6 +18,7 @@ from datetime import datetime
 import httpx
 from fastapi import HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from app.config import get_settings
 from app.database import SessionLocal
@@ -226,7 +227,9 @@ async def _run_due() -> int:
     async with SessionLocal() as db:
         caps = (
             await db.scalars(
-                select(Capability).where(
+                select(Capability)
+                .options(selectinload(Capability.artifacts))
+                .where(
                     Capability.type == "workflow", Capability.status == "published"
                 )
             )
@@ -234,7 +237,8 @@ async def _run_due() -> int:
         for cap in caps:
             try:
                 definition = load_workflow_definition(cap)
-            except Exception:  # noqa: BLE001
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[sched] 工作流 {cap.name} 定义加载失败: {e}")
                 continue
             trig = definition.get("trigger") or {}
             if trig.get("type") != "schedule" or trig.get("enabled", True) is False:
