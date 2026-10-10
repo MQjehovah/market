@@ -93,6 +93,9 @@ services:
       - ARTIFACT_STORAGE=${ARTIFACT_STORAGE:-local}
       - ARTIFACT_DIR=${ARTIFACT_DIR:-./data/artifacts}
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
+      - SEED_ADMIN_PASSWORD=${SEED_ADMIN_PASSWORD:?SEED_ADMIN_PASSWORD is required}
+      - SEED_PUBLISHER_PASSWORD=${SEED_PUBLISHER_PASSWORD:?SEED_PUBLISHER_PASSWORD is required}
+      - SEED_USER_PASSWORD=${SEED_USER_PASSWORD:?SEED_USER_PASSWORD is required}
       - WORKFLOW_SCHEDULER_IN_APP=0
       - MARKET_INTERNAL_URL=http://market:8093
     command: ["sh", "-c", "exec python -m app.scheduler"]
