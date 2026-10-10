@@ -45,6 +45,8 @@ import ConfirmActionModal from '../components/ConfirmActionModal.vue'
 import AskTrialPanel from '../components/AskTrialPanel.vue'
 import MultiSelect from '../components/MultiSelect.vue'
 import WorkflowChat from '../components/WorkflowChat.vue'
+import HtmlPreview from '../components/workflow/HtmlPreview.vue'
+import { pickHtmlOutput } from '../utils/htmlOutput'
 
 const __API_BASE__ = (import.meta.env.BASE_URL || '/').replace(/\/$/, '') + '/api'
 
@@ -527,6 +529,8 @@ const runForm = reactive({})
 const runBusy = ref(false)
 const runError = ref('')
 const runResult = ref('')
+const runOut = ref(null)
+const runHtml = computed(() => pickHtmlOutput(runOut.value))
 const runExecutions = ref([])
 const runLoading = ref(false)
 const isRunnableApp = computed(() => isWorkflow.value && isPublished.value)
@@ -564,14 +568,16 @@ async function loadExecutions() {
 
 async function submitRun() {
   if (!cap.value) return
-  runBusy.value = true
-  runError.value = ''
-  runResult.value = ''
-  try {
-    const ex = await api.post(`/runtime/workflows/${cap.value.name}/run`, { input: { ...runForm } })
-    const outs = ex.outputs || {}
-    const endOut = outs.end || outs
-    runResult.value = JSON.stringify(endOut, null, 2)
+    runBusy.value = true
+    runError.value = ''
+    runResult.value = ''
+    runOut.value = null
+    try {
+      const ex = await api.post(`/runtime/workflows/${cap.value.name}/run`, { input: { ...runForm } })
+      const outs = ex.outputs || {}
+      const endOut = outs.end || outs
+      runOut.value = endOut
+      runResult.value = JSON.stringify(endOut, null, 2)
     if (ex.state === 'failed') runError.value = ex.error || '运行失败'
     await loadExecutions()
   } catch (e) {
@@ -2038,6 +2044,7 @@ onMounted(() => {
               <div v-if="runError" class="error mt-12">{{ runError }}</div>
               <div v-if="runResult" class="guide-block mt-16">
                 <h3 class="guide-title">结果</h3>
+                <HtmlPreview v-if="runHtml" :html="runHtml" />
                 <pre class="run-output">{{ runResult }}</pre>
               </div>
               <div class="guide-block mt-16">

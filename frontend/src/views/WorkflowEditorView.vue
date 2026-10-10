@@ -10,7 +10,9 @@ import { TYPE_CATEGORIES, TYPE_LABELS, formatDate, isOpenDraft } from '../utils/
 import StatusBadge from '../components/StatusBadge.vue'
 import WorkflowNode from '../components/workflow/WorkflowNode.vue'
 import VarInput from '../components/workflow/VarInput.vue'
+import HtmlPreview from '../components/workflow/HtmlPreview.vue'
 import CodeEditor from '../components/CodeEditor.vue'
+import { pickHtmlOutput } from '../utils/htmlOutput'
 import { bindUnsavedGuard } from '../utils/unsaved'
 
 const props = defineProps({ id: { type: String, default: '' } })
@@ -865,6 +867,10 @@ function nodeOutput(id) {
   return ex.node_outputs?.[id] ?? ex.outputs?.[id]
 }
 
+function nodeHtml(id) {
+  return pickHtmlOutput(nodeOutput(id))
+}
+
 function stateLabel(state) {
   return {
     pending: '等待',
@@ -1315,7 +1321,8 @@ function stateLabel(state) {
             <span class="muted" style="font-size: 11px">{{ n.id }}</span>
           </div>
           <pre v-if="nodeOutput(n.id) !== undefined" class="wf-json">{{ JSON.stringify(nodeOutput(n.id), null, 2) }}</pre>
-          <div v-else class="muted" style="font-size: 12px; padding: 6px 0">无输出</div>
+          <HtmlPreview v-if="nodeHtml(n.id)" :html="nodeHtml(n.id)" />
+          <div v-else-if="nodeOutput(n.id) === undefined" class="muted" style="font-size: 12px; padding: 6px 0">无输出</div>
         </div>
       </div>
     </div>
