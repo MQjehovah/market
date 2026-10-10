@@ -17,7 +17,7 @@ const STATUS_META = {
   succeeded: { icon: '✓', kind: 'ok', label: '成功' },
   failed: { icon: '✕', kind: 'bad', label: '失败' },
   timeout: { icon: '⏱', kind: 'bad', label: '超时' },
-  running: { icon: '⟳', kind: 'warn', label: '执行中' },
+  running: { icon: '⟳', kind: 'run', label: '执行中' },
   waiting: { icon: '❚❚', kind: 'warn', label: '待审批' },
   skipped: { icon: '—', kind: 'idle', label: '已跳过' },
   pending: { icon: '○', kind: 'idle', label: '等待' }
@@ -187,6 +187,11 @@ const branchHandles = computed(() => {
 .wf-node.st-ok { border-color: rgba(22, 163, 74, 0.8); box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.18), 0 4px 14px rgba(0, 0, 0, 0.28); }
 .wf-node.st-bad { border-color: rgba(220, 38, 38, 0.8); box-shadow: 0 0 0 2px rgba(220, 38, 38, 0.18), 0 4px 14px rgba(0, 0, 0, 0.28); }
 .wf-node.st-warn { border-color: rgba(217, 119, 6, 0.75); box-shadow: 0 0 0 2px rgba(217, 119, 6, 0.16), 0 4px 14px rgba(0, 0, 0, 0.28); }
+.wf-node.st-run { border-color: rgba(22, 163, 74, 0.85); animation: wfnode-pulse 1.4s ease-in-out infinite; }
+@keyframes wfnode-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.15), 0 4px 14px rgba(0, 0, 0, 0.28); }
+  50% { box-shadow: 0 0 0 6px rgba(22, 163, 74, 0.12), 0 4px 14px rgba(0, 0, 0, 0.28); }
+}
 .wf-node-tools {
   position: absolute;
   top: -34px;
@@ -227,6 +232,7 @@ const branchHandles = computed(() => {
   flex: none;
 }
 .wf-node-st.k-ok { background: #16a34a; }
+.wf-node-st.k-run { background: #16a34a; }
 .wf-node-st.k-bad { background: #dc2626; }
 .wf-node-st.k-warn { background: #d97706; }
 .wf-node-st.k-idle { background: var(--muted); }
