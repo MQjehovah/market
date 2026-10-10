@@ -521,6 +521,7 @@ async function load(id) {
       id: e.id || `e-${i}-${e.from}-${e.to}`,
       source: e.from,
       target: e.to,
+      sourceHandle: edgeSourceHandle(e.from, e.condition),
       animated: true,
       data: e.condition ? { condition: e.condition } : {}
     }))
@@ -532,6 +533,22 @@ async function load(id) {
   } catch (e) {
     error.value = e.message
   }
+}
+
+const BRANCH_SOURCE_TYPES = [
+  'if-else',
+  'if_else',
+  'question-classifier',
+  'question_classifier',
+  'approval',
+  'human-approval'
+]
+
+function edgeSourceHandle(fromId, condition) {
+  if (!condition) return undefined
+  const n = flowNodes.value.find((x) => x.id === fromId)
+  const t = n?.data?.node?.type || n?.type || ''
+  return BRANCH_SOURCE_TYPES.includes(t) ? condition : undefined
 }
 
 function toEngineWorkflow() {
@@ -633,6 +650,7 @@ function onConnect(conn) {
     id: `e-${conn.source}-${conn.target}-${Date.now().toString(36)}`,
     source: conn.source,
     target: conn.target,
+    sourceHandle: conn.sourceHandle || undefined,
     animated: true,
     data: condition ? { condition } : {}
   })
