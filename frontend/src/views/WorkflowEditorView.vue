@@ -822,8 +822,10 @@ async function run(inputArg) {
   }
   running.value = true
   execution.value = null
+  collapseAll()
   try {
     execution.value = await api.post(`/workflows/${meta.id}/test`, { input })
+    initExpanded(execution.value)
   } catch (e) {
     error.value = e.message
   } finally {
@@ -869,6 +871,62 @@ function nodeOutput(id) {
 
 function nodeHtml(id) {
   return pickHtmlOutput(nodeOutput(id))
+}
+
+const expandedMap = reactive({})
+const copiedId = ref('')
+
+function stateClass(s) {
+  if (s === 'succeeded') return 'ok'
+  if (['failed', 'timeout'].includes(s)) return 'bad'
+  if (['running', 'waiting'].includes(s)) return 'warn'
+  if (s === 'skipped') return 'skip'
+  return 'idle'
+}
+
+function stateIcon(s) {
+  return { succeeded: '✓', failed: '✕', timeout: '⏱', running: '⟳', waiting: '❚❚', skipped: '—' }[s] || '○'
+}
+
+function toggleExpanded(id) {
+  expandedMap[id] = !expandedMap[id]
+}
+
+function collapseAll() {
+  Object.keys(expandedMap).forEach((k) => delete expandedMap[k])
+}
+
+function initExpanded(ex) {
+  collapseAll()
+  if (!ex) return
+  const st = ex.node_states || {}
+  for (const [nid, s] of Object.entries(st)) {
+    if (['failed', 'timeout'].includes(s)) expandedMap[nid] = true
+  }
+  if ('end' in st) expandedMap.end = true
+  else {
+    const last = Object.keys(st).pop()
+    if (last) expandedMap[last] = true
+  }
+}
+
+const runDuration = computed(() => {
+  const ex = execution.value
+  if (!ex?.created_at || !ex?.updated_at) return ''
+  const d = (new Date(ex.updated_at) - new Date(ex.created_at)) / 1000
+  return d > 0 ? d.toFixed(1) : ''
+})
+
+function copyOutput(id) {
+  try {
+    navigator.clipboard.writeText(JSON.stringify(nodeOutput(id), null, 2))
+    copiedId.value = id
+    setTimeout(() => {
+      if (copiedId.value === id) copiedId.value = ''
+    }, 1500)
+  } catch {
+    copiedId.value = ''
+  }
 }
 
 function stateLabel(state) {
@@ -1287,42 +1345,47 @@ function stateLabel(state) {
       </aside>
     </div>
 
-    <div v-if="execution" class="wf-result panel">
-      <div class="flex-between flex-wrap">
-        <h3 style="margin: 0">
-          试运行结果
-          <span
-            class="badge"
-            :class="{
-              'badge-success': execution.state === 'succeeded',
-              'badge-warning': ['running', 'waiting'].includes(execution.state),
-              'badge-danger': ['failed', 'canceled'].includes(execution.state)
-            }"
-          >
-            {{ { pending: '等待', running: '执行中', waiting: '待审批', succeeded: '成功', failed: '失败', canceled: '已取消' }[execution.state] || execution.state }}
+    <div v-if="execution" class="wf-result wf-run panel">
+      <div class="wf-run-head">
+        <div class="wf-run-head-left">
+          <span class="wf-run-title">试运行结果</span>
+          <span class="wf-run-state" :class="stateClass(execution.state)">
+            <span class="wf-run-dot"></span>{{ stateLabel(execution.state) }}
           </span>
-        </h3>
-        <span class="muted" style="font-size: 12px">{{ formatDate(execution.updated_at) }}</span>
+          <span class="muted" style="font-size: 12px">{{ formatDate(execution.updated_at) }}</span>
+          <span v-if="runDuration" class="muted" style="font-size: 12px">耗时 {{ runDuration }}s</span>
+        </div>
+        <button class="btn btn-sm" type="button" @click="collapseAll">全部收起</button>
       </div>
       <div v-if="execution.state === 'waiting'" class="wf-wait-hint">
         <span>流程已暂停在「人工审批」节点，等待决定。</span>
         <router-link to="/approvals" class="btn btn-sm btn-primary">去审批中心</router-link>
       </div>
-      <div v-if="execution.error" class="alert alert-error mt-16">{{ execution.error }}</div>
-      <div class="wf-result-grid mt-16">
-        <div v-for="n in flowNodes" :key="n.id" class="wf-result-node">
-          <div class="flex">
-            <span class="badge" :class="{
-              'badge-success': nodeState(n.id) === 'succeeded',
-              'badge-danger': ['failed', 'timeout'].includes(nodeState(n.id)),
-              'badge-warning': nodeState(n.id) === 'running'
-            }">{{ stateLabel(nodeState(n.id)) }}</span>
-            <strong>{{ n.data.node.capability || n.id }}</strong>
-            <span class="muted" style="font-size: 11px">{{ n.id }}</span>
+      <div v-if="execution.error" class="alert alert-error mt-12">{{ execution.error }}</div>
+      <div class="wf-trace">
+        <div v-for="n in flowNodes" :key="n.id" class="wf-trace-item">
+          <button type="button" class="wf-trace-row" @click="toggleExpanded(n.id)">
+            <span
+              class="wf-trace-icon"
+              :class="[stateClass(nodeState(n.id)), { spin: nodeState(n.id) === 'running' }]"
+            >{{ stateIcon(nodeState(n.id)) }}</span>
+            <span class="wf-trace-name">{{ n.data.node.capability || n.id }}</span>
+            <span class="wf-trace-id">{{ n.id }}</span>
+            <span class="wf-trace-state">{{ stateLabel(nodeState(n.id)) }}</span>
+            <span class="wf-trace-caret">{{ expandedMap[n.id] ? '▾' : '▸' }}</span>
+          </button>
+          <div v-if="expandedMap[n.id]" class="wf-trace-body">
+            <div v-if="nodeOutput(n.id) === undefined" class="muted" style="font-size: 12px; padding: 6px 0">无输出</div>
+            <template v-else>
+              <div class="wf-trace-actions">
+                <button class="btn btn-sm" type="button" @click="copyOutput(n.id)">
+                  {{ copiedId === n.id ? '已复制' : '复制输出' }}
+                </button>
+                <HtmlPreview v-if="nodeHtml(n.id)" :html="nodeHtml(n.id)" />
+              </div>
+              <pre class="wf-json">{{ JSON.stringify(nodeOutput(n.id), null, 2) }}</pre>
+            </template>
           </div>
-          <pre v-if="nodeOutput(n.id) !== undefined" class="wf-json">{{ JSON.stringify(nodeOutput(n.id), null, 2) }}</pre>
-          <HtmlPreview v-if="nodeHtml(n.id)" :html="nodeHtml(n.id)" />
-          <div v-else-if="nodeOutput(n.id) === undefined" class="muted" style="font-size: 12px; padding: 6px 0">无输出</div>
         </div>
       </div>
     </div>
@@ -1519,21 +1582,56 @@ function stateLabel(state) {
 .btn-block { width: 100%; }
 .wf-result {
   margin: 14px 16px 16px;
-  max-height: 300px;
+  max-height: 460px;
   overflow: auto;
   flex-shrink: 0;
 }
-.wf-result-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
-.wf-result-node { border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: var(--panel-2); }
+.wf-run { padding: 12px 14px; }
+.wf-run-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.wf-run-head-left { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.wf-run-title { font-weight: 600; font-size: 14px; }
+.wf-run-state {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; padding: 2px 9px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--muted);
+}
+.wf-run-state .wf-run-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.wf-run-state.ok { color: #16a34a; border-color: rgba(22, 163, 74, 0.4); background: rgba(22, 163, 74, 0.08); }
+.wf-run-state.bad { color: #dc2626; border-color: rgba(220, 38, 38, 0.4); background: rgba(220, 38, 38, 0.08); }
+.wf-run-state.warn { color: #d97706; border-color: rgba(217, 119, 6, 0.4); background: rgba(217, 119, 6, 0.08); }
+.wf-trace { margin-top: 12px; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.wf-trace-item + .wf-trace-item { border-top: 1px solid var(--border); }
+.wf-trace-row {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  background: transparent; border: 0; padding: 9px 12px; cursor: pointer;
+  text-align: left; color: inherit; font: inherit;
+}
+.wf-trace-row:hover { background: var(--panel-2); }
+.wf-trace-icon {
+  flex: none; width: 18px; height: 18px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11px; color: #fff; background: var(--muted); line-height: 1;
+}
+.wf-trace-icon.ok { background: #16a34a; }
+.wf-trace-icon.bad { background: #dc2626; }
+.wf-trace-icon.warn { background: #d97706; }
+.wf-trace-icon.spin { animation: wfspin 1s linear infinite; }
+@keyframes wfspin { to { transform: rotate(360deg); } }
+.wf-trace-name { font-size: 13px; font-weight: 500; }
+.wf-trace-id { font-size: 11px; color: var(--muted); font-family: 'Cascadia Code', Consolas, monospace; }
+.wf-trace-state { margin-left: auto; font-size: 12px; color: var(--muted); }
+.wf-trace-caret { color: var(--muted); font-size: 11px; width: 12px; text-align: center; }
+.wf-trace-body { padding: 2px 12px 12px 40px; background: var(--panel-2); }
+.wf-trace-actions { display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; margin: 2px 0 4px; }
 .wf-json {
-  margin: 8px 0 0;
+  margin: 4px 0 0;
   padding: 8px;
   background: var(--bg);
   border-radius: 6px;
   border: 1px solid var(--border);
   font-size: 11px;
   overflow: auto;
-  max-height: 160px;
+  max-height: 280px;
 }
 .modal-mask {
   position: fixed; inset: 0; background: var(--overlay, rgba(15, 23, 42, 0.45)); z-index: 100;
