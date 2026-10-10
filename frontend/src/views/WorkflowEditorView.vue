@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, provide, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { VueFlow, useVueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
@@ -177,6 +177,16 @@ const canEdit = computed(
     (isOwner.value && ['draft', 'returned', 'rejected'].includes(meta.status))
 )
 const canTest = computed(() => isOwner.value)
+const outputNodeId = ref('')
+
+provide('wf-run-state', execution)
+provide('wf-can-edit', canEdit)
+provide('wf-node-actions', {
+  viewOutput: (id) => {
+    outputNodeId.value = id
+  },
+  remove: (id) => deleteNodeById(id)
+})
 const selectedNode = computed(() =>
   flowNodes.value.find((n) => n.id === selectedNodeId.value)
 )
@@ -650,6 +660,12 @@ function deleteSelectedNode() {
   onNodesDelete([selectedNode.value])
 }
 
+function deleteNodeById(id) {
+  const node = flowNodes.value.find((n) => n.id === id)
+  if (!node) return
+  onNodesDelete([node])
+}
+
 async function ensureCaps(type) {
   if (capCache[type] !== undefined || capLoading[type]) return
   capLoading[type] = true
@@ -823,6 +839,7 @@ async function run(inputArg) {
   running.value = true
   execution.value = null
   collapseAll()
+  outputNodeId.value = ''
   try {
     execution.value = await api.post(`/workflows/${meta.id}/test`, { input })
     initExpanded(execution.value)
@@ -1432,6 +1449,30 @@ function stateLabel(state) {
             </button>
           </div>
         </div>
+      </div>
+    </div>
+
+    <div v-if="outputNodeId" class="modal-mask" @click.self="outputNodeId = ''">
+      <div class="modal panel" style="width: 760px; max-height: 86vh; overflow: auto">
+        <div class="modal-header">
+          <h3 style="margin: 0">
+            节点输出 · {{ outputNodeId }}
+            <span class="muted" style="font-size: 12px; font-weight: 400">{{ stateLabel(nodeState(outputNodeId)) }}</span>
+          </h3>
+          <button class="modal-close" @click="outputNodeId = ''">✕</button>
+        </div>
+        <div v-if="nodeOutput(outputNodeId) === undefined" class="muted" style="font-size: 12px">
+          本次运行该节点无输出
+        </div>
+        <template v-else>
+          <div class="wf-trace-actions">
+            <button class="btn btn-sm" type="button" @click="copyOutput(outputNodeId)">
+              {{ copiedId === outputNodeId ? '已复制' : '复制输出' }}
+            </button>
+            <HtmlPreview v-if="nodeHtml(outputNodeId)" :html="nodeHtml(outputNodeId)" />
+          </div>
+          <pre class="wf-json">{{ JSON.stringify(nodeOutput(outputNodeId), null, 2) }}</pre>
+        </template>
       </div>
     </div>
   </div>

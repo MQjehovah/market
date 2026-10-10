@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, inject } from 'vue'
 import { Handle, Position } from '@vue-flow/core'
 
 const props = defineProps({
@@ -7,6 +7,37 @@ const props = defineProps({
   data: { type: Object, default: () => ({}) },
   selected: { type: Boolean, default: false }
 })
+
+const runState = inject('wf-run-state', null)
+const canEditState = inject('wf-can-edit', null)
+const nodeActions = inject('wf-node-actions', null)
+const canEdit = computed(() => canEditState?.value ?? false)
+
+const STATUS_META = {
+  succeeded: { icon: '✓', kind: 'ok', label: '成功' },
+  failed: { icon: '✕', kind: 'bad', label: '失败' },
+  timeout: { icon: '⏱', kind: 'bad', label: '超时' },
+  running: { icon: '⟳', kind: 'warn', label: '执行中' },
+  waiting: { icon: '❚❚', kind: 'warn', label: '待审批' },
+  skipped: { icon: '—', kind: 'idle', label: '已跳过' },
+  pending: { icon: '○', kind: 'idle', label: '等待' }
+}
+const status = computed(() => runState?.value?.node_states?.[props.id] || '')
+const statusMeta = computed(() => STATUS_META[status.value] || null)
+const hasOutput = computed(() => {
+  const ex = runState?.value
+  if (!ex) return false
+  const out = ex.node_outputs?.[props.id]
+  return (out !== undefined ? out : ex.outputs?.[props.id]) !== undefined
+})
+
+function viewOutput() {
+  if (nodeActions?.viewOutput) nodeActions.viewOutput(props.id)
+}
+
+function removeNode() {
+  if (nodeActions?.remove) nodeActions.remove(props.id)
+}
 
 const TYPE_META = {
   start: { label: '开始', color: '#2fbf71' },
@@ -79,12 +110,37 @@ const branchHandles = computed(() => {
 </script>
 
 <template>
-  <div class="wf-node" :class="{ selected, invalid: !valid }">
+  <div
+    class="wf-node"
+    :class="[{ selected, invalid: !valid }, statusMeta ? 'st-' + statusMeta.kind : '']"
+  >
+    <div class="wf-node-tools" @mousedown.stop @click.stop>
+      <button
+        v-if="runState"
+        class="wf-tool-btn"
+        type="button"
+        :title="hasOutput ? '查看运行输出' : '本次运行暂无输出'"
+        @click="viewOutput"
+      >▤ 输出</button>
+      <button
+        v-if="canEdit"
+        class="wf-tool-btn danger"
+        type="button"
+        title="删除节点"
+        @click="removeNode"
+      >✕</button>
+    </div>
     <Handle v-if="!isStart" type="target" :position="Position.Top" />
     <div class="wf-node-head" :style="{ borderColor: meta.color }">
       <span class="wf-node-dot" :style="{ background: meta.color }"></span>
       <span class="wf-node-type" :style="{ color: meta.color }">{{ meta.label }}</span>
       <span class="wf-node-id">{{ id }}</span>
+      <span
+        v-if="statusMeta"
+        class="wf-node-st"
+        :class="['k-' + statusMeta.kind, { spin: status === 'running' }]"
+        :title="statusMeta.label"
+      >{{ statusMeta.icon }}</span>
     </div>
     <div class="wf-node-body">
       <div class="wf-node-name" :class="{ placeholder: !valid }">{{ subtitle }}</div>
@@ -114,6 +170,7 @@ const branchHandles = computed(() => {
 
 <style scoped>
 .wf-node {
+  position: relative;
   width: 190px;
   background: var(--panel);
   border: 1px solid var(--border);
@@ -127,6 +184,54 @@ const branchHandles = computed(() => {
   box-shadow: 0 0 0 2px rgba(79, 140, 255, 0.25), 0 6px 18px rgba(0, 0, 0, 0.35);
 }
 .wf-node.invalid { border-color: rgba(229, 83, 75, 0.6); }
+.wf-node.st-ok { border-color: rgba(22, 163, 74, 0.8); box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.18), 0 4px 14px rgba(0, 0, 0, 0.28); }
+.wf-node.st-bad { border-color: rgba(220, 38, 38, 0.8); box-shadow: 0 0 0 2px rgba(220, 38, 38, 0.18), 0 4px 14px rgba(0, 0, 0, 0.28); }
+.wf-node.st-warn { border-color: rgba(217, 119, 6, 0.75); box-shadow: 0 0 0 2px rgba(217, 119, 6, 0.16), 0 4px 14px rgba(0, 0, 0, 0.28); }
+.wf-node-tools {
+  position: absolute;
+  top: -34px;
+  right: 0;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+  z-index: 6;
+}
+.wf-node:hover .wf-node-tools,
+.wf-node.selected .wf-node-tools { opacity: 1; pointer-events: auto; }
+.wf-tool-btn {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: inherit;
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+.wf-tool-btn:hover { border-color: var(--primary); color: var(--primary); }
+.wf-tool-btn.danger:hover { border-color: #dc2626; color: #dc2626; }
+.wf-node-st {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  line-height: 1;
+  color: #fff;
+  flex: none;
+}
+.wf-node-st.k-ok { background: #16a34a; }
+.wf-node-st.k-bad { background: #dc2626; }
+.wf-node-st.k-warn { background: #d97706; }
+.wf-node-st.k-idle { background: var(--muted); }
+.wf-node-st.spin { animation: wfnode-spin 1s linear infinite; }
+@keyframes wfnode-spin { to { transform: rotate(360deg); } }
 .wf-node-head {
   display: flex;
   align-items: center;
