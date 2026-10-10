@@ -511,12 +511,15 @@ async function load(id) {
       author_id: cap.author_id
     })
     const wf = data.workflow || { nodes: [], edges: [] }
-    flowNodes.value = (wf.nodes || []).map((n, i) => ({
-      id: n.id,
-      type: n.type,
-      position: n.position || { x: 100 + i * 60, y: 100 + (i % 3) * 40 },
-      data: { node: { ...n, id: n.id, type: n.type } }
-    }))
+    flowNodes.value = (wf.nodes || []).map((n, i) => {
+      const stableType = normalizeNodeType(n.type)
+      return {
+        id: n.id,
+        type: stableType,
+        position: n.position || { x: 100 + i * 60, y: 100 + (i % 3) * 40 },
+        data: { node: { ...n, id: n.id, type: stableType } }
+      }
+    })
     flowEdges.value = (wf.edges || []).map((e, i) => ({
       id: e.id || `e-${i}-${e.from}-${e.to}`,
       source: e.from,
@@ -543,6 +546,24 @@ const BRANCH_SOURCE_TYPES = [
   'approval',
   'human-approval'
 ]
+
+const NODE_TYPE_ALIASES = {
+  if_else: 'if-else',
+  http: 'http-request',
+  template: 'template-transform',
+  question_classifier: 'question-classifier',
+  parameter_extractor: 'parameter-extractor',
+  list_operator: 'list-operator',
+  doc_extractor: 'doc-extractor',
+  variable_aggregator: 'variable-aggregator',
+  variable_assigner: 'variable-assigner',
+  knowledge_retrieval: 'knowledge-retrieval',
+  'human-approval': 'approval'
+}
+
+function normalizeNodeType(t) {
+  return NODE_TYPE_ALIASES[t] || t
+}
 
 function edgeSourceHandle(fromId, condition) {
   if (!condition) return undefined
