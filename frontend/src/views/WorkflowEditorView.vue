@@ -1540,10 +1540,12 @@ function stateLabel(state) {
 .kv-row .input, .kv-row .select { flex: 1 1 0; min-width: 0; width: auto; }
 .kv-row .var-input { flex: 1 1 0; min-width: 0; width: auto; }
 .kv-row .btn-sm { flex: none; padding: 4px 8px; }
-.rows-grid .kv-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; align-items: center; }
-.rows-grid .kv-row .var-input, .rows-grid .kv-row .input, .rows-grid .kv-row .select { width: 100%; min-width: 0; }
-.rows-grid .kv-row .checkbox { margin-top: 0; }
-.rows-grid .kv-row .btn-sm { justify-self: end; }
+.rows-grid { overflow-x: auto; padding-bottom: 6px; }
+.rows-grid .kv-row { display: flex; flex-wrap: nowrap; width: max-content; min-width: 100%; gap: 6px; align-items: center; }
+.rows-grid .kv-row > * { flex: 0 0 auto; }
+.rows-grid .kv-row .var-input { width: 170px; }
+.rows-grid .kv-row .select { width: 104px; }
+.rows-grid .kv-row .checkbox { margin-top: 0; white-space: nowrap; }
 .json-adv { margin-top: 14px; }
 .json-adv > summary {
   cursor: pointer;
