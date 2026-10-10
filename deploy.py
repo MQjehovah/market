@@ -263,7 +263,7 @@ def compose_up(c: paramiko.SSHClient) -> None:
 
     code, _ = run(
         c,
-        f"cd {REMOTE_DIR} && docker compose up -d db market",
+        f"cd {REMOTE_DIR} && docker compose up -d db market market-scheduler",
         timeout=180,
     )
     if code != 0:

@@ -74,6 +74,7 @@ services:
 
   # 独立定时调度进程：只扫描 cron + 到期后 HTTP 派发给 market worker 执行（指挥与执行分离）
   market-scheduler:
+    image: market-market
     build:
       context: .
       dockerfile: Dockerfile
