@@ -183,6 +183,20 @@ const startFields = computed(() => {
   const fields = start?.data?.node?.params?.fields
   return Array.isArray(fields) ? fields.filter(Boolean) : []
 })
+const startFieldItems = computed(() =>
+  startFields.value
+    .map((f) =>
+      typeof f === 'string'
+        ? { key: f, label: f, placeholder: f, default: '' }
+        : {
+            key: f?.key || '',
+            label: f?.label || f?.key || '',
+            placeholder: f?.placeholder || f?.label || f?.key || '',
+            default: f?.default ?? ''
+          }
+    )
+    .filter((f) => f.key)
+)
 const selectedCaps = computed(() => capCache[selectedNode.value?.type] || [])
 const MARKET_NODE_TYPES = ['tool', 'agent', 'skill', 'mcp', 'workflow']
 const isMarketNode = computed(() => MARKET_NODE_TYPES.includes(selectedNode.value?.type))
@@ -235,7 +249,8 @@ const flatVars = computed(() => {
     if (t === 'start') {
       const fs = n.data?.node?.params?.fields || []
       fs.forEach((f) => {
-        if (f) out.push({ group: `上游 · ${n.id}`, label: `input.${f}`, value: `\${input.${f}}` })
+        const key = typeof f === 'string' ? f : f?.key
+        if (key) out.push({ group: `上游 · ${n.id}`, label: `input.${key}`, value: `\${input.${key}}` })
       })
     }
     for (const f of OUTPUT_FIELDS[t] || []) {
@@ -266,6 +281,7 @@ const FORMS = {
       key: 'fields',
       label: '输入字段',
       kind: 'rows',
+      grid: true,
       rowFields: [
         { key: 'key', ph: '字段名，如 alert_id' },
         { key: 'label', ph: '显示名' },
@@ -822,12 +838,14 @@ function startRun() {
     base = {}
   }
   for (const k of Object.keys(runForm)) delete runForm[k]
-  const fields = startFields.value
+  const fields = startFieldItems.value
   if (!fields.length) {
     run(undefined)
     return
   }
-  for (const f of fields) runForm[f] = base[f] !== undefined && base[f] !== null ? base[f] : ''
+  for (const f of fields)
+    runForm[f.key] =
+      base[f.key] !== undefined && base[f.key] !== null ? base[f.key] : f.default ?? ''
   runOpen.value = true
 }
 
@@ -1064,7 +1082,7 @@ function stateLabel(state) {
               <button v-if="canEdit" class="btn btn-sm" type="button" @click="addMap(f.key)">+ 新增</button>
             </div>
 
-            <div v-else-if="f.kind === 'rows'">
+            <div v-else-if="f.kind === 'rows'" :class="{ 'rows-grid': f.grid }">
               <div v-for="(row, i) in (p[f.key] || [])" :key="i" class="kv-row">
                 <template v-for="rf in f.rowFields" :key="rf.key">
                   <select v-if="rf.kind === 'select'" v-model="row[rf.key]" class="select" :disabled="!canEdit">
@@ -1328,11 +1346,11 @@ function stateLabel(state) {
         <div class="muted" style="font-size: 12px; margin-bottom: 12px">
           按「开始」节点声明的输入字段填写（在流程里以 ${input.字段} 引用）。
         </div>
-        <div v-for="f in startFields" :key="f" class="field">
-          <label>{{ f }}</label>
-          <input v-model="runForm[f]" class="input" :placeholder="f" />
+        <div v-for="f in startFieldItems" :key="f.key" class="field">
+          <label>{{ f.label || f.key }}</label>
+          <input v-model="runForm[f.key]" class="input" :placeholder="f.placeholder || f.key" />
         </div>
-        <div v-if="!startFields.length" class="muted" style="font-size: 12px">
+        <div v-if="!startFieldItems.length" class="muted" style="font-size: 12px">
           开始节点未声明输入字段，将按空参运行。
         </div>
         <div class="modal-foot">
@@ -1522,6 +1540,10 @@ function stateLabel(state) {
 .kv-row .input, .kv-row .select { flex: 1 1 0; min-width: 0; width: auto; }
 .kv-row .var-input { flex: 1 1 0; min-width: 0; width: auto; }
 .kv-row .btn-sm { flex: none; padding: 4px 8px; }
+.rows-grid .kv-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; align-items: center; }
+.rows-grid .kv-row .var-input, .rows-grid .kv-row .input, .rows-grid .kv-row .select { width: 100%; min-width: 0; }
+.rows-grid .kv-row .checkbox { margin-top: 0; }
+.rows-grid .kv-row .btn-sm { justify-self: end; }
 .json-adv { margin-top: 14px; }
 .json-adv > summary {
   cursor: pointer;
