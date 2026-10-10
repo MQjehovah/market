@@ -1829,6 +1829,22 @@ function goEdit() {
   focusPackagePanel()
 }
 
+/** 工作流：只读查看当前版本编排（不创建新版） */
+function viewWorkflow() {
+  if (!cap.value?.id) return
+  router.push(`/workflows/${cap.value.id}/edit`)
+}
+
+/** 工作流：编辑已有草稿；无草稿则开新版 */
+function editWorkflow() {
+  const d = cap.value?.draft_id
+  if (cap.value?.has_draft && d) {
+    router.push(`/workflows/${d}/edit`)
+    return
+  }
+  openEditDraft()
+}
+
 async function bootstrapDetail({ keepNotice = false } = {}) {
   if (!cap.value) loading.value = true
   if (!keepNotice) notice.value = ''
@@ -2759,13 +2775,26 @@ onMounted(() => {
             <div v-if="canSubmit || canWithdraw || canDelete || preferOnlineEdit || isAdmin" class="panel">
             <div class="flex flex-wrap" style="gap: 8px">
               <button
-                v-if="preferOnlineEdit && !canRevise"
+                v-if="isWorkflow"
+                class="btn"
+                :class="!canRevise ? 'btn-primary' : ''"
+                type="button"
+                @click="viewWorkflow"
+              >查看编排</button>
+              <button
+                v-if="isWorkflow && canRevise && cap.draft_id"
+                class="btn btn-primary"
+                type="button"
+                @click="editWorkflow"
+              >继续编辑草稿</button>
+              <button
+                v-if="!isWorkflow && preferOnlineEdit && !canRevise"
                 class="btn"
                 :class="canEdit ? 'btn-primary' : ''"
                 type="button"
                 :disabled="revising"
                 @click="goEdit"
-              >{{ cap.type === 'workflow' ? '查看编排' : '在线编辑' }}</button>
+              >在线编辑</button>
               <button
                 v-if="isWorkflow && ['published', 'deprecated'].includes(cap.status)"
                 class="btn"
@@ -2792,7 +2821,7 @@ onMounted(() => {
             </div>
             <div class="flex mt-16" style="gap: 10px; flex-wrap: wrap">
               <button class="btn btn-primary" type="button" :disabled="revising" @click="openEditDraft">
-                {{ revising ? '正在开新版…' : '在线编辑（开新版）' }}
+                {{ revising ? '正在开新版…' : (isWorkflow ? '开新版编辑' : '在线编辑（开新版）') }}
               </button>
             </div>
             <div v-if="reviseError" class="error mt-12">{{ reviseError }}</div>

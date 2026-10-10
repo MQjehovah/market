@@ -181,6 +181,31 @@ const canEdit = computed(
 const canTest = computed(() => isOwner.value)
 const outputNodeId = ref('')
 
+/** 只读查看已发布版本时，属主/管理员可一键开新版进入编辑 */
+const canStartNewVersion = computed(
+  () =>
+    !canEdit.value &&
+    !!meta.id &&
+    ['published', 'deprecated'].includes(meta.status) &&
+    isOwner.value
+)
+const newVersioning = ref(false)
+
+async function startNewVersion() {
+  if (!meta.id || newVersioning.value) return
+  newVersioning.value = true
+  error.value = ''
+  try {
+    const draft = await api.post(`/publish/capabilities/${meta.id}/edit-draft`, {})
+    if (!draft?.id) throw new Error('已创建版本但未返回草稿 id')
+    await router.replace(`/workflows/${draft.id}/edit`)
+  } catch (e) {
+    error.value = e.message || String(e)
+  } finally {
+    newVersioning.value = false
+  }
+}
+
 provide('wf-run-state', canvasRunState)
 provide('wf-can-edit', canEdit)
 provide('wf-node-actions', {
@@ -283,6 +308,18 @@ watch(
       paramsText.value = JSON.stringify(selectedNode.value.data.node.params || {}, null, 2)
       paramsError.value = ''
       if (isMarketNode.value) ensureCaps(selectedNode.value.type)
+    }
+  }
+)
+
+watch(
+  () => props.id,
+  (id) => {
+    if (id) {
+      execution.value = null
+      liveExecution.value = null
+      outputNodeId.value = ''
+      load(id)
     }
   }
 )
@@ -1027,6 +1064,18 @@ function stateLabel(state) {
           @click="startRun"
         >
           {{ running ? '运行中…' : '▶ 试运行' }}
+        </button>
+        <span v-if="!canEdit" class="muted" style="font-size: 12px; white-space: nowrap; align-self: center">
+          {{ canStartNewVersion ? '已发布版本 · 只读' : '只读查看' }}
+        </span>
+        <button
+          v-if="canStartNewVersion"
+          class="btn btn-sm btn-primary"
+          type="button"
+          :disabled="newVersioning"
+          @click="startNewVersion"
+        >
+          {{ newVersioning ? '开新版中…' : '开新版编辑' }}
         </button>
       </div>
     </div>
