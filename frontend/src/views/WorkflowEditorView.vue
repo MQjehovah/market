@@ -1525,7 +1525,10 @@ function stateLabel(state) {
 </template>
 
 <style scoped>
-.wf-editor { height: calc(100vh - 58px); display: flex; flex-direction: column; }
+.wf-editor { height: 100vh; display: flex; flex-direction: column; }
+@media (max-width: 900px) {
+  .wf-editor { height: calc(100vh - 52px); } /* 移动端顶部 52px 导航条 */
+}
 .wf-toolbar {
   display: flex;
   align-items: center;
