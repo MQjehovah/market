@@ -19,6 +19,8 @@ from app.models import (
     UsageEvent,
     User,
     UserCapability,
+    UserSecret,
+    WorkflowConversation,
     WorkflowExecution,
 )
 from app.permissions import require_admin, role_has_permission
@@ -320,7 +322,9 @@ async def delete_user(user_id: str, db: DbSession, user: CurrentUser):
     await db.execute(delete(AgentBinding).where(AgentBinding.created_by == user_id))
     await db.execute(delete(A2ATask).where(A2ATask.created_by == user_id))
     await db.execute(delete(WorkflowExecution).where(WorkflowExecution.created_by == user_id))
+    await db.execute(delete(WorkflowConversation).where(WorkflowConversation.created_by == user_id))
     await db.execute(delete(Review).where(Review.reviewer_id == user_id))
+    await db.execute(delete(UserSecret).where(UserSecret.user_id == user_id))
     await db.delete(target)
     await db.commit()
     return MessageOut(
