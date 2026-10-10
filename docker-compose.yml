@@ -34,6 +34,7 @@ services:
     environment:
       - APP_ENV=${APP_ENV:-production}
       - TZ=Asia/Shanghai
+      - WORKFLOW_SCHEDULER_IN_APP=${WORKFLOW_SCHEDULER_IN_APP:-0}
       - ROOT_PATH=/market
       - PORT=8093
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
@@ -69,6 +70,31 @@ services:
       - SSO_REDIRECT_URI=${SSO_REDIRECT_URI:-http://192.168.31.34:8093/api/auth/oidc/callback}
       - SSO_REDIRECT_TARGET=${SSO_REDIRECT_TARGET:-/login}
     command: ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port 8093 --root-path /market --proxy-headers --forwarded-allow-ips=* --workers ${WORKERS:-1}"]
+    restart: unless-stopped
+
+  # 独立定时调度进程：只扫描 cron + 到期后 HTTP 派发给 market worker 执行（指挥与执行分离）
+  market-scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: market-scheduler
+    depends_on:
+      db:
+        condition: service_healthy
+      market:
+        condition: service_started
+    volumes:
+      - ./data:/app/backend/data
+    environment:
+      - APP_ENV=${APP_ENV:-production}
+      - TZ=Asia/Shanghai
+      - DATABASE_URL=${DATABASE_URL:-sqlite+aiosqlite:///./data/marketplace.db}
+      - ARTIFACT_STORAGE=${ARTIFACT_STORAGE:-local}
+      - ARTIFACT_DIR=${ARTIFACT_DIR:-./data/artifacts}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
+      - WORKFLOW_SCHEDULER_IN_APP=0
+      - MARKET_INTERNAL_URL=http://market:8093
+    command: ["sh", "-c", "exec python -m app.scheduler"]
     restart: unless-stopped
 
 volumes:

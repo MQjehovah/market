@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     app_name: str = "企业AI能力平台"
     app_version: str = "0.1.0"
     debug: bool = False
+    # 内嵌定时触发器开关：多 worker 生产部署请置 0（WORKFLOW_SCHEDULER_IN_APP=0），
+    # 改用独立调度进程 `python -m app.scheduler`（扫描→到期后 HTTP 派发给 worker 执行）。
+    workflow_scheduler_in_app: bool = True
 
     # 数据库
     database_url: str = "sqlite+aiosqlite:///./data/marketplace.db"

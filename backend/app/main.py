@@ -53,7 +53,8 @@ async def lifespan(app: FastAPI):
         await seed_if_empty(session)
     from app.services.workflow_triggers import start_scheduler, stop_scheduler
 
-    start_scheduler()
+    if get_settings().workflow_scheduler_in_app:
+        start_scheduler()
     try:
         yield
     finally:
