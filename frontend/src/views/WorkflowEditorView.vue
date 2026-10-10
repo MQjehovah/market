@@ -283,8 +283,8 @@ const FORMS = {
       kind: 'rows',
       grid: true,
       rowFields: [
-        { key: 'key', ph: '字段名，如 alert_id' },
-        { key: 'label', ph: '显示名' },
+        { key: 'key', ph: '字段名，如 alert_id', noVars: true },
+        { key: 'label', ph: '显示名', noVars: true },
         { key: 'type', kind: 'select', options: ['text', 'number', 'date', 'select', 'textarea'] },
         { key: 'required', kind: 'bool' },
         { key: 'default', ph: '默认值' }
@@ -1091,7 +1091,7 @@ function stateLabel(state) {
                   <label v-else-if="rf.kind === 'bool'" class="checkbox" style="margin-top: 0; flex: none">
                     <input v-model="row[rf.key]" type="checkbox" :disabled="!canEdit" /> 必填
                   </label>
-                  <VarInput v-else v-model="row[rf.key]" :disabled="!canEdit" :placeholder="rf.ph || rf.key" :variables="flatVars" />
+                  <VarInput v-else v-model="row[rf.key]" :disabled="!canEdit" :placeholder="rf.ph || rf.key" :variables="flatVars" :no-vars="!!rf.noVars" />
                 </template>
                 <button v-if="canEdit" class="btn btn-sm" type="button" @click="delRow(f.key, i)">×</button>
               </div>
@@ -1537,13 +1537,14 @@ function stateLabel(state) {
 .modal-close { background: none; border: none; color: var(--muted); font-size: 16px; cursor: pointer; }
 .modal-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 14px; }
 .kv-row { display: flex; gap: 6px; align-items: flex-start; margin-bottom: 6px; }
-.kv-row .input, .kv-row .select { flex: 1 1 0; min-width: 0; width: auto; }
+.kv-row > .input, .kv-row .select { flex: 1 1 0; min-width: 0; width: auto; }
 .kv-row .var-input { flex: 1 1 0; min-width: 0; width: auto; }
 .kv-row .btn-sm { flex: none; padding: 4px 8px; }
 .rows-grid { overflow-x: auto; padding-bottom: 6px; }
 .rows-grid .kv-row { display: flex; flex-wrap: nowrap; width: max-content; min-width: 100%; gap: 6px; align-items: center; }
 .rows-grid .kv-row > * { flex: 0 0 auto; }
-.rows-grid .kv-row .var-input { width: 170px; }
+.rows-grid .kv-row .var-input { width: 140px; }
+.rows-grid .kv-row > .var-input:first-child { width: 168px; }
 .rows-grid .kv-row .select { width: 104px; }
 .rows-grid .kv-row .checkbox { margin-top: 0; white-space: nowrap; }
 .json-adv { margin-top: 14px; }

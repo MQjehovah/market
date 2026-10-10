@@ -7,7 +7,8 @@ const props = defineProps({
   multiline: { type: Boolean, default: false },
   disabled: { type: Boolean, default: false },
   placeholder: { type: String, default: '' },
-  variables: { type: Array, default: () => [] }
+  variables: { type: Array, default: () => [] },
+  noVars: { type: Boolean, default: false }
 })
 const emit = defineEmits(['update:modelValue'])
 
@@ -93,7 +94,7 @@ onBeforeUnmount(() => close())
 </script>
 
 <template>
-  <div class="var-input">
+  <div class="var-input" :class="{ 'no-vars': noVars, ml: multiline }">
     <textarea
       v-if="multiline"
       ref="el"
@@ -113,7 +114,7 @@ onBeforeUnmount(() => close())
       :disabled="disabled"
       @input="onInput"
     />
-    <button type="button" class="var-btn" :disabled="disabled" title="插入变量" @click="toggle">{x}</button>
+    <button v-if="!noVars" type="button" class="var-btn" :disabled="disabled" title="插入变量" @click="toggle">{x}</button>
 
     <div v-if="open" class="var-menu" :style="menuStyle">
       <div v-for="g in grouped" :key="g.label" class="var-group">
@@ -135,21 +136,26 @@ onBeforeUnmount(() => close())
 </template>
 
 <style scoped>
-.var-input { position: relative; display: flex; gap: 6px; align-items: flex-start; width: 100%; }
-.var-field { flex: 1; min-width: 0; }
+.var-input { position: relative; display: block; width: 100%; }
+.var-field { width: 100%; }
+.var-input:not(.no-vars) .var-field { padding-right: 34px; }
 .var-btn {
-  flex: none;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  border-radius: 6px;
-  padding: 5px 8px;
+  position: absolute;
+  right: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: none;
+  background: transparent;
+  border-radius: 5px;
+  padding: 2px 6px;
   font-size: 11px;
   font-family: 'Cascadia Code', Consolas, monospace;
   cursor: pointer;
   color: var(--muted);
-  line-height: 1.2;
+  line-height: 1.5;
 }
-.var-btn:hover { border-color: var(--primary); color: var(--primary); }
+.var-input.ml .var-btn { top: 7px; transform: none; }
+.var-btn:hover { background: var(--panel-2); color: var(--primary); }
 .var-menu {
   z-index: 200;
   max-height: 320px;
