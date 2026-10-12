@@ -360,8 +360,8 @@ const FORMS = {
   tool: [],
   mcp: [
     { key: 'op', label: '操作', kind: 'select', options: ['call', 'install'] },
-    { key: 'tool', label: '工具名（op=call）', kind: 'text', ph: '如 dingtalk_send_message' },
-    { key: 'args', label: '参数', kind: 'map', phKey: '参数名', phVal: '值，支持变量' }
+    { key: 'tool', label: '工具名（op=call）', kind: 'mcp-tool' },
+    { key: 'args', label: '参数（选工具自动带出，可改名/填值）', kind: 'map', phKey: '参数名', phVal: '值，支持变量' }
   ],
   workflow: [
     { key: 'input', label: '输入参数（子工作流入参）', kind: 'map', phKey: '字段名', phVal: '值/变量' }
@@ -765,12 +765,93 @@ async function ensureCaps(type) {
 function onCapChange(name) {
   const node = selectedNode.value?.data.node
   if (!node) return
+  // 连接器节点更换能力：清掉旧工具与参数（工具集不同，避免带着上一个连接器的配置）
+  if (node.type === 'mcp' && node.capability !== name) {
+    node.params = { ...(node.params || {}), tool: '', args: {} }
+  }
   node.capability = name
   if (name && lockVersion.value) {
     const cap = (capCache[node.type] || []).find((c) => c.name === name)
     if (cap) node.version = cap.version
   }
 }
+
+// ---- 连接器节点：工具下拉 + 按 schema 带参（真实连接发现工具） ----
+const mcpToolCache = reactive({}) // 能力名 -> { loading, error, tools: [{name, description, inputSchema}] }
+
+const currentMcpCap = computed(() => {
+  const n = selectedNode.value?.data?.node
+  return n && n.type === 'mcp' ? n.capability || '' : ''
+})
+const currentMcpTools = computed(() => mcpToolCache[currentMcpCap.value] || null)
+const mcpToolOptions = computed(() => (currentMcpTools.value?.tools || []).map((t) => t.name))
+const currentToolMeta = computed(() => {
+  const tool = selectedNode.value?.data?.node?.params?.tool
+  return (currentMcpTools.value?.tools || []).find((t) => t.name === tool) || null
+})
+const mcpRequiredList = computed(() => currentToolMeta.value?.inputSchema?.required || [])
+
+async function ensureMcpTools(name) {
+  if (!name || mcpToolCache[name] !== undefined) return
+  mcpToolCache[name] = { loading: true, error: '', tools: [] }
+  try {
+    const res = await api.post(`/runtime/mcp/${encodeURIComponent(name)}/connect`, {})
+    const rows = res?.result?.tools || []
+    mcpToolCache[name] = {
+      loading: false,
+      error: '',
+      tools: rows
+        .filter((t) => t?.name)
+        .map((t) => ({ name: t.name, description: t.description || '', inputSchema: t.inputSchema || {} }))
+    }
+  } catch (e) {
+    // 无运行时权限/凭据时回退读能力包 tools.json（仅名称与描述，无参数 schema）
+    mcpToolCache[name] = { loading: false, error: e.message || String(e), tools: [] }
+    try {
+      const cap = (capCache['mcp'] || []).find((c) => c.name === name)
+      if (cap?.id) {
+        const file = await api.get(
+          `/capabilities/${cap.id}/package/file?path=${encodeURIComponent('tools.json')}`
+        )
+        if (file?.content) {
+          const parsed = JSON.parse(file.content)
+          const rows = Array.isArray(parsed?.tools) ? parsed.tools : Array.isArray(parsed) ? parsed : []
+          mcpToolCache[name].tools = rows
+            .filter((t) => t?.name)
+            .map((t) => ({ name: t.name, description: t.description || '', inputSchema: {} }))
+          mcpToolCache[name].error = ''
+        }
+      }
+    } catch {
+      /* 保持错误提示 */
+    }
+  }
+}
+
+function onMcpToolChange(toolName) {
+  const node = selectedNode.value?.data?.node
+  if (!node) return
+  node.params = node.params || {}
+  node.params.tool = toolName
+  const meta = (mcpToolCache[node.capability]?.tools || []).find((t) => t.name === toolName)
+  const props = meta?.inputSchema?.properties || {}
+  const args =
+    node.params.args && typeof node.params.args === 'object' && !Array.isArray(node.params.args)
+      ? node.params.args
+      : {}
+  const next = {}
+  for (const k of Object.keys(props)) next[k] = k in args ? args[k] : ''
+  for (const k of Object.keys(args)) if (!(k in next)) next[k] = args[k]
+  node.params.args = next
+}
+
+watch(
+  () => currentMcpCap.value,
+  (name) => {
+    if (name) ensureMcpTools(name)
+  },
+  { immediate: true }
+)
 
 function applyParams() {
   if (!selectedNode.value) return
@@ -1207,6 +1288,45 @@ function stateLabel(state) {
               class="input"
               :disabled="!canEdit"
             />
+            <template v-else-if="f.kind === 'mcp-tool'">
+              <div v-if="!currentMcpCap" class="muted" style="font-size: 12px">请先在上方选择连接器能力</div>
+              <template v-else>
+                <select
+                  :value="p[f.key] || ''"
+                  class="select"
+                  :disabled="!canEdit || (currentMcpTools && currentMcpTools.loading)"
+                  @change="onMcpToolChange($event.target.value)"
+                >
+                  <option value="">{{ currentMcpTools?.loading ? '正在连接并加载工具…' : '请选择工具…' }}</option>
+                  <option v-if="p[f.key] && !mcpToolOptions.includes(p[f.key])" :value="p[f.key]">
+                    {{ p[f.key] }}（当前）
+                  </option>
+                  <option v-for="n in mcpToolOptions" :key="n" :value="n">{{ n }}</option>
+                </select>
+                <div
+                  v-if="currentMcpTools?.error"
+                  class="muted"
+                  style="font-size: 12px; margin-top: 4px; color: var(--danger); line-height: 1.6"
+                >
+                  连接发现失败：{{ currentMcpTools.error }}（已回退为「仅工具名」列表）
+                </div>
+                <div
+                  v-else-if="currentMcpTools && !currentMcpTools.loading && !mcpToolOptions.length"
+                  class="muted"
+                  style="font-size: 12px; margin-top: 4px"
+                >
+                  该连接器未发现工具（请检查能力包 / 连接配置）
+                </div>
+                <div
+                  v-if="currentToolMeta"
+                  class="muted"
+                  style="font-size: 12px; margin-top: 4px; line-height: 1.6"
+                >
+                  {{ currentToolMeta.description }}
+                  <template v-if="mcpRequiredList.length">｜必填：{{ mcpRequiredList.join('、') }}</template>
+                </div>
+              </template>
+            </template>
             <select v-else-if="f.kind === 'select'" v-model="p[f.key]" class="select" :disabled="!canEdit">
               <option v-for="o in f.options" :key="o" :value="o">{{ o }}</option>
             </select>
