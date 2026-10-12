@@ -423,8 +423,11 @@ const FORMS = {
   ],
   'http-request': [
     { key: 'method', label: '方法', kind: 'select', options: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'] },
-    { key: 'url', label: 'URL', kind: 'text', ph: 'https://…' },
-    { key: 'headers', label: 'Headers', kind: 'map', phKey: '头', phVal: '值' }
+    { key: 'url', label: 'URL', kind: 'text', ph: 'https://…（支持变量）' },
+    { key: 'params', label: '查询参数（拼到 URL ?后面）', kind: 'map', phKey: '参数名', phVal: '值，支持变量' },
+    { key: 'headers', label: '请求头 Headers', kind: 'map', phKey: '头', phVal: '值，支持变量' },
+    { key: 'body', label: '请求负载 Body（JSON，POST/PUT/PATCH 用）', kind: 'map', phKey: '字段名', phVal: '值，支持变量' },
+    { key: 'timeout_seconds', label: '超时（秒，默认 60）', kind: 'number' }
   ],
   'template-transform': [{ key: 'template', label: '模板', kind: 'textarea', ph: '文本/JSON，支持变量' }],
   'doc-extractor': [{ key: 'text', label: '文本', kind: 'textarea', ph: '待解析文本' }],
