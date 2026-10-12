@@ -794,6 +794,11 @@ const mcpRequiredList = computed(() => currentToolMeta.value?.inputSchema?.requi
 async function ensureMcpTools(name) {
   if (!name || mcpToolCache[name] !== undefined) return
   mcpToolCache[name] = { loading: true, error: '', tools: [] }
+  // 运行时接口返回的是带前缀的暴露名（mcp_<能力>_<工具>）；工作流节点存原始工具名（引擎会自行加前缀）
+  const sanitize = (s) => String(s || '').replace(/[^0-9A-Za-z_]/g, '_').slice(0, 32)
+  const prefix = `mcp_${sanitize(name)}_`
+  const stripPrefix = (toolName) =>
+    toolName && toolName.startsWith(prefix) ? toolName.slice(prefix.length) : toolName
   try {
     const res = await api.post(`/runtime/mcp/${encodeURIComponent(name)}/connect`, {})
     const rows = res?.result?.tools || []
@@ -802,7 +807,11 @@ async function ensureMcpTools(name) {
       error: '',
       tools: rows
         .filter((t) => t?.name)
-        .map((t) => ({ name: t.name, description: t.description || '', inputSchema: t.inputSchema || {} }))
+        .map((t) => ({
+          name: stripPrefix(t.name),
+          description: t.description || '',
+          inputSchema: t.inputSchema || {}
+        }))
     }
   } catch (e) {
     // 无运行时权限/凭据时回退读能力包 tools.json（仅名称与描述，无参数 schema）
