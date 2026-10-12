@@ -123,11 +123,17 @@ async def _get_workflow_cap(db: DbSession, cap_id: str) -> Capability:
     return cap
 
 
-def _require_workflow_owner(cap: Capability, user) -> None:
-    if user.role != "admin" and cap.author_id != user.id:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN, "只能编辑自己创建的工作流草稿"
-        )
+async def _require_workflow_owner(db, cap: Capability, user) -> None:
+    """工作流编辑权：作者 / 管理员 / 协作者。"""
+    if user.role == "admin" or cap.author_id == user.id:
+        return
+    from app.services.collaboration import is_collaborator
+
+    if await is_collaborator(db, cap.name, user.id):
+        return
+    raise HTTPException(
+        status.HTTP_403_FORBIDDEN, "只能编辑自己创建或已协作的工作流草稿"
+    )
 
 
 def _load_workflow(cap: Capability) -> dict:
@@ -163,7 +169,7 @@ async def workflow_definition(cap_id: str, db: DbSession, user: CurrentUser):
     """读取工作流定义（画布数据）。草稿仅作者/管理员；正式版按可见性。"""
     cap = await _get_workflow_cap(db, cap_id)
     if cap.status in ("draft", "rejected", "returned"):
-        _require_workflow_owner(cap, user)
+        await _require_workflow_owner(db, cap, user)
     elif not can_view(cap, user):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "无权限查看该能力")
     return {
@@ -176,7 +182,7 @@ async def workflow_definition(cap_id: str, db: DbSession, user: CurrentUser):
 async def update_workflow(cap_id: str, data: WorkflowUpdate, db: DbSession, user: CurrentUser):
     """更新工作流草稿的能力包（workflow.json），仅草稿/驳回/打回状态可编辑。"""
     cap = await _get_workflow_cap(db, cap_id)
-    _require_workflow_owner(cap, user)
+    await _require_workflow_owner(db, cap, user)
     if cap.status not in ("draft", "returned", "rejected"):
         raise HTTPException(
             status.HTTP_409_CONFLICT, "仅草稿或被打回/驳回的工作流可以编辑"
@@ -204,7 +210,7 @@ async def update_workflow(cap_id: str, data: WorkflowUpdate, db: DbSession, user
 async def test_workflow(cap_id: str, data: WorkflowExecuteRequest, db: DbSession, user: CurrentUser):
     """试运行当前草稿定义：作者/管理员可直接执行，不要求发布。"""
     cap = await _get_workflow_cap(db, cap_id)
-    _require_workflow_owner(cap, user)
+    await _require_workflow_owner(db, cap, user)
     if not cap.artifacts:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY, "请先保存画布，再试运行"

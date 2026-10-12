@@ -7,17 +7,20 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import and_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import joinedload, selectinload
 
 from app.auth import CurrentUser, DbSession
-from app.models import Capability, CapabilityArtifact
+from app.models import Capability, CapabilityArtifact, CapabilityCollaborator, User
 from app.schemas import (
     CapabilityCreate,
     CapabilityOut,
     CapabilityUpdate,
+    CollaboratorAdd,
     MessageOut,
     PackageEditSave,
+    TransferOwnershipRequest,
+    UserBriefOut,
     VersionCreate,
 )
 from app.services.capabilities import (
@@ -37,6 +40,13 @@ from app.services.capabilities import (
     withdraw_capability,
 )
 from app.services.capability_package import apply_package
+from app.services.collaboration import (
+    add_collaborator,
+    is_collaborator,
+    list_collaborators,
+    notify,
+    remove_collaborator,
+)
 from app.services.packages import prepare_package
 from app.storage import get_storage
 
@@ -46,6 +56,18 @@ router = APIRouter(prefix="/api/publish", tags=["publish"])
 def _require_owner(cap: Capability, user) -> None:
     if cap.author_id != user.id and user.role != "admin":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "只能操作自己发布的能力")
+
+
+async def _is_cap_editor(db, cap: Capability, user) -> bool:
+    """内容编辑权：作者 / 管理员 / 协作者。"""
+    if user.role == "admin" or cap.author_id == user.id:
+        return True
+    return await is_collaborator(db, cap.name, user.id)
+
+
+async def _require_cap_editor(db, cap: Capability, user) -> None:
+    if not await _is_cap_editor(db, cap, user):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "只能操作自己创建或已协作的能力")
 
 
 def _require_creator(user) -> None:
@@ -82,7 +104,13 @@ async def update(cap_id: str, data: CapabilityUpdate, db: DbSession, user: Curre
     cap = await db.get(Capability, cap_id)
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
-    _require_owner(cap, user)
+    await _require_cap_editor(db, cap, user)
+    # 协作者不可修改「名称/类型」（身份变更仍仅限作者/管理员）
+    if user.role != "admin" and cap.author_id != user.id:
+        if (data.name is not None and data.name != cap.name) or (
+            data.type is not None and str(data.type) != cap.type
+        ):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "协作者不能修改能力名称/类型")
     if cap.status not in EDITABLE_STATUSES:
         raise HTTPException(status.HTTP_409_CONFLICT, "仅草稿、打回或驳回的能力可以编辑")
     cap = await update_capability(db, cap, data)
@@ -100,7 +128,7 @@ async def withdraw(cap_id: str, db: DbSession, user: CurrentUser):
     cap = await db.get(Capability, cap_id)
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
-    _require_owner(cap, user)
+    await _require_cap_editor(db, cap, user)
     cap = await withdraw_capability(db, cap, user)
     return to_capability_out(cap, author_name=user.username)
 
@@ -111,7 +139,7 @@ async def submit(cap_id: str, db: DbSession, user: CurrentUser):
     cap = await db.get(Capability, cap_id)
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
-    _require_owner(cap, user)
+    await _require_cap_editor(db, cap, user)
     cap = await submit_for_review(db, cap)
     return to_capability_out(cap, author_name=user.username)
 
@@ -122,7 +150,7 @@ async def new_version(cap_id: str, data: VersionCreate, db: DbSession, user: Cur
     cap = await db.get(Capability, cap_id)
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
-    _require_owner(cap, user)
+    await _require_cap_editor(db, cap, user)
     version = data.new_version or next_version(cap.version, data.change_type)
     new_cap = await create_new_version(
         db, user, cap, version, changelog=data.changelog or ""
@@ -136,7 +164,7 @@ async def suggest_version(cap_id: str, db: DbSession, user: CurrentUser):
     cap = await db.get(Capability, cap_id)
     if cap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
-    _require_owner(cap, user)
+    await _require_cap_editor(db, cap, user)
     # 相对「同名同类型已有最高版本」建议，避免已有草稿时仍建议冲突号
     base = await highest_version(db, cap.name, cap.type) or cap.version
     return {
@@ -195,12 +223,12 @@ async def _reload_cap(db, cap_id: str) -> Capability:
 
 
 async def ensure_editable_draft(db, user, cap: Capability) -> Capability:
-    """属主/管理员返回可编辑的草稿（已发布则自动开新版并继承能力包）。
+    """作者/协作者/管理员返回可编辑的草稿（已发布则自动开新版并继承能力包）。
 
     - 已是可上传态(草稿/打回/驳回/待审) → 原样返回；
     - 已发布/已下架 → 复用同名草稿，否则基于已发布新建下一版本草稿并复制能力包。
     """
-    _require_owner(cap, user)
+    await _require_cap_editor(db, cap, user)
     if cap.status in UPLOADABLE_STATUSES:
         return await _reload_cap(db, cap.id)
     if cap.status not in ("published", "deprecated"):
@@ -488,3 +516,174 @@ async def upload_package_file(
 
     cap = await apply_package(db, user, cap, _zip_files(files))
     return to_capability_out(cap, author_name=user.username)
+
+
+# ---------------------------------------------------------------- 转交 / 协作
+
+@router.get("/users/search", response_model=list[UserBriefOut])
+async def search_users(db: DbSession, user: CurrentUser, q: str = ""):
+    """按 用户名/姓名/工号 模糊搜索可协作用户（登录即可用，最多 10 条）。"""
+    keyword = (q or "").strip()
+    if len(keyword) < 1:
+        return []
+    like = f"%{keyword}%"
+    rows = (
+        await db.scalars(
+            select(User)
+            .where(
+                User.is_active.is_(True),
+                or_(User.username.like(like), User.name.like(like), User.work_id.like(like)),
+            )
+            .order_by(User.username)
+            .limit(10)
+        )
+    ).all()
+    return [
+        UserBriefOut(id=u.id, username=u.username, name=u.name or "", department=u.department or "")
+        for u in rows
+    ]
+
+
+async def _get_cap_or_404(db, cap_id: str) -> Capability:
+    cap = await db.get(Capability, cap_id)
+    if cap is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "能力不存在")
+    return cap
+
+
+def _require_manage(cap: Capability, user) -> None:
+    """管理权（协作名单/转交）：仅作者或管理员。"""
+    if user.role != "admin" and cap.author_id != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "仅作者或管理员可执行该操作")
+
+
+@router.get("/capabilities/{cap_id}/access")
+async def capability_access(cap_id: str, db: DbSession, user: CurrentUser):
+    """当前登录用户对该能力的权限标记（详情页/编辑器按钮收敛用）。"""
+    cap = await _get_cap_or_404(db, cap_id)
+    is_admin = user.role == "admin"
+    is_author = cap.author_id == user.id
+    is_collab = False if (is_admin or is_author) else await is_collaborator(db, cap.name, user.id)
+    return {
+        "is_admin": is_admin,
+        "is_author": is_author,
+        "is_collaborator": is_collab,
+        "can_edit": bool(is_admin or is_author or is_collab),
+        "can_manage": bool(is_admin or is_author),
+    }
+
+
+@router.get("/collaborations", response_model=list[CapabilityOut])
+async def my_collaborations(db: DbSession, user: CurrentUser):
+    """我作为协作者的能力列表（按能力名取代表版本：优先已发布最高版）。"""
+    names = (
+        await db.scalars(
+            select(CapabilityCollaborator.capability_name).where(
+                CapabilityCollaborator.user_id == user.id
+            )
+        )
+    ).all()
+    out: list[CapabilityOut] = []
+    for name in dict.fromkeys(names):
+        rows = (
+            await db.scalars(
+                select(Capability)
+                .options(selectinload(Capability.artifacts), joinedload(Capability.author))
+                .where(Capability.name == name)
+            )
+        ).all()
+        if not rows:
+            continue
+        pubs = [r for r in rows if r.status in ("published", "deprecated")]
+        pick = max(pubs, key=lambda c: parse_semver(c.version)) if pubs else max(
+            rows, key=lambda c: parse_semver(c.version)
+        )
+        out.append(
+            to_capability_out(
+                pick, versions=list(rows), author_name=pick.author.username if pick.author else ""
+            )
+        )
+    return out
+
+
+@router.get("/capabilities/{cap_id}/collaborators")
+async def capability_collaborators(cap_id: str, db: DbSession, user: CurrentUser):
+    """协作者名单（作者/管理员/协作者可查看）。"""
+    cap = await _get_cap_or_404(db, cap_id)
+    await _require_cap_editor(db, cap, user)
+    return {"name": cap.name, "items": await list_collaborators(db, cap.name)}
+
+
+@router.post("/capabilities/{cap_id}/collaborators")
+async def add_capability_collaborator(
+    cap_id: str, data: CollaboratorAdd, db: DbSession, user: CurrentUser
+):
+    """添加协作者（仅作者/管理员）。"""
+    cap = await _get_cap_or_404(db, cap_id)
+    _require_manage(cap, user)
+    target = await db.get(User, data.user_id)
+    if target is None or not target.is_active:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "目标用户不存在或已停用")
+    if target.id == cap.author_id:
+        raise HTTPException(status.HTTP_409_CONFLICT, "该用户已是能力作者")
+    await add_collaborator(db, cap.name, target, user, link=f"/capabilities/{cap.id}")
+    await db.commit()
+    return {"name": cap.name, "items": await list_collaborators(db, cap.name)}
+
+
+@router.delete("/capabilities/{cap_id}/collaborators/{user_id}")
+async def remove_capability_collaborator(
+    cap_id: str, user_id: str, db: DbSession, user: CurrentUser
+):
+    """移除协作者（仅作者/管理员）。"""
+    cap = await _get_cap_or_404(db, cap_id)
+    _require_manage(cap, user)
+    removed = await remove_collaborator(db, cap.name, user_id)
+    if removed:
+        target = await db.get(User, user_id)
+        await notify(
+            db,
+            user_id,
+            f"你已被移出能力「{cap.name}」的协作者",
+            f"{user.name or user.username} 移除了你的协作权限",
+            link=f"/capabilities/{cap.id}",
+        )
+    await db.commit()
+    return {"name": cap.name, "removed": removed, "items": await list_collaborators(db, cap.name)}
+
+
+@router.post("/capabilities/{cap_id}/transfer")
+async def transfer_capability(
+    cap_id: str, data: TransferOwnershipRequest, db: DbSession, user: CurrentUser
+):
+    """转交能力归属：同名全部版本一起转给目标用户（仅作者/管理员），并通知双方。"""
+    cap = await _get_cap_or_404(db, cap_id)
+    _require_manage(cap, user)
+    target = await db.get(User, data.to_user_id)
+    if target is None or not target.is_active:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "目标用户不存在或已停用")
+    if target.id == cap.author_id:
+        raise HTTPException(status.HTTP_409_CONFLICT, "该用户已是能力作者")
+    rows = (
+        await db.scalars(select(Capability).where(Capability.name == cap.name))
+    ).all()
+    old_author_id = cap.author_id
+    for row in rows:
+        row.author_id = target.id
+    await notify(
+        db,
+        target.id,
+        f"能力「{cap.name}」已转交给你",
+        f"{user.name or user.username} 将《{cap.name}》（全部版本，共 {len(rows)} 个）的归属转交给你",
+        link=f"/capabilities/{cap.id}",
+    )
+    if old_author_id and old_author_id != user.id:
+        await notify(
+            db,
+            old_author_id,
+            f"能力「{cap.name}」已转交给 {target.name or target.username}",
+            f"操作人：{user.name or user.username}",
+            link=f"/capabilities/{cap.id}",
+        )
+    await db.commit()
+    return {"name": cap.name, "to": target.username, "versions": len(rows)}

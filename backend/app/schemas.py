@@ -242,6 +242,21 @@ class VersionCreate(BaseModel):
         return v
 
 
+class CollaboratorAdd(BaseModel):
+    user_id: str = Field(min_length=1, max_length=36)
+
+
+class TransferOwnershipRequest(BaseModel):
+    to_user_id: str = Field(min_length=1, max_length=36)
+
+
+class UserBriefOut(BaseModel):
+    id: str
+    username: str
+    name: str = ""
+    department: str = ""
+
+
 class ArtifactOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

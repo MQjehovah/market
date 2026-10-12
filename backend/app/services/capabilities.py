@@ -749,7 +749,7 @@ async def create_new_version(
         data_domain=getattr(cap, "data_domain", None) or "",
         # 头像随版本继承（icon_path 存文件名，文件按能力 id 共享读取）
         icon_path=getattr(cap, "icon_path", "") or "",
-        author_id=user.id,
+        author_id=cap.author_id or user.id,
         organization=cap.organization,
         status="draft",
         # 复制结构化元数据；artifact 需重新上传。plugin 的 components 仅作草案引用。

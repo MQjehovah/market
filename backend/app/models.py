@@ -468,3 +468,18 @@ class AuthoringJob(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
     )
+
+
+class CapabilityCollaborator(Base):
+    """能力协作者名单（按能力名，全部版本共享编辑权；属主/admin 管理）。"""
+
+    __tablename__ = "capability_collaborators"
+    __table_args__ = (
+        UniqueConstraint("capability_name", "user_id", name="uq_collab_name_user"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    capability_name: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True, nullable=False)
+    added_by: Mapped[str] = mapped_column(String(36), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
