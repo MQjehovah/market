@@ -387,9 +387,10 @@ async def _http_request(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str
     headers = render_value(params.get("headers") or {}, ctx)
     timeout = float(params.get("timeout_seconds") or 60)
     kwargs: dict[str, Any] = {}
-    if params.get("body") is not None:
+    # 空 body/params 不下发（编辑器默认会生成空对象/空串）
+    if params.get("body") not in (None, {}, "", []):
         kwargs["json"] = render_value(params["body"], ctx)
-    if params.get("params") is not None:
+    if params.get("params") not in (None, {}, "", []):
         kwargs["params"] = render_value(params["params"], ctx)
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.request(method, url, headers=headers or None, **kwargs)
