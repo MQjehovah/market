@@ -209,12 +209,15 @@ async def get_editable(
     versions = await _mcp_versions(db, name)
     if not versions:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"连接器 {name} 不存在")
+    from app.services.collaboration import is_collaborator
+
+    collab_ok = bool(user is not None and await is_collaborator(db, name, user.id))
     draft = next(
         (
             c
             for c in versions
             if c.status in ("draft", "returned", "rejected")
-            and (user is None or user.role == "admin" or c.author_id == user.id)
+            and (user is None or user.role == "admin" or c.author_id == user.id or collab_ok)
         ),
         None,
     )
@@ -338,7 +341,10 @@ async def save_version(
         implementations = filled
 
     if draft is not None:
-        if user.role != "admin" and draft.author_id != user.id:
+        from app.services.collaboration import is_collaborator
+
+        collab_ok = bool(user.role != "admin" and await is_collaborator(db, name, user.id))
+        if user.role != "admin" and draft.author_id != user.id and not collab_ok:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "无权限编辑该草稿")
         cap = draft
     else:
@@ -347,8 +353,11 @@ async def save_version(
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
                 "该连接器没有已发布版本，无法创建新版本",
             )
-        if user.role != "admin" and base.author_id != user.id:
-            raise HTTPException(status.HTTP_403_FORBIDDEN, "只能编辑自己发布的连接器")
+        from app.services.collaboration import is_collaborator as _is_collab
+
+        collab_ok = bool(user.role != "admin" and await _is_collab(db, name, user.id))
+        if user.role != "admin" and base.author_id != user.id and not collab_ok:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "只能编辑自己发布或已协作的连接器")
         new_version = data.new_version or next_version(base.version, "patch")
         exists = await db.scalar(
             select(Capability.id).where(
@@ -370,8 +379,8 @@ async def save_version(
             tags=data.tags if data.tags is not None else list(base.tags or []),
             visibility=base.visibility,
             status="draft",
-            author_id=user.id,
-            organization=user.department,
+            author_id=base.author_id or user.id,
+            organization=base.organization or user.department,
             **draft_policy_kwargs(base),
         )
         db.add(cap)
