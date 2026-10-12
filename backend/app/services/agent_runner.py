@@ -160,15 +160,29 @@ def _system_prompt(cap: Capability, prompt: str, runtime: dict) -> str:
         f"- {s['name']}（v{s.get('version', '')}）：使用 skill 工具激活后按 SKILL.md 定义执行"
         for s in runtime.get("skills") or []
     ]
+    connected = {
+        m.get("name")
+        for m in runtime.get("mcp_connected") or []
+        if m.get("connected")
+    }
     mcp_lines = [
         f"- {m['name']}（v{m.get('version', '')}）：MCP 已连接，其工具已注册为可用函数（mcp_* 前缀）"
         for m in runtime.get("mcps") or []
+        if m["name"] in connected
+    ]
+    failed_lines = [
+        f"- {m.get('name')}：未连接（{m.get('error') or '未知原因'}）——其工具本次不可用，"
+        "不要尝试调用该连接器的任何工具；涉及的数据按【数据缺口·原因】标注，并向用户说明需要先配置凭据或由管理员排查。"
+        for m in runtime.get("mcp_connected") or []
+        if not m.get("connected")
     ]
     extra = []
     if skill_lines:
         extra.append("已绑定技能：\n" + "\n".join(skill_lines))
     if mcp_lines:
         extra.append("已绑定 MCP：\n" + "\n".join(mcp_lines))
+    if failed_lines:
+        extra.append("绑定但本次未连接的 MCP：\n" + "\n".join(failed_lines))
     if extra:
         system += "\n\n" + "\n\n".join(extra)
     return system
@@ -338,7 +352,16 @@ async def _run_agent_llm(
                         elif bridge.has_tool(tool_name):
                             content = await bridge.call(tool_name, args)
                         else:
-                            tool_cap = await resolve_capability(db, user, tool_name)
+                            try:
+                                tool_cap = await resolve_capability(db, user, tool_name)
+                            except HTTPException as exc:
+                                if exc.status_code == 404:
+                                    names = ", ".join(sorted(bridge.tool_names)[:30]) or "（无）"
+                                    raise HTTPException(
+                                        exc.status_code,
+                                        f"工具 {tool_name} 不存在；可用工具：{names}",
+                                    ) from exc
+                                raise
                             result = await invoke_tool(db, user, tool_cap, args)
                             content = json.dumps(result, ensure_ascii=False)
                     except HTTPException as exc:
