@@ -173,12 +173,15 @@ const isOwner = computed(
     authState.user &&
     (authState.user.id === meta.author_id || authState.user.role === 'admin')
 )
+const collaboratorOk = ref(false)
+/** 编辑权：作者 / 管理员 / 协作者 */
+const isEditor = computed(() => isOwner.value || collaboratorOk.value)
 const canEdit = computed(
   () =>
     !meta.id ||
-    (isOwner.value && ['draft', 'returned', 'rejected'].includes(meta.status))
+    (isEditor.value && ['draft', 'returned', 'rejected'].includes(meta.status))
 )
-const canTest = computed(() => isOwner.value)
+const canTest = computed(() => isEditor.value)
 const outputNodeId = ref('')
 
 /** 只读查看已发布版本时，属主/管理员可一键开新版进入编辑 */
@@ -187,7 +190,7 @@ const canStartNewVersion = computed(
     !canEdit.value &&
     !!meta.id &&
     ['published', 'deprecated'].includes(meta.status) &&
-    isOwner.value
+    isEditor.value
 )
 const newVersioning = ref(false)
 
@@ -548,6 +551,15 @@ async function load(id) {
       author_id: cap.author_id
     })
     const wf = data.workflow || { nodes: [], edges: [] }
+    collaboratorOk.value = false
+    api
+      .get(`/publish/capabilities/${cap.id}/access`)
+      .then((a) => {
+        collaboratorOk.value = Boolean(a?.is_collaborator)
+      })
+      .catch(() => {
+        collaboratorOk.value = false
+      })
     flowNodes.value = (wf.nodes || []).map((n, i) => {
       const stableType = normalizeNodeType(n.type)
       return {

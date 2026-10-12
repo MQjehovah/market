@@ -269,31 +269,35 @@ const editForm = reactive({
 
 const isOwner = computed(() => cap.value && authState.user && cap.value.author_id === authState.user.id)
 const isAdmin = computed(() => authState.user?.role === 'admin')
+const access = ref(null)
+const isCollaborator = computed(() => Boolean(access.value?.is_collaborator))
+/** 内容编辑权：作者 / 管理员 / 协作者 */
+const canEditContent = computed(() => isOwner.value || isAdmin.value || isCollaborator.value)
 
 const canEdit = computed(
-  () => (isOwner.value || isAdmin.value) && ['draft', 'returned', 'rejected'].includes(cap.value?.status)
+  () => canEditContent.value && ['draft', 'returned', 'rejected'].includes(cap.value?.status)
 )
-/** 可在「文件预览」Tab 直接编辑/上传包内文件：作者或管理员，且处于可上传状态 */
+/** 可在「文件预览」Tab 直接编辑/上传包内文件：作者/协作者/管理员，且处于可上传状态 */
 const canEditPackage = computed(
   () =>
-    (isOwner.value || isAdmin.value) &&
+    canEditContent.value &&
     ['draft', 'returned', 'rejected'].includes(cap.value?.status)
 )
 const hasPackage = computed(() => Boolean((cap.value?.artifacts || []).length))
 const canSubmit = computed(() => {
-  if (!isOwner.value || !['draft', 'returned', 'rejected'].includes(cap.value?.status)) return false
+  if (!canEditContent.value || !['draft', 'returned', 'rejected'].includes(cap.value?.status)) return false
   if (needsZipUpload(cap.value?.type) && !hasPackage.value) return false
   return true
 })
 const needsPackageFirst = computed(
   () =>
-    isOwner.value &&
+    canEditContent.value &&
     ['draft', 'returned', 'rejected'].includes(cap.value?.status) &&
     needsZipUpload(cap.value?.type) &&
     !hasPackage.value
 )
 const canDelete = computed(() => isOwner.value && ['draft', 'returned', 'rejected', 'reviewing'].includes(cap.value?.status))
-const canWithdraw = computed(() => isOwner.value && cap.value?.status === 'reviewing')
+const canWithdraw = computed(() => canEditContent.value && cap.value?.status === 'reviewing')
 const canReview = computed(
   () => isAdmin.value && !isOwner.value && cap.value?.status === 'reviewing'
 )
@@ -331,12 +335,12 @@ const progressIndex = computed(() => {
 })
 const onlineEditPath = computed(() => (cap.value ? editRouteFor(cap.value) : null))
 const preferOnlineEdit = computed(
-  () => Boolean(onlineEditPath.value && (isOwner.value || isAdmin.value) && canOnlineEdit(cap.value?.type))
+  () => Boolean(onlineEditPath.value && canEditContent.value && canOnlineEdit(cap.value?.type))
 )
-/** 已发布/已下架：属主或管理员可一键开新版（继承能力包）后在线编辑 */
+/** 已发布/已下架：作者/协作者/管理员可一键开新版（继承能力包）后在线编辑 */
 const canRevise = computed(
   () =>
-    (isOwner.value || isAdmin.value) &&
+    canEditContent.value &&
     ['published', 'deprecated'].includes(cap.value?.status)
 )
 const pluginComponents = computed(() => {
@@ -1107,9 +1111,9 @@ const publishedLatestId = computed(() => {
   return best.id
 })
 const canCreateVersion = computed(
-  () => isOwner.value && ['published', 'deprecated', 'draft', 'returned', 'rejected'].includes(cap.value?.status)
+  () => canEditContent.value && ['published', 'deprecated', 'draft', 'returned', 'rejected'].includes(cap.value?.status)
 )
-const canChangeIdentity = computed(() => canEdit.value && !hasSiblings.value)
+const canChangeIdentity = computed(() => canEdit.value && !hasSiblings.value && !isCollaborator.value)
 const editCategories = computed(() => TYPE_CATEGORIES[editForm.type] || [])
 
 watch(cap, (c) => {
@@ -1200,6 +1204,16 @@ async function copyMcpClientConfig() {
 async function load() {
   try {
     cap.value = await api.get(`/capabilities/${props.id}`)
+    access.value = null
+    api
+      .get(`/publish/capabilities/${props.id}/access`)
+      .then((a) => {
+        access.value = a
+        if (a?.can_manage) void loadCollaborators()
+      })
+      .catch(() => {
+        access.value = null
+      })
     accessPolicy.value = cap.value.access_policy || 'open'
     installPolicy.value = cap.value.install_policy || 'optional'
     allowedUsers.value = normList(cap.value.allowed_users)
@@ -1529,6 +1543,113 @@ async function openEditDraft() {
   }
 }
 
+// ---- 转交 / 协作者 ----
+const collabQuery = ref('')
+const collabResults = ref([])
+const collabList = ref([])
+const collabError = ref('')
+let collabTimer = null
+
+async function loadCollaborators() {
+  if (!cap.value) return
+  try {
+    const d = await api.get(`/publish/capabilities/${props.id}/collaborators`)
+    collabList.value = d?.items || []
+    collabError.value = ''
+  } catch (e) {
+    collabError.value = e.message || String(e)
+  }
+}
+
+function onCollabQuery() {
+  clearTimeout(collabTimer)
+  const q = collabQuery.value.trim()
+  if (!q) {
+    collabResults.value = []
+    return
+  }
+  collabTimer = setTimeout(async () => {
+    try {
+      collabResults.value = await api.get(`/publish/users/search?q=${encodeURIComponent(q)}`)
+    } catch {
+      collabResults.value = []
+    }
+  }, 300)
+}
+
+async function addCollab(u) {
+  collabError.value = ''
+  try {
+    const d = await api.post(`/publish/capabilities/${props.id}/collaborators`, { user_id: u.id })
+    collabList.value = d?.items || []
+    collabResults.value = collabResults.value.filter((x) => x.id !== u.id)
+    notice.value = `已添加协作者：${u.name || u.username}`
+  } catch (e) {
+    collabError.value = e.message || String(e)
+  }
+}
+
+async function removeCollab(c) {
+  collabError.value = ''
+  try {
+    const d = await api.delete(`/publish/capabilities/${props.id}/collaborators/${c.user_id}`)
+    collabList.value = d?.items || []
+    notice.value = `已移除协作者：${c.name || c.username}`
+  } catch (e) {
+    collabError.value = e.message || String(e)
+  }
+}
+
+const transferOpen = ref(false)
+const transferQuery = ref('')
+const transferResults = ref([])
+const transferTarget = ref(null)
+const transferBusy = ref(false)
+const transferError = ref('')
+let transferTimer = null
+
+function openTransfer() {
+  transferOpen.value = true
+  transferQuery.value = ''
+  transferResults.value = []
+  transferTarget.value = null
+  transferError.value = ''
+}
+
+function onTransferQuery() {
+  clearTimeout(transferTimer)
+  const q = transferQuery.value.trim()
+  if (!q) {
+    transferResults.value = []
+    return
+  }
+  transferTimer = setTimeout(async () => {
+    try {
+      transferResults.value = await api.get(`/publish/users/search?q=${encodeURIComponent(q)}`)
+    } catch {
+      transferResults.value = []
+    }
+  }, 300)
+}
+
+async function doTransfer() {
+  if (!transferTarget.value || transferBusy.value) return
+  transferBusy.value = true
+  transferError.value = ''
+  try {
+    const d = await api.post(`/publish/capabilities/${props.id}/transfer`, {
+      to_user_id: transferTarget.value.id
+    })
+    transferOpen.value = false
+    await bootstrapDetail({ keepNotice: true })
+    notice.value = `已将《${displayName.value}》转交给 ${transferTarget.value.name || transferTarget.value.username}（${d?.versions || 0} 个版本）`
+  } catch (e) {
+    transferError.value = e.message || String(e)
+  } finally {
+    transferBusy.value = false
+  }
+}
+
 async function uploadArtifact(event) {
   const file = event.target.files[0]
   if (!file) return
@@ -1545,7 +1666,7 @@ async function uploadArtifact(event) {
 }
 
 async function loadVersionSuggestions() {
-  if (!authState.token || !isOwner.value) return
+  if (!authState.token || !canEditContent.value) return
   try {
     versionSuggestions.value = await api.get(`/publish/capabilities/${props.id}/next-version`)
     const patch = versionSuggestions.value.patch
@@ -2637,7 +2758,7 @@ onMounted(() => {
                 </tr>
               </tbody>
             </table>
-            <div v-if="isOwner" class="mt-24">
+            <div v-if="canEditContent" class="mt-24">
               <h3>版本管理</h3>
               <div class="muted" style="font-size: 12px; margin-bottom: 8px">
                 <template v-if="['published', 'deprecated'].includes(cap.status)">
@@ -2809,6 +2930,7 @@ onMounted(() => {
               >提交审核</button>
               <button v-if="canWithdraw" class="btn" type="button" @click="withdrawReview">撤回审核</button>
               <button v-if="canDelete" class="btn btn-danger" type="button" @click="askRemoveCap">删除</button>
+              <button v-if="isOwner || isAdmin" class="btn" type="button" @click="openTransfer">转交</button>
               <button v-if="isAdmin && cap.status === 'published'" class="btn btn-danger" type="button" @click="askStatus('deprecate')">下架</button>
               <button v-if="isAdmin && ['published', 'deprecated', 'rejected', 'returned'].includes(cap.status)" class="btn btn-danger" type="button" @click="askStatus('archive')">归档</button>
             </div>
@@ -2825,6 +2947,46 @@ onMounted(() => {
               </button>
             </div>
             <div v-if="reviseError" class="error mt-12">{{ reviseError }}</div>
+          </div>
+
+          <div v-if="isOwner || isAdmin" class="panel">
+            <div class="flex-between flex-wrap">
+              <h3>协作者</h3>
+              <span class="muted" style="font-size: 12px">协作者可编辑内容、开新版并提交审核（不能删除 / 转交 / 改名称类型）</span>
+            </div>
+            <div class="flex mt-12" style="gap: 8px; flex-wrap: wrap; align-items: center">
+              <input
+                v-model="collabQuery"
+                class="input"
+                style="max-width: 280px"
+                placeholder="搜索用户名 / 姓名 / 工号"
+                @input="onCollabQuery"
+              />
+            </div>
+            <div v-if="collabResults.length" class="mt-8">
+              <div
+                v-for="u in collabResults"
+                :key="u.id"
+                class="flex"
+                style="align-items: center; gap: 8px; padding: 4px 0"
+              >
+                <span>{{ u.name || u.username }}（{{ u.username }}<template v-if="u.department"> · {{ u.department }}</template>）</span>
+                <button class="btn btn-sm" type="button" @click="addCollab(u)">+ 添加为协作者</button>
+              </div>
+            </div>
+            <div class="mt-12">
+              <div v-if="!collabList.length" class="muted" style="font-size: 12px">暂无协作者</div>
+              <div
+                v-for="c in collabList"
+                :key="c.user_id"
+                class="flex"
+                style="align-items: center; gap: 8px; padding: 4px 0"
+              >
+                <span>{{ c.name || c.username }}（{{ c.username }}<template v-if="c.department"> · {{ c.department }}</template>）</span>
+                <button class="btn btn-sm btn-danger" type="button" @click="removeCollab(c)">移除</button>
+              </div>
+            </div>
+            <div v-if="collabError" class="error mt-8">{{ collabError }}</div>
           </div>
 
           <h3 class="manage-group">治理</h3>
@@ -3078,6 +3240,57 @@ onMounted(() => {
       :title="trialLabel(debugCap?.type)"
       @close="debugCap = null"
     />
+
+    <div
+      v-if="transferOpen"
+      style="position: fixed; inset: 0; background: rgba(15, 23, 42, 0.45); z-index: 100; display: flex; align-items: center; justify-content: center; padding: 20px"
+      @click.self="transferOpen = false"
+    >
+      <div class="panel" style="width: 560px; max-width: 100%; max-height: 86vh; overflow: auto">
+        <div class="flex-between" style="align-items: center">
+          <h3 style="margin: 0">转交能力</h3>
+          <button class="btn btn-sm" type="button" @click="transferOpen = false">✕</button>
+        </div>
+        <p class="muted" style="font-size: 12px; margin: 10px 0 0">
+          将《{{ displayName }}》的<b>全部版本</b>归属转交给目标用户；转交后你（或原作者）不再是作者，不影响平台密钥与协作者名单。
+        </p>
+        <input
+          v-model="transferQuery"
+          class="input mt-12"
+          placeholder="搜索用户名 / 姓名 / 工号"
+          @input="onTransferQuery"
+        />
+        <div v-if="transferResults.length" class="mt-8" style="max-height: 220px; overflow: auto">
+          <div
+            v-for="u in transferResults"
+            :key="u.id"
+            class="flex"
+            style="align-items: center; gap: 8px; padding: 4px 0"
+          >
+            <span>{{ u.name || u.username }}（{{ u.username }}<template v-if="u.department"> · {{ u.department }}</template>）</span>
+            <button
+              class="btn btn-sm"
+              :class="transferTarget?.id === u.id ? 'btn-primary' : ''"
+              type="button"
+              @click="transferTarget = u"
+            >选择</button>
+          </div>
+        </div>
+        <div v-if="transferTarget" class="mt-12">
+          已选目标：<b>{{ transferTarget.name || transferTarget.username }}</b>（{{ transferTarget.username }}）
+        </div>
+        <div v-if="transferError" class="error mt-8">{{ transferError }}</div>
+        <div class="flex mt-16" style="justify-content: flex-end; gap: 8px">
+          <button class="btn" type="button" @click="transferOpen = false">取消</button>
+          <button
+            class="btn btn-danger"
+            type="button"
+            :disabled="transferBusy || !transferTarget"
+            @click="doTransfer"
+          >{{ transferBusy ? '转交中…' : '确认转交' }}</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 

@@ -28,6 +28,7 @@ const router = useRouter()
 /** mainTab: owned | added — 「我发布的 / 已加入」 */
 const mainTab = ref('owned')
 const caps = ref([])
+const collabCaps = ref([])
 const loading = ref(false)
 const error = ref('')
 const showCreate = ref(false)
@@ -45,6 +46,7 @@ const CUSTOMIZE_TYPES = ['plugin', 'skill', 'mcp', 'rule', 'command', 'hook', 'a
 
 const scopedCaps = computed(() => {
   if (mainTab.value === 'owned') return caps.value.filter((c) => c.owned)
+  if (mainTab.value === 'collab') return collabCaps.value
   return caps.value.filter((c) => c.added)
 })
 
@@ -106,7 +108,8 @@ const pagedCaps = computed(() => {
 
 const tabCounts = computed(() => ({
   owned: caps.value.filter((c) => c.owned).length,
-  added: caps.value.filter((c) => c.added).length
+  added: caps.value.filter((c) => c.added).length,
+  collab: collabCaps.value.length
 }))
 
 function typeColor(type) {
@@ -159,6 +162,14 @@ async function load() {
   loading.value = true
   try {
     caps.value = await api.get('/my/capabilities?scope=all')
+    api
+      .get('/publish/collaborations')
+      .then((d) => {
+        collabCaps.value = d || []
+      })
+      .catch(() => {
+        collabCaps.value = []
+      })
     if (preferAddedOnFirstLoad.value && route.query.publish !== '1') {
       const owned = caps.value.some((c) => c.owned)
       const added = caps.value.some((c) => c.added)
@@ -340,6 +351,10 @@ onMounted(() => {
         已加入
         <span class="count">{{ tabCounts.added }}</span>
       </button>
+      <button type="button" class="main-tab" :class="{ active: mainTab === 'collab' }" @click="switchTab('collab')">
+        我协作的
+        <span class="count">{{ tabCounts.collab }}</span>
+      </button>
     </div>
 
     <div class="filter-bar">
@@ -374,7 +389,7 @@ onMounted(() => {
           <div class="skeleton skel-line w70"></div>
         </div>
       </div>
-      <div v-else-if="caps.length === 0" class="empty">
+      <div v-else-if="caps.length === 0 && mainTab !== 'collab'" class="empty">
         还没有发布过能力。
         <ol style="text-align: left; display: inline-block; margin: 12px 0; padding-left: 20px">
           <li>点「发布能力」，选专家、组件或编排</li>
@@ -395,7 +410,46 @@ onMounted(() => {
         </div>
         <div><router-link to="/">去发现逛逛</router-link></div>
       </div>
+      <div v-else-if="filteredCaps.length === 0 && mainTab === 'collab'" class="empty empty-guide">
+        <p style="margin: 0">还没有协作的能力。作者把你加为协作者后会出现在这里。</p>
+      </div>
       <div v-else-if="filteredCaps.length === 0" class="empty">没有符合筛选条件的能力</div>
+      <table v-else-if="mainTab === 'collab'" class="skill-table customize-table">
+        <thead>
+          <tr>
+            <th>能力</th>
+            <th>类型</th>
+            <th>状态</th>
+            <th>更新</th>
+            <th style="width: 160px">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="cap in pagedCaps" :key="cap.id">
+            <td>
+              <div class="skill-cell">
+                <div class="skill-icon" :style="{ background: typeColor(cap.type) }">{{ nameInitial(cap) }}</div>
+                <div class="skill-meta">
+                  <div class="skill-name-row">
+                    <router-link class="skill-name" :to="`/capabilities/${cap.id}`">{{ cap.name }}</router-link>
+                    <span class="ver-tag">v{{ cap.version }}</span>
+                    <span class="badge">协作</span>
+                  </div>
+                  <div class="skill-desc muted">{{ cap.description || TYPE_LABELS[cap.type] }}</div>
+                </div>
+              </div>
+            </td>
+            <td><span class="vis-pill">{{ TYPE_LABELS[cap.type] }}</span></td>
+            <td><StatusBadge :status="cap.status" /></td>
+            <td class="muted time">{{ formatDate(cap.updated_at) }}</td>
+            <td>
+              <div class="ops">
+                <router-link class="btn btn-sm" :to="`/capabilities/${cap.id}`">查看</router-link>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
       <table v-else-if="mainTab === 'added'" class="skill-table customize-table">
         <thead>
           <tr>
