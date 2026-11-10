@@ -654,6 +654,12 @@ const mcpEnvRows = computed(() => {
   const keys = Object.keys(env).length
     ? Object.keys(env)
     : mcpSchema.value?.required_env || []
+  for (const method of cap.value?.config_ui?.auth_methods || []) {
+    for (const field of method?.fields || []) {
+      const key = typeof field === 'string' ? field : field?.env || field?.key
+      if (key && !keys.includes(key)) keys.push(key)
+    }
+  }
   return keys.map((k) => ({
     key: k,
     hint: publicEnvHint(k, env[k]),
@@ -948,6 +954,51 @@ const hasAuthConfig = computed(() => Boolean(authConfig.value.auth))
 const authDialogVisible = ref(false)
 const authAccount = ref(null)
 
+/** 认证方式（config_ui.auth_methods）：账号密码 / Token 等互斥方式 */
+const authMethods = computed(() =>
+  Array.isArray(authConfig.value.auth_methods) ? authConfig.value.auth_methods : []
+)
+const selectedMethodId = ref('')
+const selectedMethod = computed(
+  () => authMethods.value.find((m) => m.id === selectedMethodId.value) || authMethods.value[0] || null
+)
+const methodFieldMap = computed(() => {
+  const map = {}
+  for (const field of selectedMethod.value?.fields || []) {
+    if (typeof field === 'string') map[field] = { key: field, label: field }
+    else if (field && (field.env || field.key)) {
+      const key = field.env || field.key
+      map[key] = { ...field, key }
+    }
+  }
+  return map
+})
+const methodKeys = computed(() => Object.keys(methodFieldMap.value))
+const activeEnvRows = computed(() =>
+  authMethods.value.length
+    ? envRowsWithState.value.filter((row) => methodKeys.value.includes(row.key))
+    : envRowsWithState.value
+)
+const activePlatformRows = computed(() =>
+  authMethods.value.length
+    ? platformSecretRows.value.filter((row) => methodKeys.value.includes(row.key))
+    : platformSecretRows.value
+)
+function methodLabel(key) {
+  return methodFieldMap.value[key]?.label || key
+}
+
+watch(
+  () => [cap.value?.id, authMethods.value.map((m) => m.id).join(',')],
+  () => {
+    const preferred = String(authConfig.value.default_method || '')
+    selectedMethodId.value = authMethods.value.some((m) => m.id === preferred)
+      ? preferred
+      : authMethods.value[0]?.id || ''
+  },
+  { immediate: true }
+)
+
 async function loadAuthAccount() {
   if (!hasAuthConfig.value || !authState.token || !cap.value?.name) return
   try {
@@ -1048,10 +1099,7 @@ const contentTabs = computed(() => {
   if (isAgent.value && (embeddedSkills.value.length || embeddedMcp.value.length)) {
     tabs.push({ key: 'bundle', label: '内含能力' })
   }
-  if (hasAuthConfig.value) {
-    tabs.push({ key: 'credentials', label: '凭据' })
-  }
-  if (isMcp.value) {
+  if (isMcp.value || hasAuthConfig.value) {
     tabs.push({ key: 'config', label: '配置' })
   }
   tabs.push({ key: 'versions', label: '版本' })
@@ -2399,18 +2447,16 @@ onMounted(() => {
               </div>
             </details>
           </section>
-          <section v-show="contentTab === 'credentials'" class="panel">
-            <h2 class="detail-section-title">个人凭据</h2>
+          <section v-show="contentTab === 'config'" class="panel">
+            <h2 class="detail-section-title">配置</h2>
+
             <CapabilityAuthPanel
               v-if="hasAuthConfig"
               :capability-name="cap.name"
               :config="authConfig"
             />
-          </section>
-          <section v-show="contentTab === 'config'" class="panel">
-            <h2 class="detail-section-title">配置</h2>
 
-            <div v-if="isMcp" class="guide-block">
+            <div v-if="isMcp && (isOwner || isAdmin)" class="guide-block">
               <table class="table">
                 <thead><tr><th>参数</th><th>必填</th><th>说明 / 默认</th></tr></thead>
                 <tbody>
@@ -2499,9 +2545,16 @@ onMounted(() => {
                   该能力未声明环境变量，无需配置平台密钥。
                 </div>
                 <template v-else>
+                  <div v-if="authMethods.length" class="flex" style="gap: 14px; flex-wrap: wrap; margin-bottom: 12px">
+                    <label v-for="m in authMethods" :key="m.id" class="flex" style="gap: 6px; align-items: center; font-size: 13px; cursor: pointer">
+                      <input v-model="selectedMethodId" type="radio" :value="m.id" />
+                      {{ m.label || m.id }}
+                    </label>
+                  </div>
                   <div class="env-rows">
-                    <div v-for="row in platformSecretRows" :key="'ps-' + row.key" class="env-row">
+                    <div v-for="row in activePlatformRows" :key="'ps-' + row.key" class="env-row">
                       <div class="env-row-head">
+                        <span>{{ methodLabel(row.key) }}</span>
                         <code>{{ row.key }}</code>
                         <span v-if="row.row" class="badge badge-success">已配置</span>
                         <span v-else class="badge badge-danger">未配置</span>
@@ -2548,9 +2601,16 @@ onMounted(() => {
                   :to="{ path: '/login', query: { redirect: route.fullPath } }"
                 >登录后配置</router-link>
                 <template v-else>
+                  <div v-if="authMethods.length" class="flex" style="gap: 14px; flex-wrap: wrap; margin-bottom: 12px">
+                    <label v-for="m in authMethods" :key="m.id" class="flex" style="gap: 6px; align-items: center; font-size: 13px; cursor: pointer">
+                      <input v-model="selectedMethodId" type="radio" :value="m.id" />
+                      {{ m.label || m.id }}
+                    </label>
+                  </div>
                   <div class="env-rows">
-                    <div v-for="row in envRowsWithState" :key="row.key" class="env-row">
+                    <div v-for="row in activeEnvRows" :key="row.key" class="env-row">
                       <div class="env-row-head">
+                        <span>{{ methodLabel(row.key) }}</span>
                         <code>{{ row.key }}</code>
                         <span v-if="row.capRow" class="badge badge-success">本机已填</span>
                         <span v-else-if="row.globalRow" class="badge badge-warning">全局值生效</span>
@@ -3266,7 +3326,7 @@ onMounted(() => {
             <dl class="aside-meta">
               <div><dt>谁能看</dt><dd>{{ VISIBILITY_LABELS[cap.visibility] || cap.visibility }}</dd></div>
               <div v-if="accessRestrictions.length"><dt>访问</dt><dd>{{ accessRestrictions.join('；') }}</dd></div>
-              <div v-if="isMcp"><dt>连接方式</dt><dd>{{ mcpTransport }}</dd></div>
+              <div v-if="isMcp && (isOwner || isAdmin)"><dt>连接方式</dt><dd>{{ mcpTransport }}</dd></div>
               <div><dt>货架</dt><dd>{{ shelfName || '—' }}</dd></div>
               <div><dt>风险</dt><dd>{{ RISK_DEFAULT_LABELS[cap.risk_default] || cap.risk_default || '—' }}</dd></div>
               <div><dt>数据域</dt><dd>{{ cap.data_domain || '—' }}</dd></div>

@@ -64,7 +64,7 @@ async def _page_url(db: AsyncSession) -> str:
         .where(Capability.name == "dingtalk-dws", Capability.status == "published")
         .order_by(Capability.created_at.desc())
     )
-    return f"{base}/capabilities/{cap_id}?tab=credentials" if cap_id else f"{base}/dws"
+    return f"{base}/capabilities/{cap_id}?tab=config" if cap_id else f"{base}/dws"
 
 
 def _preexec():

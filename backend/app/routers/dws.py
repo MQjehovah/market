@@ -56,7 +56,7 @@ async def _page_url(db) -> str:
     base = get_settings().public_base_url.rstrip("/")
     cap_id = await _capability_id(db)
     if cap_id:
-        return f"{base}/capabilities/{cap_id}?tab=credentials"
+        return f"{base}/capabilities/{cap_id}?tab=config"
     return f"{base}/dws"
 
 

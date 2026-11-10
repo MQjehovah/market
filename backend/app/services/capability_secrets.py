@@ -148,6 +148,9 @@ def declared_env_keys(cap) -> list[str]:
         hint = schema.get("env")
         if isinstance(hint, dict):
             keys.extend(str(k) for k in hint if str(k).strip())
+    for field in _auth_method_keys(cap):
+        if field not in keys:
+            keys.append(field)
     if not keys and getattr(cap, "type", "") == "mcp":
         # 老包缺 input_schema 时回退读包内 connection.json 的 env 键
         try:
@@ -169,6 +172,54 @@ def declared_env_keys(cap) -> list[str]:
 # 普通用户不会被平台凭据兜底；market 管理员在服务端直接走平台兜底，不返回该标记。
 USER_CREDS_MISSING_CODE = "user_credentials_missing"
 USER_CREDS_MISSING_HEADER = "X-Market-Error-Code"
+
+
+def auth_methods(cap) -> list[dict]:
+    """能力声明的认证方式（config_ui.auth_methods）；没有则返回 []。"""
+    ui = getattr(cap, "config_ui", None) or {}
+    methods = ui.get("auth_methods") if isinstance(ui, dict) else None
+    return [m for m in methods if isinstance(m, dict)] if isinstance(methods, list) else []
+
+
+def _method_env_keys(method: dict) -> list[str]:
+    keys: list[str] = []
+    for field in method.get("fields") or []:
+        if isinstance(field, str):
+            key = field
+        elif isinstance(field, dict):
+            key = field.get("env") or field.get("key")
+        else:
+            continue
+        if key and str(key).strip() not in keys:
+            keys.append(str(key).strip())
+    return keys
+
+
+def _auth_method_keys(cap) -> list[str]:
+    keys: list[str] = []
+    for method in auth_methods(cap):
+        for key in _method_env_keys(method):
+            if key not in keys:
+                keys.append(key)
+    return keys
+
+
+def select_method_env(cap, env: dict[str, str]) -> tuple[dict[str, str], list[str]]:
+    """从已存值里选一种完整的认证方式；任一种完整即可，不要求全部字段。"""
+    methods = auth_methods(cap)
+    if not methods:
+        return env, []
+    first_missing: list[str] = []
+    for method in methods:
+        keys = _method_env_keys(method)
+        if not keys:
+            continue
+        missing = [k for k in keys if not str(env.get(k) or "").strip()]
+        if not missing:
+            return {k: env[k] for k in keys}, []
+        if not first_missing:
+            first_missing = missing
+    return {}, first_missing
 
 
 def is_user_bound(cap) -> bool:
@@ -213,12 +264,14 @@ async def resolve_user_bound_env(
         db, user_id, capability_name=cap.name, capability_id=cap.id, keys=keys
     )
     env = {k: v for k, v in env.items() if (v or "").strip()}
-    missing = [k for k in keys if k not in env]
-    return env, missing
+    selected, missing = select_method_env(cap, env)
+    if auth_methods(cap):
+        return selected, missing
+    return env, [k for k in keys if k not in env]
 
 
 def _platform_env_for(
-    keys: list[str], platform: dict[str, str] | None
+    keys: list[str], platform: dict[str, str] | None, cap=None
 ) -> tuple[dict[str, str], list[str]]:
     """按声明键从平台密钥中取完整集合；空值视为缺失。"""
     plat = platform or {}
@@ -227,6 +280,8 @@ def _platform_env_for(
         value = str(plat.get(key) or "").strip()
         if value:
             env[key] = value
+    if cap is not None and auth_methods(cap):
+        return select_method_env(cap, env)
     return env, [key for key in keys if key not in env]
 
 
@@ -257,14 +312,14 @@ async def resolve_user_bound_env_for(
     if is_service_identity(user):
         if is_user_only(cap) or getattr(user, "role", "") != "admin":
             return {}, keys
-        return _platform_env_for(keys, platform)
+        return _platform_env_for(keys, platform, cap)
     env, missing = await resolve_user_bound_env(db, user.id, cap)
     if not missing:
         return env, []
     if is_user_only(cap) or getattr(user, "role", "") != "admin":
         return env, missing
     # market 管理员个人凭据不完整：整体使用平台凭据，避免个人/平台混拼。
-    return _platform_env_for(keys, platform)
+    return _platform_env_for(keys, platform, cap)
 
 
 async def require_user_bound_env(
