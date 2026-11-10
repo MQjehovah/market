@@ -215,6 +215,19 @@ async def resolve_user_bound_env(
     return env, missing
 
 
+def _platform_env_for(
+    keys: list[str], platform: dict[str, str] | None
+) -> tuple[dict[str, str], list[str]]:
+    """按声明键从平台密钥中取完整集合；空值视为缺失。"""
+    plat = platform or {}
+    env = {
+        key: str(plat.get(key) or "")
+        for key in keys
+        if str(plat.get(key) or "").strip()
+    }
+    return env, [key for key in keys if key not in env]
+
+
 async def resolve_user_bound_env_for(
     db: AsyncSession,
     cap,
@@ -222,25 +235,34 @@ async def resolve_user_bound_env_for(
     *,
     platform_env: dict[str, str] | None = None,
 ) -> tuple[dict[str, str], list[str]]:
-    """user 级能力的执行凭据（按调用者身份分流，market 不判断任何角色）。
+    """user 级能力的执行凭据（个人优先，market 管理员可用平台兜底）。
 
-    - **服务令牌**（平台身份）→ 直接用平台凭据（缺平台键即计入 missing）；
-    - **用户令牌** → 个人凭据，缺任一键即计入 missing（由调用方 fail-closed）。
+    - **用户令牌** → 先取个人凭据；完整则直接用。个人缺失且用户是 market
+      ``role=admin`` 时，整体改用平台凭据（不与个人值混拼，避免半套凭据）；
+      普通用户缺个人凭据时返回 missing，由调用方 fail-closed。
+    - **服务令牌**（平台身份）→ 仅当其 market 用户为 admin 时用平台凭据；
+      非管理员服务身份一律缺失（不提供平台越权）。
+    - ``user_only`` 能力永不使用平台兜底。
     """
     keys = declared_env_keys(cap)
     if not keys:
         return {}, []
+    platform = (
+        platform_env
+        if platform_env is not None
+        else await resolve_capability_env(db, cap.name)
+    )
     if is_service_identity(user):
-        plat = platform_env
-        if plat is None:
-            plat = await resolve_capability_env(db, cap.name)
-        env: dict[str, str] = {}
-        for key in keys:
-            value = (plat.get(key) or "").strip()
-            if value:
-                env[key] = value
-        return env, [k for k in keys if k not in env]
-    return await resolve_user_bound_env(db, user.id, cap)
+        if getattr(user, "role", "") != "admin":
+            return {}, keys
+        return _platform_env_for(keys, platform)
+    env, missing = await resolve_user_bound_env(db, user.id, cap)
+    if not missing:
+        return env, []
+    if is_user_only(cap) or getattr(user, "role", "") != "admin":
+        return env, missing
+    # market 管理员个人凭据不完整：整体使用平台凭据，避免个人/平台混拼。
+    return _platform_env_for(keys, platform)
 
 
 async def require_user_bound_env(
@@ -251,36 +273,42 @@ async def require_user_bound_env(
 ) -> dict[str, str]:
     """user 级能力执行凭据（fail-closed 校验版）。
 
-    user_only 能力：平台身份（服务令牌）一律 403 拒绝；缺个人凭据不发重试标记。
-    平台身份（服务令牌）缺平台密钥 → 403 提示管理员配置；
-    用户令牌缺个人凭据 → 403（binding=user 带 ``X-Market-Error-Code: user_credentials_missing``
-    响应头，agent 侧管理员据此以平台身份重试一次）。
+    - ``user_only``：平台身份（服务令牌）一律 403；缺个人凭据也不提供平台兜底。
+    - ``user`` + 用户令牌：个人凭据优先；缺失且 market 用户是 admin 时用平台凭据；
+      普通用户缺失 → 403 + ``X-Market-Error-Code: user_credentials_missing``。
+    - ``user`` + 服务令牌：仅 market 用户为 admin 时可用平台凭据，否则 403。
     """
     if is_user_only(cap) and is_service_identity(user):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             "该能力仅支持按用户身份执行（不提供平台兜底）；请使用个人凭据调用",
         )
+    if is_service_identity(user) and getattr(user, "role", "") != "admin":
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "当前服务身份不是能力市场管理员，不能使用平台凭据",
+        )
     if platform_env is None:
         platform_env = await resolve_capability_env(db, cap.name)
     env, missing = await resolve_user_bound_env_for(db, cap, user, platform_env=platform_env)
     if missing:
         what = "、".join(missing)
-        if is_service_identity(user):
+        if is_user_only(cap):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                f"该能力仅支持按用户身份执行，缺少个人凭据：{what}；"
+                "请在能力市场该能力卡片上点击「配置凭据」填写后重试",
+            )
+        if is_service_identity(user) or getattr(user, "role", "") == "admin":
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN,
                 f"该能力按平台身份执行，缺少平台密钥：{what}；"
                 "请管理员在能力详情中配置平台密钥后重试",
             )
-        # user_only 无平台可兜底: 不带管理员重试标记, 直接引导配置个人凭据
-        headers = (
-            None if is_user_only(cap)
-            else {USER_CREDS_MISSING_HEADER: USER_CREDS_MISSING_CODE}
-        )
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             f"该能力按你的身份执行，缺少必需凭据：{what}；"
             "请在能力市场该能力卡片上点击「配置凭据」填写后重试",
-            headers=headers,
+            headers={USER_CREDS_MISSING_HEADER: USER_CREDS_MISSING_CODE},
         )
     return env

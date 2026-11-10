@@ -1053,12 +1053,65 @@ async def test_runtime_user_binding_injects_user_env_and_fail_closed(
 
 
 @pytest.mark.asyncio
+async def test_market_admin_user_gets_platform_fallback(
+    client, publisher_headers, admin_headers, monkeypatch
+):
+    """market 管理员（用户令牌，role=admin）个人凭据缺失时直接用平台凭据。"""
+    name = "管理员平台兜底能力"
+    cap_id = await _publish_capability(
+        client,
+        publisher_headers,
+        admin_headers,
+        name,
+        "mcp",
+        _mcp_zip(name, _ERP_ENV),
+    )
+    await _set_binding(client, admin_headers, cap_id, "user")
+    await _set_platform_secret(client, admin_headers, cap_id, "ERP_API_BASE_URL", "https://erp.internal")
+    await _set_platform_secret(client, admin_headers, cap_id, "ERP_USERNAME", "s_platform")
+    await _set_platform_secret(client, admin_headers, cap_id, "ERP_PASSWORD", "s_platform_pw")
+    await _join(client, admin_headers, cap_id)
+
+    captured: dict = {}
+
+    class _FakeBridge:
+        def __init__(self, gateway_loader=None, env=None, **kwargs):
+            self.tool_names = ["mcp_x_get"]
+
+        async def connect_capability(self, mcp_name, cap, env=None, user_env=None):
+            captured["user_env"] = dict(user_env or {})
+            return {"connected": True}
+
+        def has_tool(self, tool_name):
+            return tool_name in self.tool_names
+
+        async def call(self, tool, params):
+            return "ok"
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr("app.services.mcp_bridge.MCPBridge", _FakeBridge)
+
+    r = await client.post(
+        f"/api/runtime/mcp/{name}/call",
+        headers=admin_headers,
+        json={"tool": "mcp_x_get", "params": {}},
+    )
+    assert r.status_code == 200, r.text
+    assert captured["user_env"] == {
+        "ERP_API_BASE_URL": "https://erp.internal",
+        "ERP_USERNAME": "s_platform",
+        "ERP_PASSWORD": "s_platform_pw",
+    }
+
+
+@pytest.mark.asyncio
 async def test_user_creds_missing_marks_403_for_admin_retry(
     client, publisher_headers, admin_headers, user_headers, monkeypatch
 ):
-    """B 方案：用户令牌按个人凭据执行；缺凭据返回 403 + 机器可读标记
-    （X-Market-Error-Code: user_credentials_missing，agent 管理员据此重试）；
-    服务令牌（平台身份，admin scope）直接用平台凭据（重试通道）。"""
+    """普通用户个人凭据缺失：403 + 机器可读标记（由市场前端引导配置）；
+    服务令牌（平台身份，admin scope）直接用平台凭据（系统身份通道）。"""
     name = "个人优先平台重试能力"
     cap_id = await _publish_capability(
         client,
