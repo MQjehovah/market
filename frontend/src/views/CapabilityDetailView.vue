@@ -1045,7 +1045,10 @@ const contentTabs = computed(() => {
   if (isAgent.value && (embeddedSkills.value.length || embeddedMcp.value.length)) {
     tabs.push({ key: 'bundle', label: '内含能力' })
   }
-  if (isMcp.value || hasAuthConfig.value) {
+  if (hasAuthConfig.value) {
+    tabs.push({ key: 'credentials', label: '凭据' })
+  }
+  if (isMcp.value) {
     tabs.push({ key: 'config', label: '配置' })
   }
   tabs.push({ key: 'versions', label: '版本' })
@@ -2393,14 +2396,16 @@ onMounted(() => {
               </div>
             </details>
           </section>
-          <section v-show="contentTab === 'config'" class="panel">
-            <h2 class="detail-section-title">配置</h2>
-
+          <section v-show="contentTab === 'credentials'" class="panel">
+            <h2 class="detail-section-title">个人凭据</h2>
             <CapabilityAuthPanel
               v-if="hasAuthConfig"
               :capability-name="cap.name"
               :config="authConfig"
             />
+          </section>
+          <section v-show="contentTab === 'config'" class="panel">
+            <h2 class="detail-section-title">配置</h2>
 
             <div v-if="isMcp" class="guide-block">
               <table class="table">

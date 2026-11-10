@@ -16,7 +16,7 @@ class DwsAuthProvider:
 
     def page_url(self, cap) -> str:
         base = get_settings().public_base_url.rstrip("/")
-        return f"{base}/capabilities/{cap.id}?tab=config"
+        return f"{base}/capabilities/{cap.id}?tab=credentials"
 
     def _with_page(self, data: dict[str, Any], cap) -> dict[str, Any]:
         page = self.page_url(cap)
