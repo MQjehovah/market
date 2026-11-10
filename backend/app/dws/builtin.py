@@ -25,9 +25,9 @@ OPENAPI_LEGACY_NAME = "dingtalk"
 DWS_DISPLAY_NAME = "钉钉 DWS"
 DWS_DESCRIPTION = (
     "钉钉 DWS（工作台 CLI）：使用员工自己的钉钉个人授权，按人隔离凭据；"
-    "桌面端本机登录，网页端在能力配置页扫码授权。通过 MCP 暴露 dws_schema / "
-    "dws_read / dws_write 工具，覆盖消息、日程、文档、待办、通讯录、邮件、审批、"
-    "AI 表格、知识库、白板等业务。"
+    "在能力配置页扫码授权后，网页端和桌面端都按个人身份执行。通过 MCP 暴露 "
+    "dws_schema / dws_read / dws_write 工具，覆盖消息、日程、文档、待办、"
+    "通讯录、邮件、审批、AI 表格、知识库、白板等业务。"
 )
 OPENAPI_DISPLAY_NAME = "钉钉开放接口"
 OPENAPI_DESCRIPTION = (
@@ -68,7 +68,7 @@ README = """# 钉钉 DWS
 - `dws_read`：只读命令；
 - `dws_write`：写命令，必须先获得用户确认并传 `confirm=true`。
 
-网页端首次使用前，在能力详情页「配置」Tab 扫码授权；桌面端继续使用本机 `dws auth login`。
+首次使用前，在能力详情页「配置」Tab 扫码授权；网页端和桌面端都按个人身份执行。
 """
 
 
