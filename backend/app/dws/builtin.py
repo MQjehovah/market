@@ -62,13 +62,73 @@ INPUT_SCHEMA = {
 }
 README = """# 钉钉 DWS
 
-使用每个员工自己的钉钉 DWS 个人授权。通过 MCP 工具调用：
+使用**每个员工自己的钉钉个人授权**执行钉钉工作台操作。
 
-- `dws_schema`：查询命令和参数；
-- `dws_read`：只读命令；
-- `dws_write`：写命令，必须先获得用户确认并传 `confirm=true`。
+## 能做什么
 
-首次使用前，在能力详情页「配置」Tab 扫码授权；网页端和桌面端都按个人身份执行。
+- 消息、群聊、日程、文档、待办、通讯录
+- 邮件、审批、AI 表格、知识库、白板
+- 支持查询、发送、创建、修改；写操作会要求确认
+
+## 使用前：扫码授权
+
+1. 加入「钉钉 DWS」；
+2. 在能力详情页打开「配置」；
+3. 点「扫码授权」，用钉钉扫码并确认；
+4. 状态变为「已授权」后，回到 Agent 对话即可使用。
+
+凭据保存在云端个人工作区，不写入数据库，也不会被其他员工使用。管理员不能代替员工扫码，也不能读取别人的个人消息。
+
+## 怎么用
+
+直接在对话里描述任务，例如：
+
+- 「查一下我今天的日程」
+- 「把这条消息发到项目群」
+- 「从知识库找报销制度」
+- 「创建一个明天下午三点的待办」
+
+网页端和桌面端都按当前登录员工的个人授权执行；换人使用时会使用各自已授权的钉钉身份。
+
+## 常见问题
+
+- **一直显示未授权**：重新打开「配置」扫码；二维码过期后刷新即可。
+- **昨天还能用，今天被踢下线**：电脑端和网页端同时登录同一钉钉账号时，refresh token 可能互相失效；重新扫码一次即可。
+- **找不到某个群或文档**：先确认你的钉钉账号本身有该群/文档权限。
+"""
+
+OPENAPI_README = """# 钉钉开放接口
+
+使用**零号员工机器人/企业应用身份**调用钉钉开放平台接口。
+
+## 能做什么
+
+- 以机器人身份发送群消息、单聊消息
+- 查询群、通讯录、审批、日程等企业开放接口
+- 由管理员维护平台凭据，普通用户无需配置个人钉钉授权
+
+## 使用前：平台凭据
+
+该能力由管理员在「配置」中维护平台凭据；配置完成后所有被授权用户共用同一服务身份。
+
+普通员工不需要扫码，也不需要填写个人钉钉账号。若提示「云端共享凭据还没配齐」，请联系管理员配置。
+
+## 怎么用
+
+直接在对话里描述任务，例如：
+
+- 「在项目群发一条通知」
+- 「查一下这个审批的状态」
+- 「把会议纪要发到群里」
+
+## 和「钉钉 DWS」的区别
+
+- **钉钉开放接口**：机器人/企业应用身份，适合发通知、查企业数据；
+- **钉钉 DWS**：员工个人身份，适合查“我的”消息、日程、待办。
+
+## 注意
+
+下游看到的是机器人，不是员工本人；不会读取员工个人消息。需要个人身份时请使用「钉钉 DWS」。
 """
 
 
@@ -196,6 +256,7 @@ async def _ensure_dws_mcp(db: AsyncSession) -> Capability:
             data_domain="钉钉",
             input_schema=INPUT_SCHEMA,
             config_ui=CONFIG_UI,
+            readme_md=README,
             verified=True,
             author_id=author.id,
             organization=author.department or "",
@@ -211,6 +272,7 @@ async def _ensure_dws_mcp(db: AsyncSession) -> Capability:
         cap.description = DWS_DESCRIPTION
         cap.input_schema = INPUT_SCHEMA
         cap.config_ui = CONFIG_UI
+        cap.readme_md = README
         cap.binding = "user"
         cap.distribution = "remote"
         cap.risk_default = "destructive"
@@ -249,6 +311,7 @@ async def _label_openapi(db: AsyncSession) -> None:
     for row in rows:
         row.display_name = OPENAPI_DISPLAY_NAME
         row.description = OPENAPI_DESCRIPTION
+        row.readme_md = OPENAPI_README
 
 
 async def ensure_dingtalk_capabilities(db: AsyncSession) -> Capability:

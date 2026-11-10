@@ -26,6 +26,7 @@ async def test_builtin_dws_capability_is_mcp(client):
             "DWS_WORKDIR",
         ]
         assert cap.config_ui["provider"] == "dws"
+        assert "扫码授权" in cap.readme_md
 
 
 async def test_dws_mcp_is_visible_and_joinable(client, user_headers):
