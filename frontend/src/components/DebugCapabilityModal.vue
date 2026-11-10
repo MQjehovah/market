@@ -21,6 +21,10 @@ const result = ref(null)
 const error = ref('')
 const busy = ref(false)
 const copied = ref(false)
+const liveReasoning = ref('')
+const liveOutput = ref('')
+const liveTools = ref([])
+const liveRound = ref(0)
 const mcpTools = ref([])
 const mcpSelected = ref('')
 const mcpParams = ref('{}')
@@ -73,11 +77,19 @@ function isComplex(prop) {
   return prop?.type === 'object' || prop?.type === 'array'
 }
 
+function resetLive() {
+  liveReasoning.value = ''
+  liveOutput.value = ''
+  liveTools.value = []
+  liveRound.value = 0
+}
+
 function reset() {
   result.value = null
   error.value = ''
   busy.value = false
   copied.value = false
+  resetLive()
   Object.keys(params).forEach((k) => delete params[k])
   Object.keys(complexParams).forEach((k) => delete complexParams[k])
   jsonInput.value = '{}'
@@ -212,22 +224,84 @@ function switchMode(m) {
   }
 }
 
+function onAgentStreamEvent(ev) {
+  if (!ev || !ev.type) return
+  if (ev.type === 'round_start') {
+    liveRound.value = Number(ev.round) || liveRound.value + 1
+    return
+  }
+  if (ev.type === 'reasoning') {
+    liveReasoning.value += ev.content || ''
+    return
+  }
+  if (ev.type === 'token') {
+    liveOutput.value += ev.content || ''
+    return
+  }
+  if (ev.type === 'tool_start') {
+    liveTools.value.push({
+      name: ev.name || '',
+      arguments: ev.arguments || '',
+      result: '',
+      pending: true
+    })
+    return
+  }
+  if (ev.type === 'tool_result') {
+    const name = ev.name || ''
+    for (let i = liveTools.value.length - 1; i >= 0; i -= 1) {
+      const row = liveTools.value[i]
+      if (row.name === name && row.pending) {
+        row.result = ev.result || ''
+        row.pending = false
+        return
+      }
+    }
+    liveTools.value.push({
+      name,
+      arguments: '',
+      result: ev.result || '',
+      pending: false
+    })
+    return
+  }
+  if (ev.type === 'done') {
+    const envelope = ev.result || {}
+    // 扁平 + 信封双形态，兼容 resultState.pick 与 steps 模板
+    result.value = { ok: true, action: 'agent_task', result: envelope, ...envelope }
+    if (envelope.output) liveOutput.value = envelope.output
+    return
+  }
+  if (ev.type === 'error') {
+    error.value = ev.error || '执行失败'
+  }
+}
+
 async function run() {
   error.value = ''
   result.value = null
+  resetLive()
   const cap = props.cap
   if (!cap) return
   busy.value = true
   try {
     const name = encodeURIComponent(cap.name)
+    if (isAgentLike.value) {
+      await api.streamPost(
+        `/runtime/agents/${name}/tasks?stream=true&include_trace=true`,
+        { task: textInput.value },
+        onAgentStreamEvent
+      )
+      if (!result.value && !error.value) {
+        error.value = '流式结束但未收到结果'
+      }
+      return
+    }
     let path = ''
     let payload = {}
     if (isTool.value) {
       path = `/runtime/tools/${name}/invoke`
       payload = { params: mode.value === 'form' ? collectToolParams() : JSON.parse(jsonInput.value || '{}') }
-    } else if (isAgentLike.value) {
-      path = `/runtime/agents/${name}/tasks?include_trace=true`
-      payload = { task: textInput.value }
     } else if (isSkill.value) {
       path = `/runtime/skills/${name}/activate`
       payload = { context: textInput.value }
@@ -508,6 +582,33 @@ function stepBadge(name) {
         </div>
       </div>
 
+      <div
+        v-if="isAgentLike && (busy || liveReasoning || liveTools.length || liveOutput) && !result"
+        class="result mt-16"
+      >
+        <div class="flex-between">
+          <h4 style="margin: 0">执行中{{ liveRound ? ` · 第 ${liveRound} 轮` : '' }}</h4>
+          <span class="muted" style="font-size: 12px">流式推送</span>
+        </div>
+        <details v-if="liveReasoning" class="mt-12" open>
+          <summary class="muted" style="cursor: pointer; font-size: 12px">思考过程</summary>
+          <pre class="step-result">{{ liveReasoning }}</pre>
+        </details>
+        <div v-if="liveTools.length" class="steps mt-12">
+          <div v-for="(t, i) in liveTools" :key="'live-tool-' + i" class="step">
+            <div class="step-head">
+              <span class="step-no">{{ i + 1 }}</span>
+              <span class="badge" :class="stepBadge(t.name).cls">{{ stepBadge(t.name).label }}</span>
+              <code>{{ t.name }}</code>
+              <span class="muted">{{ t.pending ? '执行中…' : '完成' }}</span>
+            </div>
+            <pre v-if="t.arguments && t.arguments !== '{}'" class="step-args">{{ t.arguments }}</pre>
+            <pre v-if="t.result" class="step-result">{{ t.result }}</pre>
+          </div>
+        </div>
+        <pre v-if="liveOutput" class="step-result mt-12">{{ liveOutput }}</pre>
+      </div>
+
       <div v-if="result" class="result mt-16">
         <div class="flex-between">
           <h4 style="margin: 0">执行结果</h4>
@@ -517,6 +618,10 @@ function stepBadge(name) {
             <button class="btn btn-sm" @click="copyResult">{{ copied ? '已复制' : '复制' }}</button>
           </div>
         </div>
+        <details v-if="isAgentLike && liveReasoning" class="mt-12">
+          <summary class="muted" style="cursor: pointer; font-size: 12px">思考过程</summary>
+          <pre class="step-result">{{ liveReasoning }}</pre>
+        </details>
         <div v-if="isAgentLike && result.steps && result.steps.length" class="steps mt-16">
           <h4 style="margin: 0 0 10px">执行过程（{{ result.steps.length }} 步）</h4>
           <div v-for="(s, i) in result.steps" :key="i" class="step">

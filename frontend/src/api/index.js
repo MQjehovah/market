@@ -76,6 +76,64 @@ function uploadRequest(method, path, file, extra = {}) {
   return request(path, { method, headers: {}, body: form })
 }
 
+/**
+ * POST 并消费 text/event-stream（data: {json}\\n\\n）。
+ * onEvent 每帧回调一次；HTTP 非 2xx 抛 ApiError（校验失败时不会开流）。
+ */
+async function streamPost(path, data, onEvent) {
+  const headers = { 'Content-Type': 'application/json', Accept: 'text/event-stream' }
+  const hadToken = Boolean(authState.token)
+  if (hadToken) {
+    headers.Authorization = `Bearer ${authState.token}`
+  }
+  const res = await fetch(BASE + path, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(data ?? {})
+  })
+  if (!res.ok) {
+    let body = null
+    try {
+      body = await res.json()
+    } catch {
+      body = null
+    }
+    if (res.status === 401 && hadToken && !AUTH_NO_REDIRECT.has(path)) {
+      await redirectToLogin()
+    }
+    throw new ApiError(res.status, errorMessage(body?.detail), body?.detail)
+  }
+  if (!res.body) {
+    throw new ApiError(502, '流式响应为空')
+  }
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+    let sep
+    while ((sep = buf.indexOf('\n\n')) >= 0) {
+      const chunk = buf.slice(0, sep)
+      buf = buf.slice(sep + 2)
+      for (const rawLine of chunk.split('\n')) {
+        const line = rawLine.trim()
+        if (!line.startsWith('data:')) continue
+        const payload = line.slice(5).trim()
+        if (!payload || payload === '[DONE]') continue
+        let event
+        try {
+          event = JSON.parse(payload)
+        } catch {
+          continue
+        }
+        if (onEvent) await onEvent(event)
+      }
+    }
+  }
+}
+
 export const api = {
   get: (path) => request(path),
   post: (path, data) => request(path, { method: 'POST', body: JSON.stringify(data) }),
@@ -83,5 +141,6 @@ export const api = {
   patch: (path, data) => request(path, { method: 'PATCH', body: JSON.stringify(data) }),
   delete: (path) => request(path, { method: 'DELETE' }),
   upload: (path, file, extra = {}) => uploadRequest('POST', path, file, extra),
-  putUpload: (path, file, extra = {}) => uploadRequest('PUT', path, file, extra)
+  putUpload: (path, file, extra = {}) => uploadRequest('PUT', path, file, extra),
+  streamPost
 }

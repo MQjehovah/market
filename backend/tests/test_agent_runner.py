@@ -252,3 +252,210 @@ async def test_agent_skill_tool_activation(client, publisher_headers, admin_head
     messages = calls[1][0]
     tool_msg = [m for m in messages if m["role"] == "tool"]
     assert tool_msg and marker in tool_msg[-1]["content"]
+
+
+def _parse_sse(text: str) -> list[dict]:
+    events = []
+    for block in text.split("\n\n"):
+        for line in block.splitlines():
+            line = line.strip()
+            if not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if not payload or payload == "[DONE]":
+                continue
+            events.append(json.loads(payload))
+    return events
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_stream_events(client, publisher_headers, admin_headers, monkeypatch):
+    """stream=true：事件序至少 start → round_start → reasoning → done。"""
+    persona = "llm-stream-persona"
+    await _publish_capability(
+        client, publisher_headers, admin_headers, persona, "agent", _agent_zip(persona)
+    )
+
+    async def fake_stream(messages, tools, *, on_event=None, emit_tokens=True):
+        if on_event:
+            await on_event({"type": "reasoning", "content": "先想清楚"})
+            await on_event({"type": "token", "content": "流式回答"})
+        return {"role": "assistant", "content": "流式回答"}
+
+    monkeypatch.setattr(agent_runner, "is_llm_configured", lambda: True)
+    monkeypatch.setattr(agent_runner, "_chat_completion_stream", fake_stream)
+    monkeypatch.setattr(
+        "app.services.router_key.personal_gateway_credentials",
+        lambda user: ("http://gw/v1", "sk-test", "model"),
+    )
+
+    r = await client.post(
+        f"/api/runtime/agents/{persona}/tasks?stream=true&include_trace=true",
+        headers=admin_headers,
+        json={"task": "打个招呼"},
+    )
+    assert r.status_code == 200, r.text
+    assert "text/event-stream" in (r.headers.get("content-type") or "")
+    events = _parse_sse(r.text)
+    types = [e.get("type") for e in events]
+    assert "start" in types
+    assert "round_start" in types
+    assert "reasoning" in types
+    assert "done" in types
+    assert types.index("start") < types.index("round_start") < types.index("done")
+    done = next(e for e in events if e["type"] == "done")
+    assert done["result"]["output"] == "流式回答"
+    assert done["result"]["mode"] == "llm"
+    assert isinstance(done["result"].get("steps"), list)
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_stream_tool_events(
+    client, publisher_headers, admin_headers, monkeypatch
+):
+    """stream=true 且含 tool_calls：出现 tool_start / tool_result。"""
+    persona = "llm-stream-tools"
+    await _publish_capability(
+        client, publisher_headers, admin_headers, persona, "agent", _agent_zip(persona)
+    )
+
+    calls = {"n": 0}
+
+    async def fake_stream(messages, tools, *, on_event=None, emit_tokens=True):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "不存在的工具",
+                            "arguments": '{"text": "hi"}',
+                        },
+                    }
+                ],
+            }
+        if on_event:
+            await on_event({"type": "token", "content": "工具结果已处理"})
+        return {"role": "assistant", "content": "工具结果已处理"}
+
+    monkeypatch.setattr(agent_runner, "is_llm_configured", lambda: True)
+    monkeypatch.setattr(agent_runner, "_chat_completion_stream", fake_stream)
+    monkeypatch.setattr(
+        "app.services.router_key.personal_gateway_credentials",
+        lambda user: ("http://gw/v1", "sk-test", "model"),
+    )
+
+    r = await client.post(
+        f"/api/runtime/agents/{persona}/tasks?stream=true",
+        headers=admin_headers,
+        json={"task": "调用工具"},
+    )
+    assert r.status_code == 200, r.text
+    events = _parse_sse(r.text)
+    types = [e.get("type") for e in events]
+    assert "tool_start" in types
+    assert "tool_result" in types
+    assert types.index("tool_start") < types.index("tool_result")
+    start_ev = next(e for e in events if e["type"] == "tool_start")
+    assert start_ev["name"] == "不存在的工具"
+    done = next(e for e in events if e["type"] == "done")
+    assert done["result"]["tool_calls"] == 1
+    assert done["result"]["output"] == "工具结果已处理"
+    # 默认精简：done 信封无 steps
+    assert "steps" not in done["result"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_task_stream_false_still_json(
+    client, publisher_headers, admin_headers, monkeypatch
+):
+    """stream=false（默认）仍返回 200 JSON，默认无 steps。"""
+    persona = "llm-stream-sync"
+    await _publish_capability(
+        client, publisher_headers, admin_headers, persona, "agent", _agent_zip(persona)
+    )
+
+    async def fake_chat(messages, tools):
+        return {"choices": [{"message": {"role": "assistant", "content": "同步回答"}}]}
+
+    monkeypatch.setattr(agent_runner, "is_llm_configured", lambda: True)
+    monkeypatch.setattr(agent_runner, "_chat_completion", fake_chat)
+    monkeypatch.setattr(
+        "app.services.router_key.personal_gateway_credentials",
+        lambda user: ("http://gw/v1", "sk-test", "model"),
+    )
+
+    r = await client.post(
+        f"/api/runtime/agents/{persona}/tasks",
+        headers=admin_headers,
+        json={"task": "打个招呼"},
+    )
+    assert r.status_code == 200, r.text
+    assert "application/json" in (r.headers.get("content-type") or "")
+    body = r.json()["result"]
+    assert body["output"] == "同步回答"
+    assert "steps" not in body
+    assert "runtime" not in body
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_stream_parses_sse(monkeypatch):
+    """_chat_completion_stream 解析网关 SSE，拼装 message 并推 reasoning/token。"""
+    lines = [
+        'data: {"choices":[{"delta":{"reasoning_content":"思考"}}]}',
+        'data: {"choices":[{"delta":{"content":"你"}}]}',
+        'data: {"choices":[{"delta":{"content":"好"}}]}',
+        "data: [DONE]",
+        "",
+    ]
+
+    class FakeResp:
+        status_code = 200
+
+        async def aiter_lines(self):
+            for line in lines:
+                yield line
+
+        async def aread(self):
+            return b""
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        def stream(self, *a, **k):
+            return FakeResp()
+
+    monkeypatch.setattr(agent_runner.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(
+        agent_runner, "_llm_endpoint", lambda: ("http://gw/v1", "sk", "m")
+    )
+
+    events = []
+
+    async def on_event(ev):
+        events.append(ev)
+
+    msg = await agent_runner._chat_completion_stream(
+        [{"role": "user", "content": "hi"}], [], on_event=on_event
+    )
+    assert msg["content"] == "你好"
+    assert "tool_calls" not in msg
+    assert any(e["type"] == "reasoning" and e["content"] == "思考" for e in events)
+    assert "".join(e["content"] for e in events if e["type"] == "token") == "你好"

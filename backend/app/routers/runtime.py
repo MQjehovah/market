@@ -1,10 +1,14 @@
 """执行引擎：Agent 实例化 / 任务执行 / 工具调用 / 技能激活 / MCP 安装与发现。"""
 
+import asyncio
+import json
+import logging
 import time
 import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 
 from app.auth import CurrentUser, DbSession
 from app.models import User
@@ -32,8 +36,9 @@ from app.services.marketplace import (
 from app.services.capabilities import to_capability_out
 from app.services.service_tokens import is_service_token, require_service_scope
 
-router = APIRouter(prefix="/api/runtime", tags=["runtime"])
+logger = logging.getLogger("market.runtime")
 
+router = APIRouter(prefix="/api/runtime", tags=["runtime"])
 
 async def current_runtime_user(user: CurrentUser) -> User:
     """运行时接口身份准入：用户令牌本人，或带 ``admin`` scope 的服务令牌。
@@ -296,7 +301,56 @@ async def health():
     return {"status": "ok", "service": "marketplace-core"}
 
 
-@router.post("/agents/{name}/tasks", response_model=RuntimeResult)
+def _task_envelope(
+    *,
+    task_id: str,
+    agent: str,
+    version: str,
+    result: dict[str, Any],
+    include_trace: bool,
+) -> dict[str, Any]:
+    payload = RuntimeTaskOut(
+        task_id=task_id,
+        agent=agent,
+        version=version,
+        mode=result.get("mode", "simulated"),
+        output=result.get("output", ""),
+        tool_calls=int(result.get("tool_calls", 0)),
+        runtime=result.get("runtime", {}) if include_trace else {},
+        steps=result.get("steps", []) if include_trace else [],
+    )
+    dumped = payload.model_dump()
+    if not include_trace:
+        dumped.pop("runtime", None)
+        dumped.pop("steps", None)
+    return dumped
+
+
+def _sse_frame(event: dict[str, Any]) -> str:
+    return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+
+async def _resolve_runnable_agent(db, user: User, name: str):
+    """解析可运行的 agent 能力（含 plugin → primary agent）。校验准入。"""
+    cap = await resolve_capability(db, user, name)
+    await require_runtime_access(user, cap, db)
+    if cap.type == "plugin":
+        comps = (cap.input_schema or {}).get("components") or []
+        primary = next((c for c in comps if c.get("role") == "primary"), None)
+        if primary is None:
+            primary = next((c for c in comps if c.get("type") == "agent"), None)
+        if primary is None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, f"能力包 {name} 没有可运行的 Agent"
+            )
+        cap = await resolve_capability(db, user, primary["name"], primary.get("version"))
+        await require_runtime_access(user, cap, db)
+    if cap.type != "agent":
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{name} 不是 Agent 能力")
+    return cap
+
+
+@router.post("/agents/{name}/tasks", response_model=None)
 async def run_agent_task(
     name: str,
     data: RuntimeTaskRequest,
@@ -306,46 +360,104 @@ async def run_agent_task(
         False,
         description="为 true 时回传 runtime/steps 全量轨迹；默认精简信封供 Agent 委派消费",
     ),
+    stream: bool = Query(
+        False,
+        description="为 true 时返回 SSE（start/round_start/reasoning/token/tool_*/done/error）",
+    ),
 ):
     """网页试用 / 市场委派：用该员工自己的网关密钥真实执行。没有密钥时说明要重新企业登录，不返回模拟回答。
 
     默认只返回 task_id/agent/version/mode/output/tool_calls，避免巨型 steps/runtime
     把下游 market_execute 压缩成字面量「...」；试用/调试请带 include_trace=true。
+    stream=true 时校验通过后才开 SSE，边跑边推思考/工具/正文。
     """
     from app.services.agent_runner import run_agent
     from app.services.router_key import personal_gateway_credentials, trial_unavailable_detail
 
-    cap = await resolve_capability(db, user, name)
-    await require_runtime_access(user, cap, db)
-    if cap.type == "plugin":
-        comps = (cap.input_schema or {}).get("components") or []
-        primary = next((c for c in comps if c.get("role") == "primary"), None)
-        if primary is None:
-            primary = next((c for c in comps if c.get("type") == "agent"), None)
-        if primary is None:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"能力包 {name} 没有可运行的 Agent")
-        cap = await resolve_capability(db, user, primary["name"], primary.get("version"))
-        await require_runtime_access(user, cap, db)
-    if cap.type != "agent":
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{name} 不是 Agent 能力")
+    # 鉴权 / 能力解析 / 密钥门禁先全部做完，再决定 JSON 或 SSE（避免半开连接）
+    cap = await _resolve_runnable_agent(db, user, name)
     credentials = personal_gateway_credentials(user)
     if credentials is None:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, trial_unavailable_detail(user))
-    result = await run_agent(db, user, cap, data.task, credentials=credentials)
-    await db.refresh(cap)
-    payload = RuntimeTaskOut(
-        task_id=str(uuid.uuid4()),
-        agent=cap.name,
-        version=cap.version,
-        mode=result.get("mode", "simulated"),
-        output=result.get("output", ""),
-        tool_calls=int(result.get("tool_calls", 0)),
-        runtime=result.get("runtime", {}) if include_trace else {},
-        steps=result.get("steps", []) if include_trace else [],
+
+    task_id = str(uuid.uuid4())
+
+    if not stream:
+        result = await run_agent(db, user, cap, data.task, credentials=credentials)
+        await db.refresh(cap)
+        dumped = _task_envelope(
+            task_id=task_id,
+            agent=cap.name,
+            version=cap.version,
+            result=result,
+            include_trace=include_trace,
+        )
+        return _result(cap, "agent_task", f"Agent「{cap.name}」任务完成（{dumped['mode']}）", dumped)
+
+    queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+
+    async def on_event(event: dict[str, Any]) -> None:
+        await queue.put(event)
+
+    async def runner() -> None:
+        try:
+            result = await run_agent(
+                db,
+                user,
+                cap,
+                data.task,
+                credentials=credentials,
+                on_event=on_event,
+            )
+            await db.refresh(cap)
+            dumped = _task_envelope(
+                task_id=task_id,
+                agent=cap.name,
+                version=cap.version,
+                result=result,
+                include_trace=include_trace,
+            )
+            await queue.put({"type": "done", "result": dumped})
+        except HTTPException as exc:
+            detail = exc.detail
+            err = detail if isinstance(detail, str) else json.dumps(detail, ensure_ascii=False)
+            await queue.put({"type": "error", "error": err})
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("agent task stream failed: %s", name)
+            await queue.put({"type": "error", "error": str(exc)[:500]})
+        finally:
+            await queue.put(None)
+
+    async def event_gen():
+        task = asyncio.create_task(runner())
+        try:
+            yield _sse_frame(
+                {
+                    "type": "start",
+                    "task_id": task_id,
+                    "agent": cap.name,
+                    "version": cap.version,
+                }
+            )
+            while True:
+                event = await queue.get()
+                if event is None:
+                    break
+                yield _sse_frame(event)
+        finally:
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                    pass
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
-    # 默认精简：不把空的 steps/runtime 键塞进信封（减少下游压缩误伤）
-    dumped = payload.model_dump()
-    if not include_trace:
-        dumped.pop("runtime", None)
-        dumped.pop("steps", None)
-    return _result(cap, "agent_task", f"Agent「{cap.name}」任务完成（{payload.mode}）", dumped)

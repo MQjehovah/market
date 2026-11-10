@@ -4,9 +4,12 @@
 后 mode=llm，即为真实使用。
 """
 
+from __future__ import annotations
+
 import contextvars
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
@@ -37,6 +40,8 @@ TRACE_CLIP = 3000
 # 注入 LLM messages 的 tool content 上限（大于 TRACE_CLIP，避免专家多轮被巨型 MCP 回包拖慢）
 MESSAGE_TOOL_CLIP = 6000
 
+EventCallback = Callable[[dict[str, Any]], Awaitable[None]]
+
 
 def _clip(text: str, limit: int = TRACE_CLIP) -> str:
     if text is None:
@@ -45,19 +50,31 @@ def _clip(text: str, limit: int = TRACE_CLIP) -> str:
     return text if len(text) <= limit else text[:limit] + f"…（截断，共 {len(text)} 字符）"
 
 
+async def _emit(on_event: EventCallback | None, event: dict[str, Any]) -> None:
+    if on_event is None:
+        return
+    try:
+        await on_event(event)
+    except Exception:  # noqa: BLE001
+        logger.debug("agent_runner on_event failed", exc_info=True)
+
+
 def is_llm_configured() -> bool:
     s = get_settings()
     return bool(s.llm_base_url and s.llm_api_key and s.llm_model)
 
 
-async def _chat_completion(messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> dict:
-    """调用 OpenAI 兼容 chat/completions（非流式）。"""
+def _llm_endpoint() -> tuple[str, str, str]:
     override = _llm_ctx.get()
     if override:
-        base, api_key, model = override
-    else:
-        s = get_settings()
-        base, api_key, model = s.llm_base_url, s.llm_api_key, s.llm_model
+        return override
+    s = get_settings()
+    return s.llm_base_url, s.llm_api_key, s.llm_model
+
+
+async def _chat_completion(messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> dict:
+    """调用 OpenAI 兼容 chat/completions（非流式）。"""
+    base, api_key, model = _llm_endpoint()
     payload: dict[str, Any] = {"model": model, "messages": messages}
     if tools:
         payload["tools"] = tools
@@ -77,6 +94,118 @@ async def _chat_completion(messages: list[dict[str, Any]], tools: list[dict[str,
             f"LLM 调用失败 {resp.status_code}: {resp.text[:300]}",
         )
     return resp.json()
+
+
+def _merge_tool_call_delta(acc: dict[int, dict[str, Any]], tc: dict[str, Any]) -> None:
+    """把流式 tool_calls delta 合并进按 index 累积的结构。"""
+    try:
+        idx = int(tc.get("index", 0))
+    except (TypeError, ValueError):
+        idx = 0
+    slot = acc.setdefault(
+        idx,
+        {"id": "", "type": "function", "function": {"name": "", "arguments": ""}},
+    )
+    if tc.get("id"):
+        slot["id"] = str(tc["id"])
+    if tc.get("type"):
+        slot["type"] = str(tc["type"])
+    fn = tc.get("function") or {}
+    if not isinstance(fn, dict):
+        return
+    if fn.get("name"):
+        slot["function"]["name"] = str(fn["name"])
+    if fn.get("arguments"):
+        slot["function"]["arguments"] = (slot["function"].get("arguments") or "") + str(
+            fn["arguments"]
+        )
+
+
+async def _chat_completion_stream(
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    *,
+    on_event: EventCallback | None = None,
+    emit_tokens: bool = True,
+) -> dict:
+    """流式 chat/completions：边推 reasoning/token，边拼装完整 message。
+
+    返回形如非流式 choice.message 的 dict（含 content / tool_calls）。
+    """
+    base, api_key, model = _llm_endpoint()
+    payload: dict[str, Any] = {"model": model, "messages": messages, "stream": True}
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
+
+    content_parts: list[str] = []
+    tool_acc: dict[int, dict[str, Any]] = {}
+    saw_tool_calls = False
+
+    async with httpx.AsyncClient(timeout=300) as client:
+        async with client.stream(
+            "POST",
+            f"{base.rstrip('/')}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "Accept": "text/event-stream",
+            },
+            json=payload,
+        ) as resp:
+            if resp.status_code >= 400:
+                body = (await resp.aread()).decode("utf-8", errors="replace")[:300]
+                raise HTTPException(
+                    status.HTTP_502_BAD_GATEWAY,
+                    f"LLM 调用失败 {resp.status_code}: {body}",
+                )
+            async for raw_line in resp.aiter_lines():
+                line = (raw_line or "").strip()
+                if not line:
+                    continue
+                if line.startswith(":"):
+                    continue
+                if not line.startswith("data:"):
+                    continue
+                data_str = line[5:].strip()
+                if not data_str or data_str == "[DONE]":
+                    continue
+                try:
+                    chunk = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+                choice = (chunk.get("choices") or [{}])[0]
+                delta = choice.get("delta") or {}
+                if not isinstance(delta, dict):
+                    continue
+
+                reasoning = delta.get("reasoning_content")
+                if reasoning is None:
+                    reasoning = delta.get("reasoning")
+                if isinstance(reasoning, str) and reasoning:
+                    await _emit(on_event, {"type": "reasoning", "content": reasoning})
+
+                tcs = delta.get("tool_calls")
+                if isinstance(tcs, list) and tcs:
+                    saw_tool_calls = True
+                    for tc in tcs:
+                        if isinstance(tc, dict):
+                            _merge_tool_call_delta(tool_acc, tc)
+
+                piece = delta.get("content")
+                if isinstance(piece, str) and piece:
+                    content_parts.append(piece)
+                    # 收束轮才推 token；一旦出现 tool_calls 就不再推正文增量
+                    if emit_tokens and not saw_tool_calls:
+                        await _emit(on_event, {"type": "token", "content": piece})
+
+    message: dict[str, Any] = {
+        "role": "assistant",
+        "content": "".join(content_parts),
+    }
+    if tool_acc:
+        message["tool_calls"] = [tool_acc[i] for i in sorted(tool_acc.keys())]
+    return message
 
 
 def _tool_defs(runtime: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
@@ -236,9 +365,12 @@ async def run_agent(
     max_iterations: int | None = None,
     extra_deps: list[dict[str, str]] | None = None,
     credentials: tuple[str, str, str] | None = None,
+    on_event: EventCallback | None = None,
 ) -> dict[str, Any]:
     """真实执行 agent。credentials 为 (网关根, 密钥, 模型) 时按这组调用。
-    都没有时仍返回模拟结果，供 A2A 等旧入口使用。网页试用不走这条。"""
+    都没有时仍返回模拟结果，供 A2A 等旧入口使用。网页试用不走这条。
+    on_event 非空时走流式 LLM，并推送 round_start/reasoning/token/tool_*。
+    """
     if credentials is None and not is_llm_configured():
         return {
             "mode": "simulated",
@@ -261,6 +393,7 @@ async def run_agent(
             task_text,
             max_iterations=max_iterations,
             extra_deps=extra_deps,
+            on_event=on_event,
         )
     finally:
         if ctx_token is not None:
@@ -275,6 +408,7 @@ async def _run_agent_llm(
     *,
     max_iterations: int | None = None,
     extra_deps: list[dict[str, str]] | None = None,
+    on_event: EventCallback | None = None,
 ) -> dict[str, Any]:
     prompt, deps = read_prompt_deps(cap)
     runtime = await _resolve_manifest(db, user, deps or [])
@@ -364,11 +498,18 @@ async def _run_agent_llm(
         iterations = max_iterations or _runtime_max_iters() or DEFAULT_MAX_ITERATIONS
         tool_calls = 0
         steps: list[dict[str, Any]] = []
+        stream_mode = on_event is not None
 
-        for _ in range(iterations):
-            data = await _chat_completion(messages, tools)
-            choice = (data.get("choices") or [{}])[0]
-            message = choice.get("message") or {}
+        for round_idx in range(1, iterations + 1):
+            await _emit(on_event, {"type": "round_start", "round": round_idx})
+            if stream_mode:
+                message = await _chat_completion_stream(
+                    messages, tools, on_event=on_event, emit_tokens=True
+                )
+            else:
+                data = await _chat_completion(messages, tools)
+                choice = (data.get("choices") or [{}])[0]
+                message = choice.get("message") or {}
             tool_calls_msg = message.get("tool_calls")
             if tool_calls_msg:
                 messages.append(
@@ -385,13 +526,18 @@ async def _run_agent_llm(
                         args = json.loads(fn.get("arguments") or "{}")
                     except ValueError:
                         args = {}
+                    args_clip = _clip(json.dumps(args, ensure_ascii=False))
                     steps.append(
                         {
                             "kind": "call",
                             "name": tool_name,
-                            "arguments": _clip(json.dumps(args, ensure_ascii=False)),
+                            "arguments": args_clip,
                             "reasoning": _clip(message.get("content") or ""),
                         }
+                    )
+                    await _emit(
+                        on_event,
+                        {"type": "tool_start", "name": tool_name, "arguments": args_clip},
                     )
                     try:
                         if tool_name == "skill":
@@ -414,7 +560,12 @@ async def _run_agent_llm(
                     except HTTPException as exc:
                         content = json.dumps({"error": str(exc.detail)}, ensure_ascii=False)
                     # steps 用短 clip；写入对话的 content 单独限长，防止后续回合上下文膨胀
-                    steps.append({"kind": "result", "name": tool_name, "result": _clip(content)})
+                    result_clip = _clip(content)
+                    steps.append({"kind": "result", "name": tool_name, "result": result_clip})
+                    await _emit(
+                        on_event,
+                        {"type": "tool_result", "name": tool_name, "result": result_clip},
+                    )
                     messages.append(
                         {
                             "role": "tool",

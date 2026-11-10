@@ -1,6 +1,6 @@
 <script setup>
 /**
- * 员工侧「一句问话」试用：对专家发自然语言任务，展示回答与调用了哪些工具。
+ * 员工侧「一句问话」试用：对专家发自然语言任务，SSE 流式展示思考/工具/正文。
  * 连接器仍走 DebugCapabilityModal（选手动调工具）。
  */
 import { computed, nextTick, ref, watch } from 'vue'
@@ -24,6 +24,12 @@ const error = ref('')
 const result = ref(null)
 const inputEl = ref(null)
 
+const liveReasoning = ref('')
+const liveOutput = ref('')
+const liveTools = ref([])
+const liveRound = ref(0)
+const reasoningOpen = ref(true)
+
 const chips = computed(() =>
   (props.suggestions || []).map(String).filter(Boolean).slice(0, 4)
 )
@@ -31,6 +37,8 @@ const chips = computed(() =>
 const payload = computed(() => result.value?.result || result.value || {})
 
 const toolNames = computed(() => {
+  const fromLive = liveTools.value.map((t) => t.name).filter(Boolean)
+  if (fromLive.length) return [...new Set(fromLive)]
   const steps = payload.value?.steps || []
   const names = []
   for (const s of steps) {
@@ -41,14 +49,30 @@ const toolNames = computed(() => {
   return names
 })
 
+const displayOutput = computed(() => {
+  if (payload.value?.output) return payload.value.output
+  return liveOutput.value
+})
+
+const showLive = computed(() => busy.value || liveReasoning.value || liveTools.value.length || liveOutput.value)
+
 watch(
   () => props.agentName,
   () => {
     question.value = ''
     error.value = ''
     result.value = null
+    resetLive()
   }
 )
+
+function resetLive() {
+  liveReasoning.value = ''
+  liveOutput.value = ''
+  liveTools.value = []
+  liveRound.value = 0
+  reasoningOpen.value = true
+}
 
 async function focus() {
   await nextTick()
@@ -62,9 +86,64 @@ function useChip(text) {
   focus()
 }
 
+function onStreamEvent(ev) {
+  if (!ev || !ev.type) return
+  if (ev.type === 'start') {
+    return
+  }
+  if (ev.type === 'round_start') {
+    liveRound.value = Number(ev.round) || liveRound.value + 1
+    return
+  }
+  if (ev.type === 'reasoning') {
+    liveReasoning.value += ev.content || ''
+    return
+  }
+  if (ev.type === 'token') {
+    liveOutput.value += ev.content || ''
+    return
+  }
+  if (ev.type === 'tool_start') {
+    liveTools.value.push({
+      name: ev.name || '',
+      arguments: ev.arguments || '',
+      result: '',
+      pending: true
+    })
+    return
+  }
+  if (ev.type === 'tool_result') {
+    const name = ev.name || ''
+    for (let i = liveTools.value.length - 1; i >= 0; i -= 1) {
+      const row = liveTools.value[i]
+      if (row.name === name && row.pending) {
+        row.result = ev.result || ''
+        row.pending = false
+        return
+      }
+    }
+    liveTools.value.push({
+      name,
+      arguments: '',
+      result: ev.result || '',
+      pending: false
+    })
+    return
+  }
+  if (ev.type === 'done') {
+    result.value = { result: ev.result || ev }
+    if (ev.result?.output) liveOutput.value = ev.result.output
+    return
+  }
+  if (ev.type === 'error') {
+    error.value = ev.error || '执行失败'
+  }
+}
+
 async function ask() {
   error.value = ''
   result.value = null
+  resetLive()
   const task = question.value.trim()
   if (!task) {
     error.value = '请先输入一句要问的话'
@@ -80,10 +159,14 @@ async function ask() {
   }
   busy.value = true
   try {
-    result.value = await api.post(
-      `/runtime/agents/${encodeURIComponent(props.agentName)}/tasks?include_trace=true`,
-      { task }
+    await api.streamPost(
+      `/runtime/agents/${encodeURIComponent(props.agentName)}/tasks?stream=true&include_trace=true`,
+      { task },
+      onStreamEvent
     )
+    if (!result.value && !error.value) {
+      error.value = '流式结束但未收到结果'
+    }
   } catch (e) {
     error.value = e.message
   } finally {
@@ -126,14 +209,33 @@ async function ask() {
     </form>
     <p v-if="!canRun && blockedHint" class="muted" style="font-size: 12px; margin: 8px 0 0">{{ blockedHint }}</p>
     <div v-if="error" class="alert alert-error mt-12">{{ error }}</div>
-    <div v-if="result" class="ask-result mt-12">
+    <div v-if="showLive || result" class="ask-result mt-12">
       <div class="ask-meta muted">
-        <span>{{ payload.mode === 'simulated' ? '模拟执行' : '已回答' }}</span>
+        <span v-if="busy">执行中…</span>
+        <span v-else>{{ payload.mode === 'simulated' ? '模拟执行' : '已回答' }}</span>
         <span>·</span>
-        <span>工具调用 {{ payload.tool_calls || 0 }} 次</span>
+        <span>工具调用 {{ payload.tool_calls ?? liveTools.length }} 次</span>
         <span v-if="toolNames.length"> · {{ toolNames.join('、') }}</span>
+        <span v-if="liveRound"> · 第 {{ liveRound }} 轮</span>
       </div>
-      <pre class="ask-output">{{ payload.output }}</pre>
+
+      <details v-if="liveReasoning" class="ask-reasoning" :open="reasoningOpen">
+        <summary @click.prevent="reasoningOpen = !reasoningOpen">思考过程</summary>
+        <pre class="ask-output ask-reasoning-body">{{ liveReasoning }}</pre>
+      </details>
+
+      <div v-if="liveTools.length" class="ask-tools">
+        <div v-for="(t, i) in liveTools" :key="'tool-' + i" class="ask-tool">
+          <div class="ask-tool-head">
+            <code>{{ t.name }}</code>
+            <span class="muted">{{ t.pending ? '执行中…' : '完成' }}</span>
+          </div>
+          <pre v-if="t.arguments && t.arguments !== '{}'" class="ask-tool-args">{{ t.arguments }}</pre>
+          <pre v-if="t.result" class="ask-tool-result">{{ t.result }}</pre>
+        </div>
+      </div>
+
+      <pre v-if="displayOutput" class="ask-output">{{ displayOutput }}</pre>
     </div>
   </div>
 </template>
@@ -169,6 +271,46 @@ async function ask() {
   line-height: 1.55;
   font-family: inherit;
   color: var(--text);
+}
+.ask-reasoning { margin: 0 0 10px; }
+.ask-reasoning summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted, #64748b);
+  user-select: none;
+}
+.ask-reasoning-body {
+  margin-top: 6px;
+  opacity: 0.85;
+  font-size: 12px;
+  max-height: 180px;
+  overflow: auto;
+}
+.ask-tools { display: flex; flex-direction: column; gap: 8px; margin: 0 0 10px; }
+.ask-tool {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--panel, #fff);
+}
+.ask-tool-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+.ask-tool-args,
+.ask-tool-result {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 11px;
+  line-height: 1.45;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  max-height: 120px;
+  overflow: auto;
+  opacity: 0.9;
 }
 .mt-12 { margin-top: 12px; }
 </style>
