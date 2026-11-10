@@ -226,7 +226,7 @@ async function run() {
       path = `/runtime/tools/${name}/invoke`
       payload = { params: mode.value === 'form' ? collectToolParams() : JSON.parse(jsonInput.value || '{}') }
     } else if (isAgentLike.value) {
-      path = `/runtime/agents/${name}/tasks`
+      path = `/runtime/agents/${name}/tasks?include_trace=true`
       payload = { task: textInput.value }
     } else if (isSkill.value) {
       path = `/runtime/skills/${name}/activate`

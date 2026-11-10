@@ -34,6 +34,8 @@ _llm_ctx: contextvars.ContextVar[tuple[str, str, str] | None] = contextvars.Cont
     "llm_ctx", default=None
 )
 TRACE_CLIP = 3000
+# 注入 LLM messages 的 tool content 上限（大于 TRACE_CLIP，避免专家多轮被巨型 MCP 回包拖慢）
+MESSAGE_TOOL_CLIP = 6000
 
 
 def _clip(text: str, limit: int = TRACE_CLIP) -> str:
@@ -94,6 +96,32 @@ def _tool_defs(runtime: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]
     return defs
 
 
+def _embedded_skill_bodies(cap: Capability) -> dict[str, str]:
+    """专家包内 skills/<name>/SKILL.md。不必单独上架。"""
+    from app.services.mcp_gateway import read_package_files
+
+    bodies: dict[str, str] = {}
+    for path, raw in read_package_files(cap).items():
+        norm = path.replace("\\", "/").lstrip("/")
+        if not norm.startswith("skills/") or not norm.endswith("/SKILL.md"):
+            continue
+        folder = norm[len("skills/") : -len("/SKILL.md")]
+        if not folder or "/" in folder:
+            continue
+        text = raw.decode("utf-8", errors="replace")
+        name = folder
+        if text.startswith("---"):
+            end = text.find("\n---", 3)
+            if end > 0:
+                for line in text[3:end].splitlines():
+                    if line.startswith("name:"):
+                        name = line.split(":", 1)[1].strip().strip("\"'") or folder
+                        break
+        if text.strip():
+            bodies[name] = text
+    return bodies
+
+
 def _skill_tool_def(skills: list[dict[str, Any]]) -> dict[str, Any] | None:
     """skill 工具定义：让 LLM 显式加载已绑定技能的执行指引。"""
     names = [s["name"] for s in skills]
@@ -123,13 +151,24 @@ def _skill_tool_def(skills: list[dict[str, Any]]) -> dict[str, Any] | None:
     }
 
 
-async def _activate_skill(db: AsyncSession, user: User, args: dict[str, Any]) -> str:
-    """执行 skill 工具：读取技能包的 SKILL.md 作为执行指引返回给 LLM。"""
+async def _activate_skill(
+    db: AsyncSession,
+    user: User,
+    args: dict[str, Any],
+    embedded: dict[str, str] | None = None,
+) -> str:
+    """执行 skill 工具：优先读专家包内的 SKILL.md，没有再查单独上架的技能。"""
     from app.services.marketplace import activate_skill
 
     name = (args or {}).get("skill") or ""
     if not name:
         return json.dumps({"ok": False, "error": "缺少 skill 参数"}, ensure_ascii=False)
+    body = (embedded or {}).get(name)
+    if body:
+        return json.dumps(
+            {"ok": True, "skill": name, "version": "", "skill_md": body},
+            ensure_ascii=False,
+        )
     try:
         cap = await resolve_capability(db, user, name)
     except HTTPException as exc:
@@ -248,6 +287,14 @@ async def _run_agent_llm(
                 if item.get("name") not in seen:
                     runtime.setdefault(bucket, []).append(item)
 
+    embedded = _embedded_skill_bodies(cap)
+    seen_skills = {item.get("name") for item in runtime.get("skills") or []}
+    for skill_name in embedded:
+        if skill_name not in seen_skills:
+            runtime.setdefault("skills", []).append(
+                {"name": skill_name, "version": cap.version, "embedded": True}
+            )
+
     async def _gateway_loader(name: str):
         try:
             return await load_gateway_config_by_name(db, name)
@@ -348,7 +395,7 @@ async def _run_agent_llm(
                     )
                     try:
                         if tool_name == "skill":
-                            content = await _activate_skill(db, user, args)
+                            content = await _activate_skill(db, user, args, embedded)
                         elif bridge.has_tool(tool_name):
                             content = await bridge.call(tool_name, args)
                         else:
@@ -366,10 +413,15 @@ async def _run_agent_llm(
                             content = json.dumps(result, ensure_ascii=False)
                     except HTTPException as exc:
                         content = json.dumps({"error": str(exc.detail)}, ensure_ascii=False)
-                    messages.append(
-                        {"role": "tool", "tool_call_id": tc.get("id", ""), "content": content}
-                    )
+                    # steps 用短 clip；写入对话的 content 单独限长，防止后续回合上下文膨胀
                     steps.append({"kind": "result", "name": tool_name, "result": _clip(content)})
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc.get("id", ""),
+                            "content": _clip(content, MESSAGE_TOOL_CLIP),
+                        }
+                    )
                     tool_calls += 1
                 continue
 

@@ -662,8 +662,14 @@ class RuntimeTaskOut(BaseModel):
     mode: str
     output: str
     tool_calls: int = 0
-    runtime: dict[str, Any] = Field(default_factory=dict)
-    steps: list[dict[str, Any]] = Field(default_factory=list, description="执行步骤轨迹（LLM/工具/技能/连接器调用）")
+    runtime: dict[str, Any] = Field(
+        default_factory=dict,
+        description="运行时绑定快照；仅 include_trace=true 时由接口回传",
+    )
+    steps: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="执行步骤轨迹（LLM/工具/技能/连接器调用）；仅 include_trace=true 时由接口回传",
+    )
 
 
 class AgentEditOut(BaseModel):

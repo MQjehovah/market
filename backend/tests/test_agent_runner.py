@@ -129,6 +129,19 @@ async def test_agent_loop_executes_tool_calls(client, publisher_headers, admin_h
     assert body["output"] == "工具结果已处理"
     assert body["tool_calls"] == 1
     assert calls["n"] == 2
+    # 默认精简信封：不回传 steps/runtime，避免下游压缩成 "..."
+    assert "steps" not in body
+    assert "runtime" not in body
+
+    r_trace = await client.post(
+        f"/api/runtime/agents/{persona}/tasks?include_trace=true",
+        headers=admin_headers,
+        json={"task": "调用工具"},
+    )
+    assert r_trace.status_code == 200, r_trace.text
+    traced = r_trace.json()["result"]
+    assert isinstance(traced.get("steps"), list) and len(traced["steps"]) >= 1
+    assert isinstance(traced.get("runtime"), dict)
 
 
 @pytest.mark.asyncio
@@ -220,7 +233,7 @@ async def test_agent_skill_tool_activation(client, publisher_headers, admin_head
     )
 
     r = await client.post(
-        f"/api/runtime/agents/{persona}/tasks",
+        f"/api/runtime/agents/{persona}/tasks?include_trace=true",
         headers=admin_headers,
         json={"task": "做一次开发"},
     )
@@ -228,7 +241,7 @@ async def test_agent_skill_tool_activation(client, publisher_headers, admin_head
     body = r.json()["result"]
     assert body["tool_calls"] == 1
     assert body["output"] == "已按技能完成"
-    # 执行轨迹：包含 skill 调用步骤与返回结果步骤
+    # 执行轨迹：包含 skill 调用步骤与返回结果步骤（需 include_trace）
     assert any(s["kind"] == "call" and s["name"] == "skill" for s in body.get("steps", []))
     assert any(s["kind"] == "result" for s in body.get("steps", []))
 

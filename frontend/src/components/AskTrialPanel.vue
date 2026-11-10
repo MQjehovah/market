@@ -80,9 +80,10 @@ async function ask() {
   }
   busy.value = true
   try {
-    result.value = await api.post(`/runtime/agents/${encodeURIComponent(props.agentName)}/tasks`, {
-      task
-    })
+    result.value = await api.post(
+      `/runtime/agents/${encodeURIComponent(props.agentName)}/tasks?include_trace=true`,
+      { task }
+    )
   } catch (e) {
     error.value = e.message
   } finally {

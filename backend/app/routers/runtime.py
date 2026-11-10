@@ -4,7 +4,7 @@ import time
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 
 from app.auth import CurrentUser, DbSession
 from app.models import User
@@ -297,8 +297,21 @@ async def health():
 
 
 @router.post("/agents/{name}/tasks", response_model=RuntimeResult)
-async def run_agent_task(name: str, data: RuntimeTaskRequest, db: DbSession, user: RuntimeUser):
-    """网页试用：用该员工自己的网关密钥真实执行。没有密钥时说明要重新企业登录，不返回模拟回答。"""
+async def run_agent_task(
+    name: str,
+    data: RuntimeTaskRequest,
+    db: DbSession,
+    user: RuntimeUser,
+    include_trace: bool = Query(
+        False,
+        description="为 true 时回传 runtime/steps 全量轨迹；默认精简信封供 Agent 委派消费",
+    ),
+):
+    """网页试用 / 市场委派：用该员工自己的网关密钥真实执行。没有密钥时说明要重新企业登录，不返回模拟回答。
+
+    默认只返回 task_id/agent/version/mode/output/tool_calls，避免巨型 steps/runtime
+    把下游 market_execute 压缩成字面量「...」；试用/调试请带 include_trace=true。
+    """
     from app.services.agent_runner import run_agent
     from app.services.router_key import personal_gateway_credentials, trial_unavailable_detail
 
@@ -327,7 +340,12 @@ async def run_agent_task(name: str, data: RuntimeTaskRequest, db: DbSession, use
         mode=result.get("mode", "simulated"),
         output=result.get("output", ""),
         tool_calls=int(result.get("tool_calls", 0)),
-        runtime=result.get("runtime", {}),
-        steps=result.get("steps", []),
+        runtime=result.get("runtime", {}) if include_trace else {},
+        steps=result.get("steps", []) if include_trace else [],
     )
-    return _result(cap, "agent_task", f"Agent「{cap.name}」任务完成（{payload.mode}）", payload.model_dump())
+    # 默认精简：不把空的 steps/runtime 键塞进信封（减少下游压缩误伤）
+    dumped = payload.model_dump()
+    if not include_trace:
+        dumped.pop("runtime", None)
+        dumped.pop("steps", None)
+    return _result(cap, "agent_task", f"Agent「{cap.name}」任务完成（{payload.mode}）", dumped)
