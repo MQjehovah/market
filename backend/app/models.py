@@ -467,6 +467,68 @@ class AuthoringJob(Base):
     )
 
 
+class DwsAccount(Base):
+    """钉钉 DWS 用户账号状态（不存 token；登录态在用户 workspace 的 keychain）。"""
+
+    __tablename__ = "dws_accounts"
+
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id"), primary_key=True
+    )
+    status: Mapped[str] = mapped_column(String(20), default="unauthorized", index=True)
+    profiles: Mapped[list] = mapped_column(JSON, default=list)
+    current_profile: Mapped[str] = mapped_column(String(255), default="")
+    corp_id: Mapped[str] = mapped_column(String(128), default="")
+    corp_name: Mapped[str] = mapped_column(String(255), default="")
+    dingtalk_user_id: Mapped[str] = mapped_column(String(128), default="")
+    dingtalk_user_name: Mapped[str] = mapped_column(String(255), default="")
+    client_id: Mapped[str] = mapped_column(String(128), default="")
+    access_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    refresh_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    login_session_id: Mapped[str] = mapped_column(String(64), default="")
+    login_code: Mapped[str] = mapped_column(String(32), default="")
+    login_url: Mapped[str] = mapped_column(Text, default="")
+    login_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class DwsCall(Base):
+    """DWS 调用审计：只存命令/风险/耗时，不存消息或文档正文。"""
+
+    __tablename__ = "dws_calls"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    command: Mapped[str] = mapped_column(String(255), default="")
+    mode: Mapped[str] = mapped_column(String(16), default="")
+    effect: Mapped[str] = mapped_column(String(16), default="")
+    status: Mapped[str] = mapped_column(String(16), default="")
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    args_summary: Mapped[dict] = mapped_column(JSON, default=dict)
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+
+
+class DwsFile(Base):
+    """DWS 文件输入/输出记录；path 相对该用户 dws workspace。"""
+
+    __tablename__ = "dws_files"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    name: Mapped[str] = mapped_column(String(255), default="")
+    path: Mapped[str] = mapped_column(Text, default="")
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    direction: Mapped[str] = mapped_column(String(8), default="in")  # in|out
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class CapabilityCollaborator(Base):
     """能力协作者名单（按能力名，全部版本共享编辑权；属主/admin 管理）。"""
 

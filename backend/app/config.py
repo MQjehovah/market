@@ -61,6 +61,17 @@ class Settings(BaseSettings):
     # 能力包上传限制
     max_artifact_size_mb: int = 50
 
+    # 钉钉 DWS 云端能力：每用户一个 workspace，market 侧执行 dws 子进程。
+    dws_workspace_root: str = "./data/workspaces"
+    dws_bin: str = "dws"
+    # >0 时以该 uid/gid 降权运行 dws（需要 market 进程为 root）
+    dws_run_uid: int = 0
+    dws_run_gid: int = 0
+    dws_max_file_mb: int = 50
+    dws_call_timeout: int = 180
+    # 公网前端根地址（用于返回能力登录链接），例如 https://ai.xzrobot.com/market
+    public_base_url: str = "http://localhost:5173"
+
     # 工具沙箱
     tool_timeout_seconds: int = 15
     tool_max_output_bytes: int = 2 * 1024 * 1024
@@ -117,6 +128,13 @@ class Settings(BaseSettings):
     @property
     def icon_path(self) -> Path:
         p = Path(self.icon_dir)
+        if not p.is_absolute():
+            p = self.base_dir / p
+        return p.resolve()
+
+    @property
+    def dws_workspace_path(self) -> Path:
+        p = Path(self.dws_workspace_root)
         if not p.is_absolute():
             p = self.base_dir / p
         return p.resolve()
