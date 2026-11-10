@@ -55,6 +55,9 @@ async def lifespan(app: FastAPI):
         from app.dws.builtin import ensure_dingtalk_capabilities
 
         await ensure_dingtalk_capabilities(session)
+        from app.services.capability_docs import ensure_capability_docs
+
+        await ensure_capability_docs(session)
         await session.commit()
     from app.services.workflow_triggers import start_scheduler, stop_scheduler
 
