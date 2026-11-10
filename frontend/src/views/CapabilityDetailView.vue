@@ -984,8 +984,33 @@ const activePlatformRows = computed(() =>
     ? platformSecretRows.value.filter((row) => methodKeys.value.includes(row.key))
     : platformSecretRows.value
 )
+function prettyEnvLabel(key) {
+  const raw = String(key || '')
+  const name = raw.includes('_') ? raw.split('_').slice(-1)[0] : raw
+  const map = {
+    HOST: '主机地址',
+    PORT: '端口',
+    USER: '用户名',
+    USERNAME: '用户名',
+    PASSWORD: '密码',
+    PASSWD: '密码',
+    TOKEN: 'Token',
+    SECRET: '密钥',
+    KEY: 'Key',
+    NAME: '数据库名',
+    DATABASE: '数据库',
+    URL: '服务地址',
+    BASE_URL: '服务地址',
+    REGION: '区域',
+    ENDPOINT: '接口地址',
+    ACCOUNT: '账号',
+  }
+  if (map[name.toUpperCase()]) return map[name.toUpperCase()]
+  return raw
+}
+
 function methodLabel(key) {
-  return methodFieldMap.value[key]?.label || key
+  return methodFieldMap.value[key]?.label || prettyEnvLabel(key)
 }
 
 watch(
@@ -2557,7 +2582,7 @@ onMounted(() => {
                     <div v-for="row in activePlatformRows" :key="'ps-' + row.key" class="env-row">
                       <div class="env-row-head">
                         <span>{{ methodLabel(row.key) }}</span>
-                        <code>{{ row.key }}</code>
+                        <code v-if="isOwner || isAdmin">{{ row.key }}</code>
                         <span v-if="row.row" class="badge badge-success">已配置</span>
                         <span v-else class="badge badge-danger">未配置</span>
                         <span class="muted" style="font-size: 12px">{{ row.secret ? '凭据' : '可选' }}</span>
@@ -2614,7 +2639,7 @@ onMounted(() => {
                     <div v-for="row in activeEnvRows" :key="row.key" class="env-row">
                       <div class="env-row-head">
                         <span>{{ methodLabel(row.key) }}</span>
-                        <code>{{ row.key }}</code>
+                        <code v-if="isOwner || isAdmin">{{ row.key }}</code>
                         <span v-if="row.capRow" class="badge badge-success">本机已填</span>
                         <span v-else-if="row.globalRow" class="badge badge-warning">全局值生效</span>
                         <span v-else-if="row.secret" class="badge">未填</span>
@@ -3182,25 +3207,9 @@ onMounted(() => {
               class="btn btn-block btn-primary"
             >{{ nextStep.label }}</router-link>
           </div>
-          <div v-if="hasAuthConfig" class="install-auth">
-            <router-link
-              v-if="!authState.token"
-              class="btn btn-block install-ghost"
-              :to="{ path: '/login', query: { redirect: route.fullPath } }"
-            >登录后授权</router-link>
-            <button
-              v-else-if="authAccount && !authAccount.authorized"
-              class="btn btn-block btn-primary"
-              type="button"
-              @click="authDialogVisible = true"
-            >扫码授权</button>
-            <p v-else-if="authAccount?.authorized" class="install-lead install-auth-ok">
-              已授权{{ authAccount.dingtalk_user_name ? '：' + authAccount.dingtalk_user_name : '' }}
-            </p>
-          </div>
           <p v-if="nextStep?.kind === 'join' && !canSubscribe" class="install-lead aside-deny">{{ subscribeBlockedReason }}</p>
           <p v-if="copyNotice || myNotice" class="install-lead">{{ copyNotice || myNotice }}</p>
-          <div v-if="hasExtraWays" class="install-extra">
+          <div v-if="hasExtraWays" class="install-extra" :class="{ 'install-extra-links': hasAuthConfig }">
             <button
               v-if="joined && (cap.install_policy || 'optional') !== 'required'"
               class="btn btn-block install-ghost"
@@ -3275,7 +3284,12 @@ onMounted(() => {
           </template>
         </div>
         <div class="rating-card">
-          <h2 class="install-title">评分与评论</h2>
+          <details class="rating-fold">
+          <summary class="rating-summary">
+            <span class="install-title">评分与评论</span>
+            <span class="stat-stars">{{ stars(cap.avg_rating) }}</span>
+            <span class="muted">{{ cap.rating_count || 0 }} 条</span>
+          </summary>
           <div v-if="!authState.token" class="install-lead">
             <router-link :to="{ path: '/login', query: { redirect: route.fullPath } }">登录</router-link>
             后可以评分
@@ -3316,6 +3330,7 @@ onMounted(() => {
               @click="ratingsExpanded = !ratingsExpanded"
             >{{ ratingsExpanded ? '收起评价' : `查看全部 ${ratings.length} 条评价` }}</button>
           </div>
+          </details>
         </div>
         <div class="panel resource-card">
           <p class="action-kicker">信息</p>
@@ -3323,7 +3338,7 @@ onMounted(() => {
             <div v-if="cap.category"><dt>分类</dt><dd>{{ cap.category }}</dd></div>
             <div><dt>交付</dt><dd>{{ distributionPlain(cap.distribution) }}</dd></div>
           </dl>
-          <p v-if="platformSecretsReady === false" class="aside-hint meta-warn">云端密钥还没配齐，配好后才能试用。</p>
+          <p v-if="platformSecretsReady === false && currentBinding !== 'user'" class="aside-hint meta-warn">云端密钥还没配齐，配好后才能试用。</p>
           <details class="aside-fold">
             <summary>更多</summary>
             <dl class="aside-meta">
@@ -3596,6 +3611,17 @@ onMounted(() => {
 .install-actions { margin-top: 16px; }
 .install-actions .btn { width: 100%; height: 40px; }
 .install-extra { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.install-extra-links { gap: 2px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); }
+.install-extra-links .btn {
+  justify-content: flex-start;
+  min-height: 30px;
+  padding: 4px 2px;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 12px;
+}
+.install-extra-links .btn:hover { background: transparent; color: var(--primary); }
 .install-ghost {
   width: 100%;
   height: 40px;
@@ -3873,6 +3899,17 @@ onMounted(() => {
 .package-name { word-break: break-all; }
 .package-size { flex-shrink: 0; font-variant-numeric: tabular-nums; }
 .package-checksum { margin-top: 8px; font-size: 11px; }
+.rating-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  list-style: none;
+  cursor: pointer;
+}
+.rating-summary::-webkit-details-marker { display: none; }
+.rating-summary .install-title { margin: 0; flex: 1; }
+.rating-summary .stat-stars { font-size: 12px; }
+.rating-fold[open] .rating-summary { margin-bottom: 12px; }
 .rating-card {
   background: var(--panel);
   border: 1px solid var(--border);
