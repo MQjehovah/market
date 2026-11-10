@@ -42,6 +42,7 @@ import PackagePreview from '../components/PackagePreview.vue'
 import PackageEditor from '../components/PackageEditor.vue'
 import DebugCapabilityModal from '../components/DebugCapabilityModal.vue'
 import ConfirmActionModal from '../components/ConfirmActionModal.vue'
+import DwsLoginPanel from '../components/DwsLoginPanel.vue'
 import AskTrialPanel from '../components/AskTrialPanel.vue'
 import MultiSelect from '../components/MultiSelect.vue'
 import WorkflowChat from '../components/WorkflowChat.vue'
@@ -939,6 +940,8 @@ const mcpTrial = computed(() =>
   })
 )
 const joined = computed(() => Boolean(cap.value && myIds.value.has(cap.value.id)))
+const isDws = computed(() => cap.value?.name === 'dingtalk-dws')
+const dwsDialogVisible = ref(false)
 const subscribed = computed(() => Boolean(cap.value && subscribedNames.value.has(cap.value.name)))
 const canRuntime = computed(() => isOwner.value || isAdmin.value || joined.value)
 const canTrialMcp = computed(() => {
@@ -1296,6 +1299,14 @@ async function toggleMy() {
     }
     const extra = r?.message && r.message.includes('未加入') ? `；${r.message}` : ''
     toast.success(joinedHint.value + extra)
+    if (isDws.value) {
+      try {
+        const account = await api.get('/dws/account')
+        if (!account?.authorized) dwsDialogVisible.value = true
+      } catch {
+        dwsDialogVisible.value = true
+      }
+    }
   } catch (e) {
     toast.error(e.message)
   } finally {
@@ -2372,6 +2383,8 @@ onMounted(() => {
           <section v-show="contentTab === 'config'" class="panel">
             <h2 class="detail-section-title">配置</h2>
 
+            <DwsLoginPanel v-if="isDws" :capability-id="cap.id" />
+
             <div v-if="isMcp" class="guide-block">
               <table class="table">
                 <thead><tr><th>参数</th><th>必填</th><th>说明 / 默认</th></tr></thead>
@@ -3225,6 +3238,19 @@ onMounted(() => {
         </div>
       </aside>
     </div>
+    <div v-if="dwsDialogVisible" class="dws-modal-backdrop" @click.self="dwsDialogVisible = false">
+      <div class="dws-modal" role="dialog" aria-modal="true" aria-label="钉钉 DWS 登录">
+        <button class="dws-modal-close" type="button" aria-label="关闭" @click="dwsDialogVisible = false">×</button>
+        <DwsLoginPanel
+          v-if="cap"
+          :capability-id="cap.id"
+          auto-start
+          compact
+          @authorized="dwsDialogVisible = false"
+        />
+      </div>
+    </div>
+
     <ConfirmActionModal
       :show="!!confirmState"
       :title="confirmState?.title || ''"
@@ -3804,5 +3830,27 @@ h3 { margin: 0 0 12px; }
   .detail-title { font-size: 22px; line-height: 30px; }
   .detail-hero-icon { width: 48px; height: 48px; font-size: 18px; border-radius: 10px; }
   .sticky-card { position: static; }
+}
+.dws-modal-backdrop {
+  position: fixed; inset: 0; z-index: 1200;
+  background: rgba(15, 23, 42, 0.48);
+  display: flex; align-items: center; justify-content: center;
+  padding: 18px;
+}
+.dws-modal {
+  position: relative;
+  width: min(620px, calc(100vw - 28px));
+  max-height: calc(100vh - 40px);
+  overflow: auto;
+  background: var(--panel, #fff);
+  border-radius: 14px;
+  padding: 18px;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.3);
+}
+.dws-modal :deep(.dws-panel) { margin-bottom: 0; border: none; padding: 0; }
+.dws-modal-close {
+  position: absolute; top: 10px; right: 12px;
+  border: none; background: transparent; font-size: 22px; line-height: 1;
+  color: var(--muted); cursor: pointer;
 }
 </style>

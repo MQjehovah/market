@@ -9,6 +9,7 @@ import ApprovalsView from '../views/ApprovalsView.vue'
 import MyCapabilitiesView from '../views/MyCapabilitiesView.vue'
 import MySecretsView from '../views/MySecretsView.vue'
 import ProfileView from '../views/ProfileView.vue'
+import DwsView from '../views/DwsView.vue'
 import AdminView from '../views/AdminView.vue'
 import NotFoundView from '../views/NotFoundView.vue'
 import { authState, clearAuth, isTokenExpired } from '../stores/auth'
@@ -44,6 +45,7 @@ const router = createRouter({
     { path: '/my', component: MyCapabilitiesView, meta: { title: '我的能力', auth: true } },
     { path: '/my/secrets', component: MySecretsView, meta: { title: '全局共享密钥', auth: true } },
     { path: '/profile', component: ProfileView, meta: { title: '个人中心', auth: true } },
+    { path: '/dws', component: DwsView, meta: { title: '钉钉 DWS', auth: true } },
     { path: '/admin', redirect: adminLanding, meta: { title: '治理后台', auth: true, admin: true } },
     {
       path: '/admin/:section',
