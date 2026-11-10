@@ -562,7 +562,7 @@ async def _publish(
                     AssembleDependency(name="grep", type="tool"),
                     AssembleDependency(name="web_search", type="tool"),
                     AssembleDependency(name="report-writer", type="skill"),
-                    AssembleDependency(name="dingtalk", type="mcp"),
+                    AssembleDependency(name="dingtalk-openapi", type="mcp"),
                 ],
             )
             try:

@@ -31,7 +31,7 @@ NEW_DEPS = [
     {"name": "rosiwit-cloud-remote-api", "type": "mcp", "version": "1.0.0"},
     {"name": "rosiwit-cloud-ticket", "type": "mcp", "version": "1.0.0"},
     {"name": "rosiwit-cloud-remote-terminal", "type": "mcp", "version": "1.0.3"},
-    {"name": "dingtalk", "type": "mcp", "version": "1.0.6"},
+    {"name": "dingtalk-openapi", "type": "mcp", "version": "1.0.6"},
     {"name": "mail", "type": "mcp", "version": "1.2.0"},
 ]
 

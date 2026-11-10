@@ -23,7 +23,7 @@ NAME_ALIAS = {
 
 # 已发布能力补显示名
 RELABEL = {
-    ("mcp", "dingtalk"): "钉钉",
+    ("mcp", "dingtalk-openapi"): "钉钉开放接口",
     ("mcp", "erp"): "ERP",
     ("mcp", "jira"): "Jira",
     ("mcp", "gitlab"): "GitLab",

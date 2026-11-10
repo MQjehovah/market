@@ -75,7 +75,7 @@ IT_ALERT_WORKFLOW: dict = {
         {
             "id": "notify",
             "type": "mcp",
-            "capability": "dingtalk",
+            "capability": "dingtalk-openapi",
             "params": {
                 "op": "call",
                 "tool": "dingtalk_send_markdown_single",
@@ -162,7 +162,7 @@ CHANGE_APPROVAL_WORKFLOW: dict = {
         {
             "id": "notify",
             "type": "mcp",
-            "capability": "dingtalk",
+            "capability": "dingtalk-openapi",
             "params": {
                 "op": "call",
                 "tool": "dingtalk_send_markdown_single",
