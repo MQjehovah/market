@@ -1,5 +1,6 @@
 """工作流引擎（Dify 对齐）单测：变量/新节点/校验。"""
 import pytest
+from fastapi import HTTPException
 
 from app.services.workflows import _canon_type, _execute_node, render_value, validate_definition
 
@@ -126,3 +127,63 @@ async def test_iteration_node_runs_body():
     out = await _execute_node(None, None, node, ctx)
     assert out["output"]["count"] == 3
     assert out["output"]["items"][1]["text"] == "item=2"
+
+
+@pytest.mark.asyncio
+async def test_market_node_checks_runtime_access(monkeypatch):
+    """工作流节点不能绕过 /api/runtime/* 的准入。"""
+    import app.services.workflows as wf
+
+    class _Cap:
+        name = "erp"
+        type = "mcp"
+        status = "published"
+        id = "cap-1"
+
+    async def _resolve(db, user, name, version=None):
+        return _Cap()
+
+    async def _deny(db, user, cap):
+        raise HTTPException(403, "no runtime access")
+
+    monkeypatch.setattr(wf, "resolve_capability", _resolve)
+    monkeypatch.setattr(wf, "require_runtime_access", _deny)
+    with pytest.raises(HTTPException) as exc:
+        await wf._execute_node(
+            None,
+            object(),
+            {"id": "m", "type": "mcp", "capability": "erp", "params": {"tool": "x"}},
+            {},
+        )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_workflow_mcp_requires_user_bound_env(monkeypatch):
+    """user 绑定的工作流 MCP 节点必须走个人凭据策略，缺凭据不得连接。"""
+    import app.services.capability_secrets as cs
+    import app.services.workflows as wf
+
+    class _Cap:
+        name = "erp"
+        type = "mcp"
+        status = "published"
+        binding = "user"
+        id = "cap-1"
+
+    async def _allow(db, user, cap):
+        return None
+
+    async def _missing(db, cap, user, platform_env=None):
+        raise HTTPException(403, "user credentials missing")
+
+    async def _env(db, name):
+        return {"ERP_USERNAME": "platform"}
+
+    monkeypatch.setattr(wf, "require_runtime_access", _allow)
+    monkeypatch.setattr(cs, "is_user_bound", lambda cap: True)
+    monkeypatch.setattr(cs, "require_user_bound_env", _missing)
+    monkeypatch.setattr(cs, "resolve_capability_env", _env)
+    with pytest.raises(HTTPException) as exc:
+        await wf._call_mcp(None, object(), _Cap(), {"tool": "x"})
+    assert exc.value.status_code == 403

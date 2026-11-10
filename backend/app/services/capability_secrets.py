@@ -220,11 +220,11 @@ def _platform_env_for(
 ) -> tuple[dict[str, str], list[str]]:
     """按声明键从平台密钥中取完整集合；空值视为缺失。"""
     plat = platform or {}
-    env = {
-        key: str(plat.get(key) or "")
-        for key in keys
-        if str(plat.get(key) or "").strip()
-    }
+    env = {}
+    for key in keys:
+        value = str(plat.get(key) or "").strip()
+        if value:
+            env[key] = value
     return env, [key for key in keys if key not in env]
 
 
@@ -253,7 +253,7 @@ async def resolve_user_bound_env_for(
         else await resolve_capability_env(db, cap.name)
     )
     if is_service_identity(user):
-        if getattr(user, "role", "") != "admin":
+        if is_user_only(cap) or getattr(user, "role", "") != "admin":
             return {}, keys
         return _platform_env_for(keys, platform)
     env, missing = await resolve_user_bound_env(db, user.id, cap)

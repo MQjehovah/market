@@ -86,6 +86,8 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # 浏览器端可读取「个人凭据缺失」机器标记，用于展示配置引导。
+    expose_headers=["X-Market-Error-Code"],
 )
 
 app.include_router(auth.router)

@@ -1422,3 +1422,25 @@ async def test_secrets_status_auto_user_keys(client, publisher_headers, admin_he
     b = r.json()
     assert b["filled"] == ["ERP_USERNAME"]
     assert b["missing"] == ["ERP_API_BASE_URL", "ERP_PASSWORD"]
+
+
+@pytest.mark.asyncio
+async def test_user_only_service_identity_primitive_never_platform():
+    """user_only ????????????????????????"""
+    from types import SimpleNamespace
+
+    from app.services.capability_secrets import _platform_env_for, resolve_user_bound_env_for
+
+    cap = SimpleNamespace(
+        name="x", type="mcp", binding="user_only", input_schema={"required_env": ["K"]}
+    )
+    user = SimpleNamespace(id="u", role="admin", _service_token_scopes=[])
+    env, missing = await resolve_user_bound_env_for(
+        None, cap, user, platform_env={"K": "platform"}
+    )
+    assert env == {}
+    assert missing == ["K"]
+
+    env, missing = _platform_env_for(["A"], {"A": " value\n"})
+    assert env == {"A": "value"}
+    assert missing == []

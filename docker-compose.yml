@@ -63,7 +63,7 @@ services:
       - MCP_EGRESS_ALLOWLIST_ONLY=${MCP_EGRESS_ALLOWLIST_ONLY:-}
       - MARKET_SCOPE_ENFORCE=${MARKET_SCOPE_ENFORCE:-}
       - SSO_ISSUER=${SSO_ISSUER:-http://192.168.31.45:8091}
-      - SSO_AUDIENCE=${SSO_AUDIENCE:-market}
+      - SSO_AUDIENCE=${SSO_AUDIENCE:-gateway,dashboard-gateway,market}
       - SSO_JWKS_URI=${SSO_JWKS_URI:-http://192.168.31.45:8091/.well-known/jwks.json}
       - SSO_CLIENT_ID=${SSO_CLIENT_ID:-market}
       - SSO_CLIENT_SECRET=${SSO_CLIENT_SECRET:-}

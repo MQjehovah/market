@@ -5,7 +5,6 @@ import json
 import logging
 import re
 import zipfile
-from typing import Any
 
 from fastapi import HTTPException, status
 from sqlalchemy import and_, delete as sql_delete, func, select
@@ -745,6 +744,8 @@ async def create_new_version(
         allowed_roles=list(cap.allowed_roles or []),
         install_policy=getattr(cap, "install_policy", None) or "optional",
         distribution=getattr(cap, "distribution", None) or "both",
+        # binding 按能力名跨版本继承；漏拷会让新版本静默回退到 service（平台凭据）。
+        binding=getattr(cap, "binding", None) or "service",
         risk_default=getattr(cap, "risk_default", None) or "read",
         data_domain=getattr(cap, "data_domain", None) or "",
         # 头像随版本继承（icon_path 存文件名，文件按能力 id 共享读取）

@@ -90,6 +90,50 @@ async def test_browse_shows_only_latest_published(client, publisher_headers, adm
 
 
 @pytest.mark.asyncio
+async def test_runtime_prefers_published_over_newer_draft(
+    client, publisher_headers, admin_headers
+):
+    """草稿版本不能遮蔽线上版本：runtime 默认应执行 published。"""
+    name = "draft-shadow-tool"
+    cap_id = await _create_and_publish(client, publisher_headers, admin_headers, name, "1.0.0")
+    r = await client.post(
+        f"/api/publish/capabilities/{cap_id}/versions",
+        headers=publisher_headers,
+        json={"new_version": "1.0.1", "change_type": "patch"},
+    )
+    assert r.status_code == 201, r.text
+
+    r = await client.post(
+        f"/api/runtime/tools/{name}/invoke",
+        headers=admin_headers,
+        json={},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["result"]["version"] == "1.0.0"
+
+
+@pytest.mark.asyncio
+async def test_new_version_inherits_binding(client, publisher_headers, admin_headers):
+    """binding 是能力名级策略，新版本必须继承，不能回退到 service。"""
+    name = "binding-inherit-tool"
+    cap_id = await _create_and_publish(client, publisher_headers, admin_headers, name, "1.0.0")
+    r = await client.post(
+        f"/api/capabilities/{cap_id}/binding",
+        headers=admin_headers,
+        json={"binding": "user"},
+    )
+    assert r.status_code == 200, r.text
+
+    r = await client.post(
+        f"/api/publish/capabilities/{cap_id}/versions",
+        headers=publisher_headers,
+        json={"new_version": "1.0.1", "change_type": "patch"},
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["binding"] == "user"
+
+
+@pytest.mark.asyncio
 async def test_my_capabilities_grouped_with_draft_info(client, publisher_headers, admin_headers):
     name = "my-versioned-tool"
     await _create_and_publish(client, publisher_headers, admin_headers, name, "1.0.0")

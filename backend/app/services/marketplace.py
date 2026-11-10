@@ -34,6 +34,11 @@ async def resolve_capability(
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"能力 {name} 不存在")
     if version:
         return visible[0]
+    # 运行时默认版本只从线上可用状态中选：草稿/审核中版本可以存在，但不能遮蔽
+    # published/deprecated（否则发布 1.1.6 draft 会让 1.1.5 published 的调用 409）。
+    usable = [c for c in visible if (c.status or "") in ("published", "deprecated")]
+    if usable:
+        visible = usable
     return max(visible, key=lambda c: parse_semver(c.version))
 
 

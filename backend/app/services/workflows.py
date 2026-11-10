@@ -34,6 +34,7 @@ from app.a2a.protocol import extract_text
 from app.a2a.service import send_task
 from app.config import get_settings
 from app.models import Capability, User, WorkflowConversation, WorkflowExecution
+from app.permissions import require_runtime_access, require_workflow_run
 from app.services.marketplace import (
     activate_skill,
     install_mcp,
@@ -420,8 +421,16 @@ async def _knowledge_retrieval(params: dict[str, Any], ctx: dict[str, Any]) -> d
 
 
 async def _call_mcp(db: AsyncSession, user: User, cap: Capability, params: dict[str, Any]) -> dict[str, Any]:
-    """调用市场 MCP 能力的工具（复用 MCPBridge 连接 + call）。"""
-    from app.services.capability_secrets import resolve_capability_env
+    """调用市场 MCP 能力的工具（复用 MCPBridge 连接 + call）。
+
+    必须与 /api/runtime/mcp/* 同口径：先做运行时准入，再按 binding 解析个人凭据；
+    否则工作流会成为普通用户使用平台凭据的旁路。
+    """
+    from app.services.capability_secrets import (
+        is_user_bound,
+        require_user_bound_env,
+        resolve_capability_env,
+    )
     from app.services.mcp_bridge import MCPBridge
     from app.services.mcp_gateway import load_gateway_config_by_name
 
@@ -438,14 +447,20 @@ async def _call_mcp(db: AsyncSession, user: User, cap: Capability, params: dict[
         except Exception:  # noqa: BLE001
             return None
 
+    await require_runtime_access(user, cap, db)
     try:
         env = await resolve_capability_env(db, cap.name)
     except Exception:  # noqa: BLE001
         env = {}
+    user_env: dict[str, str] = {}
+    if is_user_bound(cap):
+        # 个人凭据优先；market 管理员平台兜底；普通用户缺凭据 403。
+        # 这里不能让异常被上面的 broad except 吞掉。
+        user_env = await require_user_bound_env(db, cap, user, platform_env=env)
 
     bridge = MCPBridge(gateway_loader=_gw)
     try:
-        info = await bridge.connect_capability(cap.name, cap, env=env)
+        info = await bridge.connect_capability(cap.name, cap, env=env, user_env=user_env)
         if not info.get("connected"):
             raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"MCP {cap.name} 连接失败：{info.get('error')}")
         exposed = f"mcp_{_mcp_tool_prefix(cap.name)}_{tool}"
@@ -476,6 +491,8 @@ async def _execute_node(
 
     if ntype in _MARKET_TYPES:
         cap = await resolve_capability(db, user, node["capability"], node.get("version") or None)
+        # 节点能力与 /api/runtime/* 同口径：作者/已加入/管理员才可执行。
+        await require_runtime_access(user, cap, db)
         if ntype == "tool":
             result = await invoke_tool(db, user, cap, params)
             if result.get("status") == "error":
@@ -504,6 +521,7 @@ async def _execute_node(
         sub_cap = await resolve_capability(
             db, user, node["capability"], node.get("version") or None
         )
+        await require_workflow_run(user, sub_cap, db)
         if sub_cap.type != "workflow":
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_ENTITY, f"{node['capability']} 不是工作流"
@@ -1003,6 +1021,10 @@ async def execute_workflow(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             f"工作流嵌套层级过深（>{_MAX_WORKFLOW_DEPTH}）",
         )
+    # 所有入口（runtime / 定时 / webhook / 嵌套）统一做工作流本身准入；
+    # 工作流沿用 open/admin_only/作者语义，不套用能力的 runtime 准入。
+    # 节点能力在 _execute_node 内逐个校验。
+    await require_workflow_run(user, cap, db)
     token = _WF_STACK.set(stack + (cap.name,))
     try:
         return await _execute_workflow_body(db, user, cap, input_data, conversation)

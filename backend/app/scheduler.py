@@ -39,16 +39,18 @@ DISPATCH_TIMEOUT = float(os.environ.get("SCHEDULER_DISPATCH_TIMEOUT") or "3600")
 SCAN_INTERVAL = float(os.environ.get("SCHEDULER_SCAN_INTERVAL") or "60")
 
 
-async def _mint_token(db) -> str | None:
-    """以首个可用管理员身份签发本地 JWT，用于向市场 Worker 派发。"""
-    user = await db.scalar(
-        select(User)
-        .where(User.role == "admin", User.is_active.is_(True))
-        .order_by(User.created_at)
-        .limit(1)
-    )
-    if user is None:
-        logger.warning("[sched] 无可用管理员账号，跳过派发")
+async def _mint_token(db, author_id: str | None) -> str | None:
+    """以工作流作者身份签发本地 JWT，用于向市场 Worker 派发。
+
+    定时工作流必须按作者身份执行：不能以首个 admin 代跑，否则普通用户创建的
+    工作流会获得管理员的市场凭据兜底（binding=user 时直接越权）。
+    """
+    if not author_id:
+        logger.warning("[sched] 工作流缺少作者，跳过派发")
+        return None
+    user = await db.get(User, author_id)
+    if user is None or not user.is_active:
+        logger.warning(f"[sched] 工作流作者 {author_id} 不存在或已禁用，跳过派发")
         return None
     return create_access_token(user)
 
@@ -86,7 +88,7 @@ async def run_once() -> int:
                 continue
             _STATE[cap.name] = stamp
             _save_state()
-            token = await _mint_token(db)
+            token = await _mint_token(db, cap.author_id)
             if not token:
                 continue
             url = f"{INTERNAL_URL}/api/runtime/workflows/{quote(cap.name)}/executions"
