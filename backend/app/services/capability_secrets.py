@@ -165,8 +165,8 @@ def declared_env_keys(cap) -> list[str]:
     return sorted(dict.fromkeys(keys))
 
 
-# 「个人凭据缺失」机器可读标记（响应头）：agent 侧据此在管理员身份下用平台凭据重试。
-# 与 agent/src/tools/market_execute.py 的常量保持一致，改动需双端同步。
+# 「个人凭据缺失」机器可读标记（响应头）：前端据此引导用户配置个人凭据。
+# 普通用户不会被平台凭据兜底；market 管理员在服务端直接走平台兜底，不返回该标记。
 USER_CREDS_MISSING_CODE = "user_credentials_missing"
 USER_CREDS_MISSING_HEADER = "X-Market-Error-Code"
 
@@ -188,8 +188,8 @@ def is_user_only(cap) -> bool:
 def is_service_identity(user) -> bool:
     """调用者是否服务令牌身份（纯平台身份，无个人维度）。
 
-    使用场景：agent 管理员/系统任务以服务令牌调用 runtime（个人凭据缺失后重试、
-    或本就没有市场用户令牌时直接执行），market 直接以平台凭据执行。
+    使用场景：没有市场用户令牌的系统任务以服务令牌调用 runtime。服务令牌的
+    market 用户必须是 ``role=admin`` 才允许使用平台凭据。
     """
     from app.services.service_tokens import is_service_token
 

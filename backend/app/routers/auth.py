@@ -5,7 +5,7 @@ from collections import defaultdict, deque
 
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
-from sqlalchemy import or_, select
+from sqlalchemy import select
 
 from app.auth import CurrentUser, DbSession, _resolve_sso_user, create_access_token, hash_password, verify_password
 from app.config import get_settings

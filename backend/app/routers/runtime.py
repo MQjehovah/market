@@ -38,8 +38,8 @@ router = APIRouter(prefix="/api/runtime", tags=["runtime"])
 async def current_runtime_user(user: CurrentUser) -> User:
     """运行时接口身份准入：用户令牌本人，或带 ``admin`` scope 的服务令牌。
 
-    服务令牌代表**平台身份**（agent 管理员个人凭据缺失后的重试用通道，或本就无
-    市场用户令牌的系统任务）。普通用户令牌一律按提问者身份执行（个人凭据 fail-closed）。
+    服务令牌代表**平台身份**（无市场用户令牌的系统任务）。普通用户令牌一律按
+    提问者身份执行（个人凭据优先，market 管理员平台兜底，其余 fail-closed）。
     """
     if is_service_token(user):
         require_service_scope(user, "admin")
@@ -162,7 +162,7 @@ async def mcp_connect(name: str, db: DbSession, user: RuntimeUser):
     if cap.type != "mcp":
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{name} 不是连接器能力")
     # 平台轨统一注入平台密钥（按能力名，与调用者身份无关）；user 级能力按身份解析：
-    # 用户令牌 → 个人凭据（缺则 403 + 机器可读标记，agent 管理员据此以平台身份重试）；
+    # 用户令牌 → 个人凭据优先；缺则 market 管理员用平台凭据，普通用户 403；
     # 服务令牌（平台身份）→ 直接用平台凭据
     platform_env = await resolve_capability_env(db, cap.name)
     user_env: dict[str, str] = {}
@@ -222,7 +222,7 @@ async def mcp_call(
     if cap.type != "mcp":
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{name} 不是连接器能力")
     # 平台轨统一注入平台密钥（按能力名，与调用者身份无关）；user 级能力按身份解析：
-    # 用户令牌 → 个人凭据（缺则 403 + 机器可读标记，agent 管理员据此以平台身份重试）；
+    # 用户令牌 → 个人凭据优先；缺则 market 管理员用平台凭据，普通用户 403；
     # 服务令牌（平台身份）→ 直接用平台凭据
     platform_env = await resolve_capability_env(db, cap.name)
     user_env: dict[str, str] = {}

@@ -1127,7 +1127,7 @@ async def test_user_creds_missing_marks_403_for_admin_retry(
     await _set_platform_secret(client, admin_headers, cap_id, "ERP_PASSWORD", "s_platform_pw")
     await _join(client, user_headers, cap_id)
 
-    # 管理员服务令牌（scope=admin；绑定 admin 以具备运行时准入），模拟 agent 侧重试通道
+    # 管理员服务令牌（scope=admin；绑定 admin 以具备运行时准入），模拟系统平台身份
     me = await client.get("/api/auth/me", headers=admin_headers)
     assert me.status_code == 200, me.text
     r = await client.post(

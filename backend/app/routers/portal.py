@@ -781,9 +781,9 @@ async def update_binding(
     """执行身份绑定：user=按提问者（当前用户 token, 走 /api/runtime/*） / service=服务身份。
 
     能力级单选：按能力名跨版本统一生效，避免新旧版本行为分裂。
-    user 级凭据：用户令牌按个人凭据执行（缺则 403 + ``X-Market-Error-Code:
-    user_credentials_missing`` 标记，agent 侧管理员据此以平台身份重试一次）；
-    服务令牌（平台身份）直接用平台凭据。普通用户缺个人凭据则拒绝（fail-closed）。
+    user 级凭据：个人凭据优先；缺则 market 管理员用平台凭据，普通用户 403 +
+    ``X-Market-Error-Code: user_credentials_missing``。服务令牌仅 market 管理员
+    可用平台凭据。``user_only`` 一律拒绝平台兜底。
     """
     cap = await db.get(Capability, cap_id)
     if cap is None:

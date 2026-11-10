@@ -217,10 +217,9 @@ class BindingUpdate(BaseModel):
     """执行身份绑定：service=服务身份 / user=用户+平台（个人凭据优先，平台身份兜底）/
     user_only=仅用户身份（平台身份一律拒绝，无兜底）。
 
-    user 级凭据：用户令牌按个人凭据执行（binding=user 缺则 403 + X-Market-Error-Code:
-    user_credentials_missing，agent 侧管理员据此以平台身份重试一次；user_only 不发标记）；
-    服务令牌（平台身份）在 user 下直接用平台凭据，在 user_only 下 403 拒绝；
-    普通用户缺个人凭据一律拒绝（fail-closed）。
+    user 级凭据：个人凭据优先；缺个人凭据且 market 用户 role=admin 时用平台凭据，
+    普通用户 403 + X-Market-Error-Code: user_credentials_missing（user_only 不发标记）；
+    服务令牌（平台身份）仅 market 管理员可用平台凭据，在 user_only 下 403 拒绝。
     """
 
     binding: Literal["user", "service", "user_only"]
