@@ -57,6 +57,16 @@ services:
       - MCP_GATEWAY_STATELESS=${MCP_GATEWAY_STATELESS:-1}
       # 每账户默认开通的能力名(逗号分隔; 登录自动加入「我的能力」, 可自行移除)
       - DEFAULT_CAPABILITIES=${DEFAULT_CAPABILITIES:-}
+      # 钉钉 DWS 云端能力：workspace 在 data 卷内，DWS 二进制由镜像安装
+      - DWS_WORKSPACE_ROOT=${DWS_WORKSPACE_ROOT:-/app/backend/data/workspaces}
+      - DWS_BIN=${DWS_BIN:-/usr/local/bin/dws}
+      - DWS_RUN_UID=${DWS_RUN_UID:-0}
+      - DWS_RUN_GID=${DWS_RUN_GID:-0}
+      - DWS_MAX_FILE_MB=${DWS_MAX_FILE_MB:-50}
+      - DWS_CALL_TIMEOUT=${DWS_CALL_TIMEOUT:-180}
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-https://ai.xzrobot.com/market}
+      - DWS_CLIENT_ID=${DWS_CLIENT_ID:-}
+      - DWS_CLIENT_SECRET=${DWS_CLIENT_SECRET:-}
       # 安全灰度: 出网白名单(防 SSRF) 与 scope 收窄(默认关; 见 README/docs)
       - MCP_EGRESS_ENFORCE=${MCP_EGRESS_ENFORCE:-}
       - MCP_EGRESS_ALLOW_HOSTS=${MCP_EGRESS_ALLOW_HOSTS:-}
