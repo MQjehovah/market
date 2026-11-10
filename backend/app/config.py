@@ -69,6 +69,9 @@ class Settings(BaseSettings):
     dws_run_gid: int = 0
     dws_max_file_mb: int = 50
     dws_call_timeout: int = 180
+    # 可选：钉钉自建应用 OAuth client（留空则用 DWS 官方客户端）
+    dws_client_id: str = ""
+    dws_client_secret: str = ""
     # 公网前端根地址（用于返回能力登录链接），例如 https://ai.xzrobot.com/market
     public_base_url: str = "http://localhost:5173"
 

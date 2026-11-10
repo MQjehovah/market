@@ -19,6 +19,7 @@ from app.routers import (
     authoring,
     bindings,
     customize_edit,
+    dws,
     mcp_edit,
     my,
     portal,
@@ -98,6 +99,7 @@ app.include_router(runtime.router)
 app.include_router(assemble.router)
 app.include_router(workflows.router)
 app.include_router(bindings.router)
+app.include_router(dws.router)
 app.include_router(my.router)
 app.include_router(agent_edit.router)
 app.include_router(skill_edit.router)
