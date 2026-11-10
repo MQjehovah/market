@@ -393,10 +393,6 @@ const showAskTrial = computed(() => {
   if (['skill', 'mcp'].includes(cap.value.type) && usedByAgents.value.length) return true
   return false
 })
-const showPrimaryUsage = computed(() => {
-  if (showAskTrial.value && askAgentName.value) return true
-  return Boolean(isMcp.value && isPublished.value && !usedByAgents.value.length)
-})
 const showUsageMore = computed(() => {
   if (!cap.value) return false
   if (isMcp.value && isPublished.value && usedByAgents.value.length) return true
@@ -2321,19 +2317,6 @@ onMounted(() => {
               :can-run="askCanRun"
               :blocked-hint="askBlockedHint"
             />
-            <div v-if="isMcp && isPublished && !usedByAgents.length" class="guide-block trial-block">
-              <h3 class="guide-title">{{ trialLabel('mcp') }}</h3>
-              <p class="guide-lead">{{ mcpTrial.hint }}</p>
-              <div class="trial-actions">
-                <button v-if="canTrialMcp" class="btn btn-primary" type="button" @click="debugCap = stubFromCap(cap)">{{ trialLabel('mcp') }}</button>
-                <router-link
-                  v-else-if="!authState.token"
-                  :to="{ path: '/login', query: { redirect: route.fullPath } }"
-                  class="btn btn-primary"
-                >登录后试用</router-link>
-                <span v-else-if="!joined" class="muted" style="font-size: 13px">先在右侧加入，再试用。</span>
-              </div>
-            </div>
             <p v-if="parentPluginId" class="overview-note">
               来自能力包
               <router-link :to="`/capabilities/${parentPluginId}`">打开能力包</router-link>
@@ -2432,14 +2415,6 @@ onMounted(() => {
             </div>
             <details v-if="showUsageMore" class="more-usage">
               <summary>更多用法</summary>
-              <div v-if="isMcp && isPublished && usedByAgents.length" class="guide-block trial-block">
-                <h3 class="guide-title">单独调这个连接器</h3>
-                <p class="guide-lead">{{ mcpTrial.hint }}</p>
-                <div class="trial-actions">
-                  <button v-if="canTrialMcp" class="btn" type="button" @click="debugCap = stubFromCap(cap)">连接并调工具</button>
-                  <span v-else-if="authState.token && !joined" class="muted" style="font-size: 13px">先加入，再试用。</span>
-                </div>
-              </div>
               <details v-if="isMcp && mcpClientConfigJson" class="guide-block mcp-advanced">
                 <summary class="mcp-advanced-summary">给兼容客户端的配置</summary>
                 <div class="flex" style="gap: 8px; margin: 8px 0">
@@ -3867,8 +3842,7 @@ onMounted(() => {
   font-size: 12px; line-height: 1.55; overflow: auto; max-height: 320px;
   color: var(--text); white-space: pre;
 }
-.trial-block .guide-lead { margin-bottom: 10px; }
-.trial-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
 .env-fill-box {
   margin-top: 14px; padding: 14px; border-radius: 12px;
   border: 1px solid var(--border); background: var(--panel-2, #f8fafc);
