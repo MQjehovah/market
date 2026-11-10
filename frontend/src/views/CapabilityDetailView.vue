@@ -42,7 +42,7 @@ import PackagePreview from '../components/PackagePreview.vue'
 import PackageEditor from '../components/PackageEditor.vue'
 import DebugCapabilityModal from '../components/DebugCapabilityModal.vue'
 import ConfirmActionModal from '../components/ConfirmActionModal.vue'
-import DwsLoginPanel from '../components/DwsLoginPanel.vue'
+import CapabilityAuthPanel from '../components/CapabilityAuthPanel.vue'
 import AskTrialPanel from '../components/AskTrialPanel.vue'
 import MultiSelect from '../components/MultiSelect.vue'
 import WorkflowChat from '../components/WorkflowChat.vue'
@@ -940,8 +940,9 @@ const mcpTrial = computed(() =>
   })
 )
 const joined = computed(() => Boolean(cap.value && myIds.value.has(cap.value.id)))
-const isDws = computed(() => cap.value?.name === 'dingtalk-dws')
-const dwsDialogVisible = ref(false)
+const authConfig = computed(() => cap.value?.config_ui || {})
+const hasAuthConfig = computed(() => Boolean(authConfig.value.auth))
+const authDialogVisible = ref(false)
 const subscribed = computed(() => Boolean(cap.value && subscribedNames.value.has(cap.value.name)))
 const canRuntime = computed(() => isOwner.value || isAdmin.value || joined.value)
 const canTrialMcp = computed(() => {
@@ -1028,7 +1029,7 @@ const contentTabs = computed(() => {
   if (isAgent.value && (embeddedSkills.value.length || embeddedMcp.value.length)) {
     tabs.push({ key: 'bundle', label: '内含能力' })
   }
-  if (isMcp.value) {
+  if (isMcp.value || hasAuthConfig.value) {
     tabs.push({ key: 'config', label: '配置' })
   }
   tabs.push({ key: 'versions', label: '版本' })
@@ -1299,12 +1300,12 @@ async function toggleMy() {
     }
     const extra = r?.message && r.message.includes('未加入') ? `；${r.message}` : ''
     toast.success(joinedHint.value + extra)
-    if (isDws.value) {
+    if (hasAuthConfig.value && authConfig.value.auto_prompt_on_join) {
       try {
-        const account = await api.get('/dws/account')
-        if (!account?.authorized) dwsDialogVisible.value = true
+        const account = await api.get(`/capabilities/${encodeURIComponent(cap.value.name)}/auth/account`)
+        if (!account?.authorized) authDialogVisible.value = true
       } catch {
-        dwsDialogVisible.value = true
+        authDialogVisible.value = true
       }
     }
   } catch (e) {
@@ -2383,7 +2384,11 @@ onMounted(() => {
           <section v-show="contentTab === 'config'" class="panel">
             <h2 class="detail-section-title">配置</h2>
 
-            <DwsLoginPanel v-if="isDws" :capability-id="cap.id" />
+            <CapabilityAuthPanel
+              v-if="hasAuthConfig"
+              :capability-name="cap.name"
+              :config="authConfig"
+            />
 
             <div v-if="isMcp" class="guide-block">
               <table class="table">
@@ -3238,15 +3243,16 @@ onMounted(() => {
         </div>
       </aside>
     </div>
-    <div v-if="dwsDialogVisible" class="dws-modal-backdrop" @click.self="dwsDialogVisible = false">
-      <div class="dws-modal" role="dialog" aria-modal="true" aria-label="钉钉 DWS 登录">
-        <button class="dws-modal-close" type="button" aria-label="关闭" @click="dwsDialogVisible = false">×</button>
-        <DwsLoginPanel
+    <div v-if="authDialogVisible" class="cap-auth-modal-backdrop" @click.self="authDialogVisible = false">
+      <div class="cap-auth-modal" role="dialog" aria-modal="true" :aria-label="authConfig.title || '账号授权'">
+        <button class="cap-auth-modal-close" type="button" aria-label="关闭" @click="authDialogVisible = false">×</button>
+        <CapabilityAuthPanel
           v-if="cap"
-          :capability-id="cap.id"
+          :capability-name="cap.name"
+          :config="authConfig"
           auto-start
           compact
-          @authorized="dwsDialogVisible = false"
+          @authorized="authDialogVisible = false"
         />
       </div>
     </div>
@@ -3831,13 +3837,13 @@ h3 { margin: 0 0 12px; }
   .detail-hero-icon { width: 48px; height: 48px; font-size: 18px; border-radius: 10px; }
   .sticky-card { position: static; }
 }
-.dws-modal-backdrop {
+.cap-auth-modal-backdrop {
   position: fixed; inset: 0; z-index: 1200;
   background: rgba(15, 23, 42, 0.48);
   display: flex; align-items: center; justify-content: center;
   padding: 18px;
 }
-.dws-modal {
+.cap-auth-modal {
   position: relative;
   width: min(620px, calc(100vw - 28px));
   max-height: calc(100vh - 40px);
@@ -3847,8 +3853,8 @@ h3 { margin: 0 0 12px; }
   padding: 18px;
   box-shadow: 0 24px 70px rgba(15, 23, 42, 0.3);
 }
-.dws-modal :deep(.dws-panel) { margin-bottom: 0; border: none; padding: 0; }
-.dws-modal-close {
+.cap-auth-modal :deep(.cap-auth-panel) { margin-bottom: 0; border: none; padding: 0; }
+.cap-auth-modal-close {
   position: absolute; top: 10px; right: 12px;
   border: none; background: transparent; font-size: 22px; line-height: 1;
   color: var(--muted); cursor: pointer;

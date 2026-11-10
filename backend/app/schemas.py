@@ -325,6 +325,9 @@ class CapabilityOut(CapabilityBase):
     icon_url: str = ""
     runtime: RuntimeSpecOut = Field(default_factory=RuntimeSpecOut)
     input_schema: dict[str, Any] = Field(default_factory=dict)
+    # 能力声明的配置 UI / 执行器；前端不按能力名做特判
+    config_ui: dict[str, Any] = Field(default_factory=dict)
+    executor: str = ""
     validation_report: dict[str, Any] = Field(default_factory=dict)
     allowed_departments: list[str] = Field(default_factory=list)
     allowed_roles: list[str] = Field(default_factory=list)

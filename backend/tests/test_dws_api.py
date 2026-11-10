@@ -20,13 +20,13 @@ class _FakeManager:
 
 
 async def test_workspace_requires_auth(client):
-    r = await client.get("/api/dws/workspace")
+    r = await client.get("/api/capabilities/dingtalk-dws/auth/workspace")
     assert r.status_code == 401
 
 
 async def test_workspace_unauthorized_shape(client, user_headers, tmp_path, monkeypatch):
     monkeypatch.setattr(dws_router, "_workspace", DwsWorkspace(tmp_path))
-    r = await client.get("/api/dws/workspace", headers=user_headers)
+    r = await client.get("/api/capabilities/dingtalk-dws/auth/workspace", headers=user_headers)
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["authorized"] is False
@@ -39,7 +39,7 @@ async def test_login_start_returns_code(client, user_headers, tmp_path, monkeypa
     monkeypatch.setattr(dws_router, "_workspace", DwsWorkspace(tmp_path))
     monkeypatch.setattr(dws_router, "manager", lambda: _FakeManager())
 
-    r = await client.post("/api/dws/login/start", headers=user_headers)
+    r = await client.post("/api/capabilities/dingtalk-dws/auth/login/start", headers=user_headers)
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["user_code"] == "ABCD-EFGH"

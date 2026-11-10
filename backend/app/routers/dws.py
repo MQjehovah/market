@@ -113,13 +113,29 @@ async def get_account(
         await db.commit()
     else:
         account = await get_or_create_account(db, user.id)
+        _reset_stale_login(account)
         await db.commit()
     return await _account_payload(db, user, account)
+
+
+def _reset_stale_login(account: DwsAccount) -> None:
+    """进程重启后作者会话丢失，不能永远停在「等待扫码」。"""
+    if account.status != "authorizing" or not account.login_session_id:
+        return
+    if manager().sessions.get(account.login_session_id) is not None:
+        return
+    account.status = "unauthorized"
+    account.login_session_id = ""
+    account.login_code = ""
+    account.login_url = ""
+    account.login_expires_at = None
+    account.last_error = "登录会话已失效，请重新发起"
 
 
 @router.get("/workspace")
 async def get_workspace(user: CurrentUser, db: DbSession):
     account = await get_or_create_account(db, user.id)
+    _reset_stale_login(account)
     await db.commit()
     payload = await _account_payload(db, user, account)
     # agent 只需要关键字段，避免把登录码等短期信息带进上下文
@@ -146,7 +162,10 @@ async def start_login(user: CurrentUser, db: DbSession):
     account.last_error = session.error
     await db.commit()
     payload = await _account_payload(db, user, account)
-    payload.update(session.to_public())
+    public = session.to_public()
+    if public.get("verification_url"):
+        public["login_url"] = public["verification_url"]
+    payload.update(public)
     payload["authorized"] = False
     return payload
 
@@ -169,7 +188,10 @@ async def poll_login(session_id: str, user: CurrentUser, db: DbSession):
         account.last_error = session.error
         await db.commit()
     payload = await _account_payload(db, user, account)
-    payload.update(session.to_public())
+    public = session.to_public()
+    if public.get("verification_url"):
+        public["login_url"] = public["verification_url"]
+    payload.update(public)
     return payload
 
 

@@ -9,6 +9,15 @@ from app.models import Capability, User
 
 DWS_CAPABILITY_NAME = "dingtalk-dws"
 
+CONFIG_UI = {
+    "auth": "device_code",
+    "provider": "dws",
+    "auto_prompt_on_join": True,
+    "title": "钉钉 DWS 登录",
+    "subtitle": "每个人使用自己的钉钉身份；凭据只保存在云端工作区，不进入数据库。",
+    "note": "电脑端和网页端同时使用同一个钉钉账号时，refresh token 可能互相踢下线；被踢后重新扫码即可。",
+}
+
 INPUT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -52,6 +61,11 @@ async def ensure_dws_capability(db: AsyncSession) -> Capability:
         .order_by(Capability.created_at.desc())
     )
     if existing is not None:
+        # 老版本内置能力补齐声明的 UI/执行器（不改用户自定义值）
+        if not existing.executor:
+            existing.executor = "dws_cli"
+        if not existing.config_ui:
+            existing.config_ui = CONFIG_UI
         return existing
     admin = await db.scalar(
         select(User).where(User.role == "admin").order_by(User.created_at.asc())
@@ -80,6 +94,8 @@ async def ensure_dws_capability(db: AsyncSession) -> Capability:
         risk_default="destructive",
         data_domain="钉钉",
         input_schema=INPUT_SCHEMA,
+        config_ui=CONFIG_UI,
+        executor="dws_cli",
         verified=True,
         author_id=author.id,
         organization=author.department or "",

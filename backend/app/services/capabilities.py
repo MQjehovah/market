@@ -253,6 +253,8 @@ def to_capability_out(
         "install_policy": getattr(cap, "install_policy", None) or "optional",
         "distribution": getattr(cap, "distribution", None) or "both",
         "binding": getattr(cap, "binding", None) or "service",
+        "config_ui": getattr(cap, "config_ui", None) or {},
+        "executor": getattr(cap, "executor", None) or "",
         "risk_default": getattr(cap, "risk_default", None) or "read",
         "data_domain": getattr(cap, "data_domain", None) or "",
         "changelog": getattr(cap, "changelog", None) or "",

@@ -96,6 +96,14 @@ async def _auto_migrate(conn) -> None:
             sync_conn.exec_driver_sql(
                 "ALTER TABLE capabilities ADD COLUMN binding VARCHAR(16) DEFAULT 'service'"
             )
+        if "config_ui" not in cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE capabilities ADD COLUMN config_ui JSON DEFAULT '{}'"
+            )
+        if "executor" not in cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE capabilities ADD COLUMN executor VARCHAR(32) DEFAULT ''"
+            )
         if "display_name" not in cols:
             sync_conn.exec_driver_sql(
                 "ALTER TABLE capabilities ADD COLUMN display_name VARCHAR(255) DEFAULT ''"
