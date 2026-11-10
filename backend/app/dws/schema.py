@@ -134,33 +134,25 @@ def parse_schema_json(raw: str, command: str) -> DwsCommand:
     )
 
 
-async def read_schema(
-    workspace: DwsWorkspace,
-    user_id: str,
+async def read_schema_env(
     path: str,
     *,
     bin_path: str,
-    extra_env: dict[str, str] | None = None,
+    env: dict[str, str],
+    cwd: str,
     timeout: float = 30.0,
 ) -> Any:
-    """调用 `dws schema [path] --compact` 返回原始 JSON（用于 dws_schema 发现）。"""
+    """按显式 env 执行 `dws schema [path] --compact`（MCP server 复用）。"""
     import asyncio
-    import os
 
     args = [bin_path, "schema"]
     if path:
         args.append(normalize_command(path))
     args.extend(["--compact", "--format", "json"])
-    env = dict(os.environ)
-    env.update(workspace.env(user_id))
-    env.setdefault("DWS_LANG", "zh")
-    env.setdefault("HOME", str(workspace.user_dir(user_id)))
-    if extra_env:
-        env.update(extra_env)
     try:
         proc = await asyncio.create_subprocess_exec(
             *args,
-            cwd=str(workspace.ensure(user_id)),
+            cwd=cwd,
             env=env,
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
@@ -185,6 +177,51 @@ async def read_schema(
         return json.loads(text[start:])
 
 
+async def read_schema(
+    workspace: DwsWorkspace,
+    user_id: str,
+    path: str,
+    *,
+    bin_path: str,
+    extra_env: dict[str, str] | None = None,
+    timeout: float = 30.0,
+) -> Any:
+    import os
+
+    env = dict(os.environ)
+    env.update(workspace.env(user_id))
+    env.setdefault("DWS_LANG", "zh")
+    env.setdefault("HOME", str(workspace.user_dir(user_id)))
+    if extra_env:
+        env.update(extra_env)
+    return await read_schema_env(
+        path, bin_path=bin_path, env=env, cwd=str(workspace.ensure(user_id)), timeout=timeout
+    )
+
+
+async def load_command_env(
+    command: str,
+    *,
+    bin_path: str,
+    env: dict[str, str],
+    cwd: str,
+    timeout: float = 30.0,
+) -> DwsCommand:
+    """按显式 env 加载命令 schema（MCP server 复用）。"""
+    cmd = normalize_command(command)
+    first = cmd.split(" ", 1)[0]
+    if first in READ_ONLY_COMMANDS:
+        return DwsCommand(cli_path=cmd, effect="read", confirmation="not_required")
+    cache_key = f"{bin_path}:{cmd}"
+    cached = _CACHE.get(cache_key)
+    if cached and cached[0] > time.monotonic():
+        return cached[1]
+    data = await read_schema_env(cmd, bin_path=bin_path, env=env, cwd=cwd, timeout=timeout)
+    command_schema = parse_schema_json(json.dumps(data, ensure_ascii=False), cmd)
+    _CACHE[cache_key] = (time.monotonic() + _CACHE_TTL, command_schema)
+    return command_schema
+
+
 async def load_command(
     workspace: DwsWorkspace,
     user_id: str,
@@ -194,17 +231,7 @@ async def load_command(
     extra_env: dict[str, str] | None = None,
     timeout: float = 30.0,
 ) -> DwsCommand:
-    import asyncio
     import os
-
-    cmd = normalize_command(command)
-    first = cmd.split(" ", 1)[0]
-    if first in READ_ONLY_COMMANDS:
-        return DwsCommand(cli_path=cmd, effect="read", confirmation="not_required")
-    cache_key = f"{bin_path}:{cmd}"
-    cached = _CACHE.get(cache_key)
-    if cached and cached[0] > time.monotonic():
-        return cached[1]
 
     env = dict(os.environ)
     env.update(workspace.env(user_id))
@@ -212,31 +239,9 @@ async def load_command(
     env.setdefault("HOME", str(workspace.user_dir(user_id)))
     if extra_env:
         env.update(extra_env)
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            bin_path,
-            "schema",
-            cmd,
-            "--compact",
-            "--format",
-            "json",
-            cwd=str(workspace.ensure(user_id)),
-            env=env,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError as exc:
-        raise DwsCommandError("dws schema 查询超时") from exc
-    except Exception as exc:  # noqa: BLE001
-        raise DwsCommandError(f"dws schema 启动失败: {type(exc).__name__}: {exc}") from exc
-    if proc.returncode != 0:
-        err = (stderr or b"").decode("utf-8", errors="replace").strip()[:500]
-        raise DwsCommandError(f"命令不可用: {err or proc.returncode}")
-    command_schema = parse_schema_json((stdout or b"").decode("utf-8", errors="replace"), cmd)
-    _CACHE[cache_key] = (time.monotonic() + _CACHE_TTL, command_schema)
-    return command_schema
+    return await load_command_env(
+        command, bin_path=bin_path, env=env, cwd=str(workspace.ensure(user_id)), timeout=timeout
+    )
 
 
 def clear_schema_cache() -> None:
