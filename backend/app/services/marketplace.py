@@ -278,6 +278,31 @@ async def _resolve_manifest(
 
 
 async def invoke_tool(db: AsyncSession, user: User, cap: Capability, params: dict[str, Any]) -> dict[str, Any]:
+    # 内置云端能力：DWS 由 market 侧按用户 workspace 执行，不走普通 tool 沙箱
+    if cap.name == "dingtalk-dws":
+        from app.dws.executor import execute_dws
+
+        result = await execute_dws(db, user, cap, params)
+        ok = bool(result.get("success"))
+        await record_usage(
+            db,
+            user,
+            cap,
+            "invoke",
+            {"command": params.get("command"), "_execution": "dws", "_ok": ok},
+            result_status="ok" if ok else "error",
+        )
+        return {
+            "tool": cap.name,
+            "version": cap.version,
+            "params": params,
+            "status": "ok" if ok else "error",
+            "execution": "dws",
+            "output": result,
+            "success": ok,
+            "error": "" if ok else str(result.get("message") or result.get("error") or ""),
+        }
+
     from app.sandbox.executor import execute_tool
 
     result = await execute_tool(cap, params)

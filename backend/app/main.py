@@ -52,6 +52,10 @@ async def lifespan(app: FastAPI):
     await init_db()
     async with SessionLocal() as session:
         await seed_if_empty(session)
+        from app.dws.builtin import ensure_dws_capability
+
+        await ensure_dws_capability(session)
+        await session.commit()
     from app.services.workflow_triggers import start_scheduler, stop_scheduler
 
     if get_settings().workflow_scheduler_in_app:

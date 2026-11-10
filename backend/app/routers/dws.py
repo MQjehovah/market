@@ -8,13 +8,15 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 
 from app.auth import CurrentUser, DbSession
 from app.config import get_settings
 from app.dws.accounts import account_public, get_or_create_account, refresh_account
 from app.dws.device_flow import DeviceLoginManager
+from app.dws.files import DwsFileError, get_file, resolve_file, save_upload
 from app.dws.workspace import DwsWorkspace
 from app.models import Capability, DwsAccount, DwsCall, UserCapability
 
@@ -245,6 +247,74 @@ async def health(user: CurrentUser, db: DbSession):
         "error": error,
         "has_accounts": bool(total),
     }
+
+
+@router.get("/schema")
+async def schema(
+    user: CurrentUser,
+    db: DbSession,
+    path: str = Query(default=""),
+    query: str = Query(default=""),
+):
+    account = await get_or_create_account(db, user.id)
+    if account.status != "authorized":
+        page = await _page_url(db)
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            f"钉钉 DWS 尚未授权，请打开 {page} 扫码登录",
+        )
+    settings = get_settings()
+    extra: dict[str, str] = {}
+    if settings.dws_client_id and settings.dws_client_secret:
+        extra["DWS_CLIENT_ID"] = settings.dws_client_id
+        extra["DWS_CLIENT_SECRET"] = settings.dws_client_secret
+    from app.dws.schema import ALLOWED_SERVICES, DwsCommandError, read_schema
+
+    try:
+        if path:
+            data = await read_schema(_workspace, user.id, path, bin_path=settings.dws_bin, extra_env=extra)
+        else:
+            data = {"services": sorted(ALLOWED_SERVICES)}
+        if query and isinstance(data, dict):
+            q = query.strip().lower()
+            services = [s for s in data.get("services", []) if q in s.lower()]
+            if services:
+                data = {"services": services}
+        return {"success": True, "path": path, "data": data}
+    except DwsCommandError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+
+@router.post("/files")
+async def upload_file(
+    user: CurrentUser,
+    db: DbSession,
+    file: UploadFile = File(...),
+):
+    content = await file.read()
+    try:
+        row = await save_upload(db, user, file.filename or "file", content, workspace=_workspace)
+    except DwsFileError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    await db.commit()
+    return {
+        "file_id": row.id,
+        "name": row.name,
+        "size": row.size,
+        "direction": row.direction,
+    }
+
+
+@router.get("/files/{file_id}")
+async def download_file(file_id: str, user: CurrentUser, db: DbSession):
+    row = await get_file(db, user, file_id)
+    try:
+        path = resolve_file(_workspace, user.id, row)
+    except DwsFileError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    if not path.is_file():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "文件已不存在")
+    return FileResponse(path, filename=row.name)
 
 
 @router.get("/calls")

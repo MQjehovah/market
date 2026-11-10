@@ -134,6 +134,57 @@ def parse_schema_json(raw: str, command: str) -> DwsCommand:
     )
 
 
+async def read_schema(
+    workspace: DwsWorkspace,
+    user_id: str,
+    path: str,
+    *,
+    bin_path: str,
+    extra_env: dict[str, str] | None = None,
+    timeout: float = 30.0,
+) -> Any:
+    """调用 `dws schema [path] --compact` 返回原始 JSON（用于 dws_schema 发现）。"""
+    import asyncio
+    import os
+
+    args = [bin_path, "schema"]
+    if path:
+        args.append(normalize_command(path))
+    args.extend(["--compact", "--format", "json"])
+    env = dict(os.environ)
+    env.update(workspace.env(user_id))
+    env.setdefault("DWS_LANG", "zh")
+    env.setdefault("HOME", str(workspace.user_dir(user_id)))
+    if extra_env:
+        env.update(extra_env)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            cwd=str(workspace.ensure(user_id)),
+            env=env,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError as exc:
+        raise DwsCommandError("dws schema 查询超时") from exc
+    except Exception as exc:  # noqa: BLE001
+        raise DwsCommandError(f"dws schema 启动失败: {type(exc).__name__}: {exc}") from exc
+    if proc.returncode != 0:
+        err = (stderr or b"").decode("utf-8", errors="replace").strip()[:500]
+        raise DwsCommandError(f"schema 查询失败: {err or proc.returncode}")
+    raw = (stdout or b"").decode("utf-8", errors="replace")
+    text = _ANSI.sub("", raw).strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        if start < 0:
+            return {"raw": text[:10000]}
+        return json.loads(text[start:])
+
+
 async def load_command(
     workspace: DwsWorkspace,
     user_id: str,
