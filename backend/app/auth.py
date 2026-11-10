@@ -126,11 +126,16 @@ async def _resolve_sso_user(
     token: str,
     credentials_exc: HTTPException,
     audience: str | None = None,
+    trust_roles: bool = False,
 ) -> User:
     """SSO 轨：校验 RS256 token 后按 username=工号 查/建 User。
 
     校验失败 -> 401（与轨1同文案）；命中已禁用用户 -> 403。
     audience 用于登录回调轨校验本系统自己的 client_id（资源轨缺省用 sso_audience）。
+
+    ``trust_roles`` 仅允许市场自己的 SSO 登录回调传 True。资源令牌（含 agent 通过
+    token-exchange 换来的 aud=market 令牌）里的 roles 是调用方客户端按自己的
+    dept_role_map 算出来的，不能用来提升市场角色；市场角色以本地 ``users.role`` 为准。
     """
     try:
         claims = verify_sso_token(token, audience=audience)
@@ -149,7 +154,10 @@ async def _resolve_sso_user(
     if user is None and claim_email:
         user = await db.scalar(select(User).where(func.lower(User.email) == claim_email))
     if user is None:
-        user = _new_sso_user(username, claims)
+        # 资源令牌建号一律最小角色 user；只有市场自己的登录回调可按 claims roles 映射。
+        user = _new_sso_user(
+            username, claims, role=_sso_role(claims) if trust_roles else "user"
+        )
         # 新开户标记：仅在账户创建时开通一次默认能力（登录不再重复开通，避免「移出后被加回」）
         setattr(user, "_provision_defaults", True)
         db.add(user)
@@ -204,12 +212,13 @@ async def _resolve_sso_user(
     if claim_dept and (user.department or "") != claim_dept:
         user.department = claim_dept
         changed = True
-    # 角色: 以 SSO roles 为权威源, 但仅"升权"(避免误将手工管理员降级, 防锁死)。
-    # 运行时准入需要真实角色, 否则管理员在 market 侧会退化为 user 而无运行时准入。
-    claim_role = _sso_role(claims)
-    if _ROLE_RANK.get(claim_role, 0) > _ROLE_RANK.get(user.role, 0):
-        user.role = claim_role
-        changed = True
+    # 角色: 只有市场自己的登录回调可按 SSO roles 升权（仅升不降，避免误将手工管理员
+    # 降级）。资源令牌里的 roles 来自 agent 等调用方客户端，不能提升市场角色。
+    if trust_roles:
+        claim_role = _sso_role(claims)
+        if _ROLE_RANK.get(claim_role, 0) > _ROLE_RANK.get(user.role or "", 0):
+            user.role = claim_role
+            changed = True
     if changed:
         await db.commit()
     if not user.is_active:
@@ -242,8 +251,8 @@ def _sso_role(claims: dict) -> str:
     return "user"
 
 
-def _new_sso_user(username: str, claims: dict) -> User:
-    """按 SSO claims 建本地用户：role 由 SSO roles 映射(user/admin)。
+def _new_sso_user(username: str, claims: dict, role: str = "user") -> User:
+    """按 SSO claims 建本地用户；role 由调用方决定（资源令牌固定 user）。
 
     email 为 NOT NULL UNIQUE，claims 缺省时用派生自唯一 username 的占位邮箱，
     避免空串撞唯一索引；password_hash 置随机不可登录占位值（SSO 用户走免密）。
@@ -256,7 +265,7 @@ def _new_sso_user(username: str, claims: dict) -> User:
         name=(claims.get("name") or "").strip() or username,
         work_id=username,
         phone=(claims.get("mobile") or "").strip(),
-        role=_sso_role(claims),
+        role=role,
         department=(claims.get("dept") or "").strip(),
         is_active=True,
     )

@@ -20,7 +20,14 @@ from jose import jwk as jose_jwk
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.auth import create_access_token, hash_password, get_current_user, get_current_user_optional
+from app.auth import (
+    _credentials_exception,
+    _resolve_sso_user,
+    create_access_token,
+    get_current_user,
+    get_current_user_optional,
+    hash_password,
+)
 from app.config import get_settings
 from app.core import sso_auth
 from app.core.sso_auth import SsoAuthError, verify_sso_token
@@ -330,6 +337,30 @@ async def test_get_current_user_sso_provisions_and_does_not_duplicate(sso_env, d
     again = await get_current_user(token, db)
     assert again.id == user.id
     assert await _count_users(db) == 1
+
+
+async def test_resource_sso_token_does_not_upgrade_role(sso_env, db):
+    """资源令牌（含 agent 换来的 aud=market）里的 roles=admin 不得提升市场角色。"""
+    key, _ = sso_env
+    token = _sso_employee_token(key, emp_no="resource-admin-role", roles=["admin"])
+
+    user = await get_current_user(token, db)
+
+    assert user.username == "resource-admin-role"
+    assert user.role == "user"
+
+
+async def test_login_sso_path_can_apply_roles(sso_env, db):
+    """只有市场自己的登录回调路径（trust_roles=True）可按 roles 升权。"""
+    key, _ = sso_env
+    token = _sso_employee_token(key, emp_no="login-admin-role", roles=["admin"])
+
+    user = await _resolve_sso_user(
+        db, token, _credentials_exception(), trust_roles=True
+    )
+
+    assert user.username == "login-admin-role"
+    assert user.role == "admin"
 
 
 async def test_get_current_user_sso_matches_existing_account_by_email(sso_env, db):

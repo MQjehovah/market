@@ -107,7 +107,11 @@ async def oidc_callback(db: DbSession, code: str = "", state: str = ""):
     try:
         # 登录轨: id_token 的 aud 是本系统自己的 client_id(与资源轨受众不同)
         user = await _resolve_sso_user(
-            db, id_token, credentials_exc, audience=get_settings().sso_client_id
+            db,
+            id_token,
+            credentials_exc,
+            audience=get_settings().sso_client_id,
+            trust_roles=True,
         )
     except HTTPException as e:
         return _sso_login_redirect(str(e.detail), next_path)
