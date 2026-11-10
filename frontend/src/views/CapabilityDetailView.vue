@@ -2456,7 +2456,9 @@ onMounted(() => {
               :config="authConfig"
             />
 
-            <div v-if="isMcp && (isOwner || isAdmin)" class="guide-block">
+            <div v-if="isMcp" class="guide-block">
+              <details v-if="isOwner || isAdmin" class="advanced-config">
+                <summary>高级 / 连接信息（作者、管理员）</summary>
               <table class="table">
                 <thead><tr><th>参数</th><th>必填</th><th>说明 / 默认</th></tr></thead>
                 <tbody>
@@ -2588,6 +2590,7 @@ onMounted(() => {
                 <p v-if="platformError" class="alert alert-error mt-12" style="font-size: 13px">{{ platformError }}</p>
               </div>
 
+              </details>
               <div v-if="mcpEnvRows.length && showPersonalConfig && !authConfig.hide_env_fields" class="env-fill-box">
                 <h4 class="env-fill-title">个人凭据（本地安装 / 个人身份用）</h4>
                 <p class="muted" style="font-size: 13px; margin: 0 0 10px">
