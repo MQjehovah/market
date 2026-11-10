@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from app.database import SessionLocal
 from app.dws import executor
-from app.dws.schema import DwsCommand, DwsCommandError
+from app.dws.schema import DwsCommand
 from app.dws.workspace import DwsWorkspace
 from app.models import Capability, DwsAccount, DwsCall, User
 
