@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.models import UserSecret
+from app.models import Capability, UserSecret
 
 _KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 
@@ -67,6 +67,18 @@ def to_secret_out(row: UserSecret) -> dict[str, Any]:
     }
 
 
+async def normalize_scope(db: AsyncSession, scope: str | None) -> str:
+    """把能力 scope 归一为稳定键 capability.name。
+
+    UI/旧接口可能仍传版本记录 id；这里自动映射，避免个人凭据随版本变化失效。
+    """
+    raw = (scope or "").strip()
+    if not raw:
+        return ""
+    cap = await db.get(Capability, raw)
+    return cap.name if cap is not None else raw
+
+
 async def list_secrets(
     db: AsyncSession,
     user_id: str,
@@ -75,7 +87,7 @@ async def list_secrets(
 ) -> list[UserSecret]:
     stmt = select(UserSecret).where(UserSecret.user_id == user_id)
     if scope is not None:
-        stmt = stmt.where(UserSecret.scope == (scope or ""))
+        stmt = stmt.where(UserSecret.scope == await normalize_scope(db, scope))
     stmt = stmt.order_by(UserSecret.key_name, UserSecret.scope)
     return list((await db.scalars(stmt)).all())
 
@@ -90,7 +102,7 @@ async def upsert_secret(
     label: str = "",
 ) -> UserSecret:
     key = validate_key_name(key_name)
-    scope_id = (scope or "").strip()
+    scope_id = await normalize_scope(db, scope)
     if not isinstance(value, str) or value == "":
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "密钥值不能为空")
     existing = await db.scalar(
@@ -162,7 +174,7 @@ async def delete_secret_by_key(
         select(UserSecret).where(
             UserSecret.user_id == user_id,
             UserSecret.key_name == key,
-            UserSecret.scope == (scope or ""),
+            UserSecret.scope == await normalize_scope(db, scope),
         )
     )
     if row is None:
@@ -176,9 +188,14 @@ async def resolve_user_env(
     user_id: str,
     *,
     capability_id: str | None = None,
+    capability_name: str | None = None,
     keys: list[str] | None = None,
 ) -> dict[str, str]:
-    """解析用户可用的明文 env：能力级覆盖全局。绝不写日志。"""
+    """解析用户可用的明文 env：能力级（按 name）覆盖全局。绝不写日志。
+
+    ``capability_name`` 是稳定键；``capability_id`` 仅用于兼容旧调用，会先尝试
+    映射到 name。旧数据里仍可能残留按版本 id 存储的 scope，作为次级回退。
+    """
     rows = await list_secrets(db, user_id)
     out: dict[str, str] = {}
     # 先全局
@@ -188,11 +205,17 @@ async def resolve_user_env(
         if keys is not None and row.key_name not in keys:
             continue
         out[row.key_name] = decrypt_value(row.ciphertext)
-    # 再能力级覆盖
+
     cap_id = (capability_id or "").strip()
-    if cap_id:
+    name = (capability_name or "").strip()
+    if not name and cap_id:
+        cap = await db.get(Capability, cap_id)
+        name = cap.name if cap is not None else ""
+    # 先应用旧 id，再应用 name：name 优先，且 name 缺失时兼容旧数据。
+    scopes = [s for s in (cap_id, name) if s]
+    for scope in dict.fromkeys(scopes):
         for row in rows:
-            if row.scope != cap_id:
+            if row.scope != scope:
                 continue
             if keys is not None and row.key_name not in keys:
                 continue
@@ -206,8 +229,15 @@ async def secret_status(
     *,
     required_keys: list[str],
     capability_id: str | None = None,
+    capability_name: str | None = None,
 ) -> dict[str, Any]:
-    env = await resolve_user_env(db, user_id, capability_id=capability_id, keys=required_keys)
+    env = await resolve_user_env(
+        db,
+        user_id,
+        capability_id=capability_id,
+        capability_name=capability_name,
+        keys=required_keys,
+    )
     filled = [k for k in required_keys if env.get(k)]
     missing = [k for k in required_keys if k not in env]
     return {

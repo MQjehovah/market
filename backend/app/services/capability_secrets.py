@@ -209,7 +209,9 @@ async def resolve_user_bound_env(
     keys = declared_env_keys(cap)
     if not keys:
         return {}, []
-    env = await resolve_user_env(db, user_id, capability_id=cap.id, keys=keys)
+    env = await resolve_user_env(
+        db, user_id, capability_name=cap.name, capability_id=cap.id, keys=keys
+    )
     env = {k: v for k, v in env.items() if (v or "").strip()}
     missing = [k for k in keys if k not in env]
     return env, missing

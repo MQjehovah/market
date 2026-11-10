@@ -1444,3 +1444,41 @@ async def test_user_only_service_identity_primitive_never_platform():
     env, missing = _platform_env_for(["A"], {"A": " value\n"})
     assert env == {"A": "value"}
     assert missing == []
+
+
+@pytest.mark.asyncio
+async def test_personal_secrets_survive_new_capability_version(
+    client, publisher_headers, admin_headers, user_headers
+):
+    """????? capability.name ???????? id ??????"""
+    name = "name-scoped-secret-cap"
+    cap_id = await _publish_capability(
+        client, publisher_headers, admin_headers, name, "mcp", _mcp_zip(name, _ERP_ENV)
+    )
+    await _set_binding(client, admin_headers, cap_id, "user")
+    await _join(client, user_headers, cap_id)
+    for key, value in _ERP_ENV.items():
+        await _put_user_secret(client, user_headers, key, value, scope=cap_id)
+
+    r = await client.post(
+        f"/api/publish/capabilities/{cap_id}/versions",
+        headers=publisher_headers,
+        json={"new_version": "1.0.1", "change_type": "patch"},
+    )
+    assert r.status_code == 201, r.text
+    new_id = r.json()["id"]
+    assert new_id != cap_id
+
+    r = await client.get(
+        "/api/my/secrets", headers=user_headers, params={"scope": new_id}
+    )
+    assert r.status_code == 200, r.text
+    assert {row["key_name"] for row in r.json()} >= set(_ERP_ENV_KEYS)
+
+    r = await client.get(
+        "/api/my/secrets/status",
+        headers=user_headers,
+        params={"capability_id": new_id},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["complete"] is True

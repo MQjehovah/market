@@ -410,7 +410,7 @@ class UserCapability(Base):
 
 
 class UserSecret(Base):
-    """用户业务密钥托管（Fernet 密文）。scope=空为全局；填 capability_id 为能力级覆盖。"""
+    """用户业务密钥托管（Fernet 密文）。scope=空为全局；否则为稳定的 capability.name。"""
 
     __tablename__ = "user_secrets"
     __table_args__ = (
@@ -420,8 +420,8 @@ class UserSecret(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
     key_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    # "" = 全局；否则为 capability.id，解析时能力级优先于全局
-    scope: Mapped[str] = mapped_column(String(36), default="", index=True)
+    # "" = 全局；否则为 capability.name（跨版本稳定，不是版本记录 id）。
+    scope: Mapped[str] = mapped_column(String(255), default="", index=True)
     ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
     label: Mapped[str] = mapped_column(String(128), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

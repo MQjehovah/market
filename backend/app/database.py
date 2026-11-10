@@ -39,6 +39,7 @@ async def init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
         await _auto_migrate(conn)
     await run_user_column_migrations()
+    await run_user_secret_scope_migrations()
 
 
 async def _auto_migrate(conn) -> None:
@@ -237,3 +238,64 @@ async def run_user_column_migrations() -> None:
                 text("ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(32) DEFAULT ''")
             )
         await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_work_id ON users(work_id)"))
+
+
+async def run_user_secret_scope_migrations() -> None:
+    """个人凭据 scope: 版本记录 id → 稳定 capability.name（PG 幂等迁移）。
+
+    逻辑能力键是 ``capabilities.name``；``capabilities.id`` 只是版本记录 id。
+    迁移前先清理会与新 name scope 冲突的重复行，再批量映射。
+    """
+    if engine.dialect.name != "postgresql":
+        return
+    async with engine.begin() as conn:
+        await conn.execute(text("SELECT pg_advisory_xact_lock(839201002)"))
+        # name 最长 255；原列是 VARCHAR(36)，先扩宽。
+        await conn.execute(
+            text("ALTER TABLE user_secrets ALTER COLUMN scope TYPE VARCHAR(255)")
+        )
+        # 多个旧版本 id 映射到同一 name 时，每个 (user,key,name) 只保留最新一行。
+        await conn.execute(
+            text(
+                """
+                WITH mapped AS (
+                    SELECT s.id, s.user_id, s.key_name, c.name AS target_scope,
+                           s.updated_at,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY s.user_id, s.key_name, c.name
+                               ORDER BY s.updated_at DESC NULLS LAST, s.id
+                           ) AS rn
+                    FROM user_secrets s
+                    JOIN capabilities c ON s.scope = c.id
+                )
+                DELETE FROM user_secrets
+                WHERE id IN (SELECT id FROM mapped WHERE rn > 1)
+                """
+            )
+        )
+        # 旧 id 行与已存在的 name 行冲突时，保留 name 行。
+        await conn.execute(
+            text(
+                """
+                DELETE FROM user_secrets s
+                USING capabilities c
+                WHERE s.scope = c.id
+                  AND EXISTS (
+                      SELECT 1 FROM user_secrets n
+                      WHERE n.user_id = s.user_id
+                        AND n.key_name = s.key_name
+                        AND n.scope = c.name
+                  )
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                UPDATE user_secrets s
+                SET scope = c.name
+                FROM capabilities c
+                WHERE s.scope = c.id
+                """
+            )
+        )
