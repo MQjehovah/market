@@ -19,7 +19,7 @@ async def test_builtin_dws_capability_is_mcp(client):
         cap = await _dws_cap(db)
         assert cap is not None
         assert cap.type == "mcp"
-        assert cap.binding == "user_only"
+        assert cap.binding == "user"
         assert cap.input_schema["required_env"] == [
             "DWS_CONFIG_DIR",
             "DWS_KEYCHAIN_DIR",

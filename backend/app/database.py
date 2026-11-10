@@ -96,6 +96,17 @@ async def _auto_migrate(conn) -> None:
             sync_conn.exec_driver_sql(
                 "ALTER TABLE capabilities ADD COLUMN binding VARCHAR(16) DEFAULT 'service'"
             )
+        # 执行身份枚举升级：旧 user_only -> user（仅用户）；旧 user -> user&service（用户+平台）
+        # 只在仍有旧值时执行，避免每次启动把新 user 误转成 user&service。
+        if sync_conn.exec_driver_sql(
+            "SELECT 1 FROM capabilities WHERE binding='user_only' LIMIT 1"
+        ).fetchone():
+            sync_conn.exec_driver_sql(
+                "UPDATE capabilities SET binding='user&service' WHERE binding='user'"
+            )
+            sync_conn.exec_driver_sql(
+                "UPDATE capabilities SET binding='user' WHERE binding='user_only'"
+            )
         if "config_ui" not in cols:
             sync_conn.exec_driver_sql(
                 "ALTER TABLE capabilities ADD COLUMN config_ui JSON DEFAULT '{}'"

@@ -786,7 +786,7 @@ async def update_binding(
     能力级单选：按能力名跨版本统一生效，避免新旧版本行为分裂。
     user 级凭据：个人凭据优先；缺则 market 管理员用平台凭据，普通用户 403 +
     ``X-Market-Error-Code: user_credentials_missing``。服务令牌仅 market 管理员
-    可用平台凭据。``user_only`` 一律拒绝平台兜底。
+    可用平台凭据。``user`` 一律拒绝平台兜底。
     """
     cap = await db.get(Capability, cap_id)
     if cap is None:

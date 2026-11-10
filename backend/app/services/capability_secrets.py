@@ -137,7 +137,7 @@ def declared_env_keys(cap) -> list[str]:
     """能力声明的环境变量名（固定配置项）：input_schema 的 required_env/env，回退包内 connection.json env。
 
     与 dashboard 投影（services/dashboard_consume.py）的口径保持一致，便于前端提示。
-    binding=user/user_only 时，个人凭据键即本清单（配置项固定，平台/个人只是值来源不同）。
+    binding=user/user&service 时，个人凭据键即本清单（配置项固定，平台/个人只是值来源不同）。
     """
     schema = getattr(cap, "input_schema", None) or {}
     keys: list[str] = []
@@ -172,17 +172,17 @@ USER_CREDS_MISSING_HEADER = "X-Market-Error-Code"
 
 
 def is_user_bound(cap) -> bool:
-    """能力是否按提问者身份执行（binding=user / user_only）；默认 service（平台身份）。"""
-    return (getattr(cap, "binding", None) or "service") in ("user", "user_only")
+    """能力是否按提问者身份执行（binding=user / user&service）；默认 service（平台身份）。"""
+    return (getattr(cap, "binding", None) or "service") in ("user", "user&service")
 
 
 def is_user_only(cap) -> bool:
-    """能力是否仅允许用户身份执行（binding=user_only，不提供平台兜底）。
+    """能力是否仅允许用户身份执行（binding=user，不提供平台兜底）。
 
     平台身份（服务令牌：管理员兜底重试/系统任务）一律拒绝；缺个人凭据也不发
     管理员重试标记（无平台可兜底）。
     """
-    return (getattr(cap, "binding", None) or "service") == "user_only"
+    return (getattr(cap, "binding", None) or "service") == "user"
 
 
 def is_service_identity(user) -> bool:
@@ -244,7 +244,7 @@ async def resolve_user_bound_env_for(
       普通用户缺个人凭据时返回 missing，由调用方 fail-closed。
     - **服务令牌**（平台身份）→ 仅当其 market 用户为 admin 时用平台凭据；
       非管理员服务身份一律缺失（不提供平台越权）。
-    - ``user_only`` 能力永不使用平台兜底。
+    - ``user`` 能力永不使用平台兜底。
     """
     keys = declared_env_keys(cap)
     if not keys:
@@ -275,7 +275,7 @@ async def require_user_bound_env(
 ) -> dict[str, str]:
     """user 级能力执行凭据（fail-closed 校验版）。
 
-    - ``user_only``：平台身份（服务令牌）一律 403；缺个人凭据也不提供平台兜底。
+    - ``user``：平台身份（服务令牌）一律 403；缺个人凭据也不提供平台兜底。
     - ``user`` + 用户令牌：个人凭据优先；缺失且 market 用户是 admin 时用平台凭据；
       普通用户缺失 → 403 + ``X-Market-Error-Code: user_credentials_missing``。
     - ``user`` + 服务令牌：仅 market 用户为 admin 时可用平台凭据，否则 403。

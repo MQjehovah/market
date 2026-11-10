@@ -526,7 +526,7 @@ async def authorize_capability_gateway(
         if is_user_bound(cap):
             # 安全边界：relay 端点按“端点级”缓存已解析配置（GatewayEndpoints.cache_config），
             # 并发会话间无法安全隔离每位调用者的用户凭据（存在跨用户复用风险），
-            # 因此用户级能力（binding=user / user_only）不支持网关直连，一律引导走逐请求运行时（/api/runtime/*）。
+            # 因此用户级能力（binding=user / user&service）不支持网关直连，一律引导走逐请求运行时（/api/runtime/*）。
             return None, 403, {
                 "detail": (
                     f"能力 {cap.name} 按用户身份执行（binding={getattr(cap, 'binding', None) or 'user'}），"

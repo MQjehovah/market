@@ -932,8 +932,18 @@ async def test_user_binding_relay_rejected(client, publisher_headers, admin_head
         "mcp",
         _mcp_zip(name, _ERP_ENV),
     )
-    await _set_binding(client, admin_headers, cap_id, "user")
+    await _set_binding(client, admin_headers, cap_id, "user&service")
 
+    for headers in (admin_headers, user_headers):
+        cfg, status_code, body = await authorize_capability_gateway(
+            _scope(headers["Authorization"]), name
+        )
+        assert cfg is None
+        assert status_code == 403, body
+        assert "binding=user&service" in body["detail"]
+
+    # user_only 同样禁止网关直连（平台身份无兜底）
+    await _set_binding(client, admin_headers, cap_id, "user")
     for headers in (admin_headers, user_headers):
         cfg, status_code, body = await authorize_capability_gateway(
             _scope(headers["Authorization"]), name
@@ -941,16 +951,6 @@ async def test_user_binding_relay_rejected(client, publisher_headers, admin_head
         assert cfg is None
         assert status_code == 403, body
         assert "binding=user" in body["detail"]
-
-    # user_only 同样禁止网关直连（平台身份无兜底）
-    await _set_binding(client, admin_headers, cap_id, "user_only")
-    for headers in (admin_headers, user_headers):
-        cfg, status_code, body = await authorize_capability_gateway(
-            _scope(headers["Authorization"]), name
-        )
-        assert cfg is None
-        assert status_code == 403, body
-        assert "binding=user_only" in body["detail"]
 
 
 @pytest.mark.asyncio
@@ -1066,7 +1066,7 @@ async def test_market_admin_user_gets_platform_fallback(
         "mcp",
         _mcp_zip(name, _ERP_ENV),
     )
-    await _set_binding(client, admin_headers, cap_id, "user")
+    await _set_binding(client, admin_headers, cap_id, "user&service")
     await _set_platform_secret(client, admin_headers, cap_id, "ERP_API_BASE_URL", "https://erp.internal")
     await _set_platform_secret(client, admin_headers, cap_id, "ERP_USERNAME", "s_platform")
     await _set_platform_secret(client, admin_headers, cap_id, "ERP_PASSWORD", "s_platform_pw")
@@ -1121,7 +1121,7 @@ async def test_user_creds_missing_marks_403_for_admin_retry(
         "mcp",
         _mcp_zip(name, _ERP_ENV),
     )
-    await _set_binding(client, admin_headers, cap_id, "user")
+    await _set_binding(client, admin_headers, cap_id, "user&service")
     await _set_platform_secret(client, admin_headers, cap_id, "ERP_API_BASE_URL", "https://erp.internal")
     await _set_platform_secret(client, admin_headers, cap_id, "ERP_USERNAME", "s_platform")
     await _set_platform_secret(client, admin_headers, cap_id, "ERP_PASSWORD", "s_platform_pw")
@@ -1252,8 +1252,8 @@ async def test_user_only_binding_rejects_service_identity(
         "mcp",
         _mcp_zip(name, _ERP_ENV),
     )
-    out = await _set_binding(client, admin_headers, cap_id, "user_only")
-    assert out["binding"] == "user_only"
+    out = await _set_binding(client, admin_headers, cap_id, "user")
+    assert out["binding"] == "user"
     await _set_platform_secret(client, admin_headers, cap_id, "ERP_API_BASE_URL", "https://erp.internal")
     await _set_platform_secret(client, admin_headers, cap_id, "ERP_USERNAME", "s_platform")
     await _set_platform_secret(client, admin_headers, cap_id, "ERP_PASSWORD", "s_platform_pw")
@@ -1432,7 +1432,7 @@ async def test_user_only_service_identity_primitive_never_platform():
     from app.services.capability_secrets import _platform_env_for, resolve_user_bound_env_for
 
     cap = SimpleNamespace(
-        name="x", type="mcp", binding="user_only", input_schema={"required_env": ["K"]}
+        name="x", type="mcp", binding="user", input_schema={"required_env": ["K"]}
     )
     user = SimpleNamespace(id="u", role="admin", _service_token_scopes=[])
     env, missing = await resolve_user_bound_env_for(

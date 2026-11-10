@@ -844,7 +844,7 @@ async function clearPlatformSecret(row, confirmed = false) {
   }
 }
 
-/** 执行身份绑定（binding）：service=平台身份(平台密钥共用) / user=用户身份(提问者个人凭据) */
+/** 执行身份绑定：service=仅平台身份 / user=仅用户身份 / user&service=用户优先、平台兜底 */
 const bindingDraft = ref('')
 const bindingSaving = ref(false)
 const bindingNotice = ref('')
@@ -852,17 +852,20 @@ const bindingError = ref('')
 
 const currentBinding = computed(() => {
   const v = cap.value?.binding
-  return v === 'user' || v === 'user_only' ? v : 'service'
+  return v === 'user' || v === 'user&service' ? v : 'service'
 })
 
 const bindingLabel = computed(
   () =>
-    ({ service: '平台身份', user: '用户+平台', user_only: '仅用户' })[currentBinding.value] || '平台身份'
+    ({ service: '平台身份', user: '仅用户身份', 'user&service': '用户+平台' })[currentBinding.value] ||
+    '平台身份'
 )
+const showPersonalConfig = computed(() => currentBinding.value !== 'service')
+const showPlatformConfig = computed(() => currentBinding.value !== 'user')
 
 /** 该档位是否使用个人值（切换前校验：能力须声明配置项） */
 function needsPersonalConfig(binding) {
-  return binding === 'user' || binding === 'user_only'
+  return binding !== 'service'
 }
 
 /** 能力的固定配置项键（env/required_env）：个人凭据填写与切换校验以它为准 */
@@ -882,7 +885,7 @@ const declaredConfigKeys = computed(() => {
 async function saveBinding() {
   const capId = cap.value?.id
   if (!capId || bindingSaving.value) return
-  const next = ['user', 'user_only', 'service'].includes(bindingDraft.value) ? bindingDraft.value : 'service'
+  const next = ['user', 'user&service', 'service'].includes(bindingDraft.value) ? bindingDraft.value : 'service'
   bindingNotice.value = ''
   bindingError.value = ''
   if (next === currentBinding.value) {
@@ -899,11 +902,11 @@ async function saveBinding() {
     const res = await api.post(`/capabilities/${capId}/binding`, { binding: next })
     if (cap.value && res && res.binding) cap.value.binding = res.binding
     bindingNotice.value =
-      next === 'user_only'
-        ? '已切换为仅用户身份：必须个人凭据；管理员/系统任务也不能执行（平台轨将跳过该能力）'
-        : next === 'user'
-          ? '已切换为用户+平台：个人凭据优先（员工端/桌面端能力卡片可配置），管理员/系统任务以平台密钥兜底'
-          : '已切换为平台身份：全用户共用平台密钥执行'
+      next === 'user'
+        ? '已切换为仅用户身份：只使用个人凭据；管理员/系统任务也不能执行（平台轨将跳过该能力）'
+        : next === 'user&service'
+          ? '已切换为用户+平台：个人凭据优先，缺个人凭据时管理员/系统任务以平台密钥兜底'
+          : '已切换为平台身份：全用户共用平台密钥执行，不读取个人凭据'
   } catch (e) {
     bindingError.value = e.message || '保存失败'
   } finally {
@@ -2452,7 +2455,7 @@ onMounted(() => {
               <div v-if="isOwner || isAdmin" class="env-fill-box">
                 <h4 class="env-fill-title">执行身份（binding）</h4>
                 <p class="muted" style="font-size: 13px; margin: 0 0 10px">
-                  平台身份（service）：全用户共用平台密钥执行。用户+平台（user）：按提问者个人凭据执行——员工端/桌面端能力卡片「配置凭据」填写，普通用户缺凭据拒绝，管理员/系统任务以平台密钥兜底。仅用户（user_only）：必须个人凭据，平台身份（含管理员/系统任务）一律拒绝，强审计场景用。
+                  平台身份（service）：只配置/使用平台密钥，全用户共用，不读取个人凭据。仅用户身份（user）：只配置/使用个人凭据，平台身份（含管理员/系统任务）一律拒绝。用户+平台（user&service）：个人凭据优先，缺个人凭据时管理员/系统任务以平台密钥兜底。
                   按能力名跨版本统一生效。
                 </p>
                 <div class="flex" style="gap: 16px; flex-wrap: wrap; align-items: center">
@@ -2462,11 +2465,11 @@ onMounted(() => {
                   </label>
                   <label class="flex" style="gap: 6px; align-items: center; font-size: 13px; cursor: pointer">
                     <input v-model="bindingDraft" type="radio" value="user" />
-                    用户+平台（user）
+                    仅用户身份（user）
                   </label>
                   <label class="flex" style="gap: 6px; align-items: center; font-size: 13px; cursor: pointer">
-                    <input v-model="bindingDraft" type="radio" value="user_only" />
-                    仅用户（user_only）
+                    <input v-model="bindingDraft" type="radio" value="user&service" />
+                    用户+平台（user&service）
                   </label>
                   <span class="muted" style="font-size: 12px">当前：{{ bindingLabel }}</span>
                 </div>
@@ -2486,7 +2489,7 @@ onMounted(() => {
                 <p v-if="bindingError" class="alert alert-error mt-12" style="font-size: 13px">{{ bindingError }}</p>
               </div>
 
-              <div v-if="isMcp && (isOwner || isAdmin)" class="env-fill-box">
+              <div v-if="isMcp && (isOwner || isAdmin) && showPlatformConfig && !authConfig.hide_env_fields" class="env-fill-box">
                 <h4 class="env-fill-title">平台密钥（云端注入 · 全用户共用）</h4>
                 <p class="muted" style="font-size: 13px; margin: 0 0 10px">
                   用于市场网关 / 在线试用 / 零号员工平台轨；由作者或管理员维护，配置后全用户生效，更新后需重建连接。
@@ -2532,8 +2535,8 @@ onMounted(() => {
                 <p v-if="platformError" class="alert alert-error mt-12" style="font-size: 13px">{{ platformError }}</p>
               </div>
 
-              <div v-if="mcpEnvRows.length" class="env-fill-box">
-                <h4 class="env-fill-title">本机凭据（本地安装用）</h4>
+              <div v-if="mcpEnvRows.length && showPersonalConfig && !authConfig.hide_env_fields" class="env-fill-box">
+                <h4 class="env-fill-title">个人凭据（本地安装 / 个人身份用）</h4>
                 <p class="muted" style="font-size: 13px; margin: 0 0 10px">
                   <template v-if="platformSecretsReady === true">云端已可用。下面只影响你自己的本地安装，不填也能试用。</template>
                   <template v-else-if="isOwner || isAdmin">只影响本机安装。试用走上方平台密钥，未填的可选项不影响云端。</template>

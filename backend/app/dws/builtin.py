@@ -38,6 +38,8 @@ CONFIG_UI = {
     "auth": "device_code",
     "provider": "dws",
     "auto_prompt_on_join": True,
+    # DWS 的 DWS_CONFIG_DIR 等是平台托管的 workspace 路径，不是用户要填的凭据
+    "hide_env_fields": True,
     "title": "钉钉 DWS 登录",
     "subtitle": "使用你自己的钉钉身份；凭据只保存在云端工作区，不进入数据库。",
     "note": "电脑端和网页端同时使用同一个钉钉账号时，refresh token 可能互相踢下线；被踢后重新扫码即可。",
@@ -189,7 +191,7 @@ async def _ensure_dws_mcp(db: AsyncSession) -> Capability:
             access_policy="open",
             install_policy="optional",
             distribution="remote",
-            binding="user_only",
+            binding="user",
             risk_default="destructive",
             data_domain="钉钉",
             input_schema=INPUT_SCHEMA,
@@ -209,7 +211,7 @@ async def _ensure_dws_mcp(db: AsyncSession) -> Capability:
         cap.description = DWS_DESCRIPTION
         cap.input_schema = INPUT_SCHEMA
         cap.config_ui = CONFIG_UI
-        cap.binding = "user_only"
+        cap.binding = "user"
         cap.distribution = "remote"
         cap.risk_default = "destructive"
         cap.data_domain = "钉钉"
@@ -224,7 +226,7 @@ async def _provision_paths(db: AsyncSession) -> None:
     ws = DwsWorkspace()
     users = (await db.scalars(select(User).where(User.is_active.is_(True)))).all()
     for user in users:
-        base = ws.ensure(user.id)
+        ws.ensure(user.id)
         await upsert_secrets_bulk(
             db,
             user.id,
