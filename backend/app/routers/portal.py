@@ -322,7 +322,7 @@ async def task_search_capabilities(
     if viewer is not None:
         rows = await db.scalars(
             select(Capability.name)
-            .join(UserCapability, UserCapability.capability_id == Capability.id)
+            .join(UserCapability, UserCapability.capability_name == Capability.name)
             .where(UserCapability.user_id == viewer.id)
         )
         joined_names = {n for n in rows.all() if n}
@@ -692,11 +692,14 @@ async def capability_package_file(
 
 @router.get("/capabilities/{cap_id}/ratings", response_model=list[RatingOut])
 async def capability_ratings(cap_id: str, db: DbSession):
+    cap = await db.get(Capability, cap_id)
+    if cap is None:
+        return []
     rows = (
         await db.execute(
             select(Rating, User.username)
             .join(User, Rating.user_id == User.id)
-            .where(Rating.capability_id == cap_id)
+            .where(Rating.capability_name == cap.name)
             .order_by(Rating.created_at.desc())
         )
     ).all()

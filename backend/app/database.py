@@ -40,6 +40,7 @@ async def init_db() -> None:
         await _auto_migrate(conn)
     await run_user_column_migrations()
     await run_user_secret_scope_migrations()
+    await run_capability_name_ref_migrations()
 
 
 async def _auto_migrate(conn) -> None:
@@ -296,6 +297,232 @@ async def run_user_secret_scope_migrations() -> None:
                 SET scope = c.name
                 FROM capabilities c
                 WHERE s.scope = c.id
+                """
+            )
+        )
+
+
+async def run_capability_name_ref_migrations() -> None:
+    """加入关系/评分迁移到稳定 capability.name（PG 幂等）。
+
+    旧表用版本记录 id 关联；这里回填 name、按 name 去重、切换唯一约束，
+    最后删除版本 id 列。评分汇总按 name 回写到所有同名版本。
+    """
+    if engine.dialect.name != "postgresql":
+        return
+    async with engine.begin() as conn:
+        await conn.execute(text("SELECT pg_advisory_xact_lock(839201003)"))
+        tables = {
+            r[0]
+            for r in (
+                await conn.execute(
+                    text(
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema = current_schema()"
+                    )
+                )
+            ).fetchall()
+        }
+
+        if "user_capabilities" in tables:
+            cols = {
+                r[0]
+                for r in (
+                    await conn.execute(
+                        text(
+                            "SELECT column_name FROM information_schema.columns "
+                            "WHERE table_name='user_capabilities' "
+                            "AND table_schema=current_schema()"
+                        )
+                    )
+                ).fetchall()
+            }
+            if "capability_name" not in cols:
+                await conn.execute(
+                    text(
+                        "ALTER TABLE user_capabilities "
+                        "ADD COLUMN capability_name VARCHAR(255)"
+                    )
+                )
+            if "capability_id" in cols:
+                await conn.execute(
+                    text(
+                        "UPDATE user_capabilities uc SET capability_name=c.name "
+                        "FROM capabilities c WHERE uc.capability_id=c.id"
+                    )
+                )
+            await conn.execute(
+                text(
+                    "DELETE FROM user_capabilities "
+                    "WHERE capability_name IS NULL OR capability_name=''"
+                )
+            )
+            await conn.execute(
+                text(
+                    """
+                    WITH ranked AS (
+                        SELECT id, ROW_NUMBER() OVER (
+                            PARTITION BY user_id, capability_name
+                            ORDER BY created_at DESC NULLS LAST, id
+                        ) AS rn
+                        FROM user_capabilities
+                        WHERE capability_name <> ''
+                    )
+                    DELETE FROM user_capabilities
+                    WHERE id IN (SELECT id FROM ranked WHERE rn > 1)
+                    """
+                )
+            )
+            await conn.execute(
+                text(
+                    "ALTER TABLE user_capabilities "
+                    "DROP CONSTRAINT IF EXISTS uq_user_capability"
+                )
+            )
+            await conn.execute(
+                text(
+                    "ALTER TABLE user_capabilities "
+                    "DROP CONSTRAINT IF EXISTS uq_user_capability_name"
+                )
+            )
+            await conn.execute(
+                text(
+                    "ALTER TABLE user_capabilities "
+                    "DROP COLUMN IF EXISTS capability_id"
+                )
+            )
+            await conn.execute(
+                text(
+                    "ALTER TABLE user_capabilities "
+                    "ALTER COLUMN capability_name SET NOT NULL"
+                )
+            )
+            await conn.execute(
+                text(
+                    "ALTER TABLE user_capabilities "
+                    "ADD CONSTRAINT uq_user_capability_name "
+                    "UNIQUE (user_id, capability_name)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS "
+                    "ix_user_capabilities_capability_name "
+                    "ON user_capabilities(capability_name)"
+                )
+            )
+
+        if "ratings" in tables:
+            cols = {
+                r[0]
+                for r in (
+                    await conn.execute(
+                        text(
+                            "SELECT column_name FROM information_schema.columns "
+                            "WHERE table_name='ratings' "
+                            "AND table_schema=current_schema()"
+                        )
+                    )
+                ).fetchall()
+            }
+            if "capability_name" not in cols:
+                await conn.execute(
+                    text(
+                        "ALTER TABLE ratings "
+                        "ADD COLUMN capability_name VARCHAR(255)"
+                    )
+                )
+            if "capability_id" in cols:
+                await conn.execute(
+                    text(
+                        "UPDATE ratings r SET capability_name=c.name "
+                        "FROM capabilities c WHERE r.capability_id=c.id"
+                    )
+                )
+            await conn.execute(
+                text(
+                    "DELETE FROM ratings "
+                    "WHERE capability_name IS NULL OR capability_name=''"
+                )
+            )
+            await conn.execute(
+                text(
+                    """
+                    WITH ranked AS (
+                        SELECT id, ROW_NUMBER() OVER (
+                            PARTITION BY capability_name, user_id
+                            ORDER BY created_at DESC NULLS LAST, id
+                        ) AS rn
+                        FROM ratings
+                        WHERE capability_name <> ''
+                    )
+                    DELETE FROM ratings
+                    WHERE id IN (SELECT id FROM ranked WHERE rn > 1)
+                    """
+                )
+            )
+            await conn.execute(
+                text(
+                    "ALTER TABLE ratings "
+                    "DROP CONSTRAINT IF EXISTS uq_rating_user"
+                )
+            )
+            await conn.execute(
+                text(
+                    "ALTER TABLE ratings "
+                    "DROP CONSTRAINT IF EXISTS uq_rating_name_user"
+                )
+            )
+            await conn.execute(
+                text("ALTER TABLE ratings DROP COLUMN IF EXISTS capability_id")
+            )
+            await conn.execute(
+                text(
+                    "ALTER TABLE ratings "
+                    "ALTER COLUMN capability_name SET NOT NULL"
+                )
+            )
+            await conn.execute(
+                text(
+                    "ALTER TABLE ratings "
+                    "ADD CONSTRAINT uq_rating_name_user "
+                    "UNIQUE (capability_name, user_id)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_ratings_capability_name "
+                    "ON ratings(capability_name)"
+                )
+            )
+
+        # 评分汇总按 name 回写到所有同名版本
+        await conn.execute(
+            text(
+                """
+                UPDATE capabilities c
+                SET rating_sum = COALESCE(r.s, 0),
+                    rating_count = COALESCE(r.n, 0)
+                FROM (
+                    SELECT capability_name,
+                           SUM(score)::double precision AS s,
+                           COUNT(*)::integer AS n
+                    FROM ratings
+                    GROUP BY capability_name
+                ) r
+                WHERE c.name = r.capability_name
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                UPDATE capabilities c
+                SET rating_sum = 0, rating_count = 0
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM ratings r
+                    WHERE r.capability_name = c.name
+                )
                 """
             )
         )

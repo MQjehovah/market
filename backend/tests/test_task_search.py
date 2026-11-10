@@ -182,7 +182,7 @@ async def test_task_search_marks_joined_for_subscription(client, user_headers):
     async with SessionLocal() as db:
         user = await db.scalar(select(User).where(User.username == "user"))
         cap = await db.scalar(select(Capability).where(Capability.name == names["skill"]))
-        db.add(UserCapability(user_id=user.id, capability_id=cap.id))
+        db.add(UserCapability(user_id=user.id, capability_name=cap.name))
         await db.commit()
 
     r = await client.get("/api/capabilities/task-search",

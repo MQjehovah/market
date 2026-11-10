@@ -45,15 +45,13 @@ async def ensure_default_on_joins(db: AsyncSession, user: User) -> int:
     if not caps:
         return 0
 
-    rows = (
-        await db.execute(
-            select(UserCapability.capability_id, Capability.name)
-            .join(Capability, Capability.id == UserCapability.capability_id)
-            .where(UserCapability.user_id == user.id)
+    existing_names = set(
+        await db.scalars(
+            select(UserCapability.capability_name).where(
+                UserCapability.user_id == user.id
+            )
         )
-    ).all()
-    existing = {cid for cid, _name in rows}
-    existing_names = {name for _cid, name in rows}
+    )
     added = 0
     for cap in caps:
         if cap.name in existing_names:
@@ -72,25 +70,20 @@ async def ensure_default_on_joins(db: AsyncSession, user: User) -> int:
                 cap.name,
                 skipped,
             )
-        pending = [cid for cid in ids if cid not in existing]
-        names_by_id: dict[str, str] = {}
-        if pending:
-            names_by_id = {
-                cid: name
-                for cid, name in (
-                    await db.execute(
-                        select(Capability.id, Capability.name).where(Capability.id.in_(pending))
-                    )
-                ).all()
-            }
+        names_by_id: dict[str, str] = {
+            cid: name
+            for cid, name in (
+                await db.execute(
+                    select(Capability.id, Capability.name).where(Capability.id.in_(ids))
+                )
+            ).all()
+        }
         for cid in ids:
             name = names_by_id.get(cid)
-            if cid in existing or (name and name in existing_names):
+            if not name or name in existing_names:
                 continue
-            db.add(UserCapability(user_id=user.id, capability_id=cid))
-            existing.add(cid)
-            if name:
-                existing_names.add(name)
+            db.add(UserCapability(user_id=user.id, capability_name=name))
+            existing_names.add(name)
             added += 1
     if added:
         await db.commit()

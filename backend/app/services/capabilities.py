@@ -528,9 +528,7 @@ async def delete_capability_row(db: AsyncSession, cap: Capability, *, commit: bo
     cid = cap.id
     await db.execute(sql_delete(CapabilityArtifact).where(CapabilityArtifact.capability_id == cid))
     await db.execute(sql_delete(Review).where(Review.capability_id == cid))
-    await db.execute(sql_delete(Rating).where(Rating.capability_id == cid))
     await db.execute(sql_delete(UsageEvent).where(UsageEvent.capability_id == cid))
-    await db.execute(sql_delete(UserCapability).where(UserCapability.capability_id == cid))
     await db.execute(sql_delete(A2ATask).where(A2ATask.agent_id == cid))
     await db.execute(sql_delete(WorkflowExecution).where(WorkflowExecution.workflow_id == cid))
     await db.execute(sql_delete(AgentBinding).where(AgentBinding.agent_id == cid))
@@ -541,6 +539,11 @@ async def delete_capability_row(db: AsyncSession, cap: Capability, *, commit: bo
         from app.services.capability_secrets import delete_capability_secrets_by_name
 
         await delete_capability_secrets_by_name(db, cap_name)
+        # 加入关系/评分按 name 跨版本共用；仅在该 name 的最后一行被删除时清理。
+        await db.execute(
+            sql_delete(UserCapability).where(UserCapability.capability_name == cap_name)
+        )
+        await db.execute(sql_delete(Rating).where(Rating.capability_name == cap_name))
     if commit:
         await db.commit()
 
@@ -750,6 +753,9 @@ async def create_new_version(
         data_domain=getattr(cap, "data_domain", None) or "",
         # 头像随版本继承（icon_path 存文件名，文件按能力 id 共享读取）
         icon_path=getattr(cap, "icon_path", "") or "",
+        # 评分按能力名跨版本共用，新版本继承当前聚合值。
+        rating_sum=getattr(cap, "rating_sum", 0.0) or 0.0,
+        rating_count=getattr(cap, "rating_count", 0) or 0,
         author_id=cap.author_id or user.id,
         organization=cap.organization,
         status="draft",
@@ -763,20 +769,39 @@ async def create_new_version(
 
 
 async def record_rating(db: AsyncSession, user: User, cap: Capability, score: int, comment: str) -> Rating:
+    """按稳定能力名记录评分；同名所有版本共享同一评分汇总。"""
     existing = await db.scalar(
-        select(Rating).where(and_(Rating.capability_id == cap.id, Rating.user_id == user.id))
+        select(Rating).where(
+            and_(Rating.capability_name == cap.name, Rating.user_id == user.id)
+        )
     )
     if existing:
-        cap.rating_sum -= existing.score
         existing.score = score
         existing.comment = comment
-        cap.rating_sum += score
         rating = existing
     else:
-        rating = Rating(capability_id=cap.id, user_id=user.id, score=score, comment=comment)
+        rating = Rating(
+            capability_name=cap.name, user_id=user.id, score=score, comment=comment
+        )
         db.add(rating)
-        cap.rating_count += 1
-        cap.rating_sum += score
+    await db.flush()
+
+    total = await db.scalar(
+        select(func.coalesce(func.sum(Rating.score), 0)).where(
+            Rating.capability_name == cap.name
+        )
+    )
+    count = await db.scalar(
+        select(func.count()).select_from(Rating).where(
+            Rating.capability_name == cap.name
+        )
+    )
+    caps = (
+        await db.scalars(select(Capability).where(Capability.name == cap.name))
+    ).all()
+    for row in caps:
+        row.rating_sum = float(total or 0)
+        row.rating_count = int(count or 0)
     await db.commit()
     await db.refresh(rating)
     return rating

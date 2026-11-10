@@ -119,9 +119,6 @@ class Capability(Base):
     reviews: Mapped[list["Review"]] = relationship(
         back_populates="capability", cascade="all, delete-orphan"
     )
-    ratings: Mapped[list["Rating"]] = relationship(
-        back_populates="capability", cascade="all, delete-orphan"
-    )
 
     @property
     def avg_rating(self) -> float:
@@ -169,18 +166,17 @@ class Review(Base):
 
 class Rating(Base):
     __tablename__ = "ratings"
-    __table_args__ = (UniqueConstraint("capability_id", "user_id", name="uq_rating_user"),)
+    __table_args__ = (
+        UniqueConstraint("capability_name", "user_id", name="uq_rating_name_user"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    capability_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("capabilities.id"), index=True
-    )
+    # 稳定逻辑键：同名能力跨版本共用评分；不使用版本记录 id。
+    capability_name: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"))
     score: Mapped[int] = mapped_column(Integer, nullable=False)
     comment: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-
-    capability: Mapped["Capability"] = relationship(back_populates="ratings")
 
 
 class Subscription(Base):
@@ -393,20 +389,21 @@ class MCPGatewayCall(Base):
 
 
 class UserCapability(Base):
-    """用户从市场加入的能力（「我的能力」集合）。"""
+    """用户从市场加入的能力（「我的能力」集合）。
+
+    以稳定逻辑键 ``capability.name`` 关联；发布新版本不再需要迁移加入记录。
+    """
 
     __tablename__ = "user_capabilities"
-    __table_args__ = (UniqueConstraint("user_id", "capability_id", name="uq_user_capability"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "capability_name", name="uq_user_capability_name"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
-    capability_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("capabilities.id"), index=True
-    )
+    capability_name: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-
-    capability: Mapped["Capability"] = relationship()
 
 
 class UserSecret(Base):

@@ -74,6 +74,41 @@ async def _related_capability_ids(db, capability_id: str) -> list[str]:
     return ids
 
 
+def _cap_pref(cap: Capability, cur: Capability) -> bool:
+    """同名版本选择：published > deprecated > 其它，同级取最高版本。"""
+    rank = {"published": 2, "deprecated": 1}
+    rn, rc = rank.get(cap.status or "", 0), rank.get(cur.status or "", 0)
+    if rn != rc:
+        return rn > rc
+    try:
+        return parse_semver(cap.version) > parse_semver(cur.version)
+    except ValueError:
+        return False
+
+
+async def _caps_for_names(db, names: list[str]) -> dict[str, Capability]:
+    """按稳定能力名取当前版本（发布优先，其次弃用，再回退最高版本）。"""
+    names = [n for n in dict.fromkeys(names) if n]
+    if not names:
+        return {}
+    caps = (
+        await db.scalars(
+            select(Capability)
+            .options(
+                joinedload(Capability.author),
+                selectinload(Capability.artifacts),
+            )
+            .where(Capability.name.in_(names))
+        )
+    ).all()
+    best: dict[str, Capability] = {}
+    for cap in caps:
+        cur = best.get(cap.name)
+        if cur is None or _cap_pref(cap, cur):
+            best[cap.name] = cap
+    return best
+
+
 def _out(cap: Capability, *, added: bool, owned: bool, enabled: bool = True) -> dict:
     data = to_capability_out(
         cap, author_name=cap.author.username if cap.author else ""
@@ -99,17 +134,15 @@ async def my_capabilities(
     访问列表时会同步加入 install_policy=default_on 的已发布能力。
     """
     # 默认能力仅开户时开通一次（见 auth），列表不再自动补加，确保「移出」生效
-    rows = (
+    links = (
         await db.scalars(
-            select(UserCapability)
-            .options(
-                joinedload(UserCapability.capability).joinedload(Capability.author),
-                joinedload(UserCapability.capability).selectinload(Capability.artifacts),
-            )
-            .where(UserCapability.user_id == user.id)
+            select(UserCapability).where(UserCapability.user_id == user.id)
         )
     ).all()
-    enabled_by_id = {row.capability_id: bool(getattr(row, "enabled", True)) for row in rows}
+    enabled_by_name = {
+        row.capability_name: bool(getattr(row, "enabled", True)) for row in links
+    }
+    added_caps = await _caps_for_names(db, list(enabled_by_name))
     owned = (
         await db.scalars(
             select(Capability)
@@ -130,32 +163,25 @@ async def my_capabilities(
             if cur is None or parse_semver(cap.version) > parse_semver(cur.version):
                 published_by_name[cap.name] = cap
     for key, cap in published_by_name.items():
-        items[key] = _out(cap, added=False, owned=True)
+        items[key] = _out(
+            cap, added=key in enabled_by_name, owned=True,
+            enabled=enabled_by_name.get(key, True),
+        )
     # 无已发布版本的能力（纯草稿/被打回），取最新一版展示，便于提交审核
     for cap in owned:
         if cap.status != "published" and cap.name not in items:
-            items[cap.name] = _out(cap, added=False, owned=True)
+            items[cap.name] = _out(
+                cap, added=cap.name in enabled_by_name, owned=True,
+                enabled=enabled_by_name.get(cap.name, True),
+            )
 
-    for row in rows:
-        cap = row.capability
-        if cap is None:
-            continue
-        key = cap.name
+    for key, cap in added_caps.items():
         if key in items:
-            if parse_semver(cap.version) > parse_semver(items[key]["version"]):
-                owned_flag = items[key]["owned"]
-                items[key] = _out(
-                    cap,
-                    added=True,
-                    owned=owned_flag,
-                    enabled=enabled_by_id.get(cap.id, True),
-                )
-            else:
-                items[key]["added"] = True
-                items[key]["enabled"] = enabled_by_id.get(items[key]["id"], True)
+            items[key]["added"] = True
+            items[key]["enabled"] = enabled_by_name.get(key, True)
         else:
             items[key] = _out(
-                cap, added=True, owned=False, enabled=enabled_by_id.get(cap.id, True)
+                cap, added=True, owned=False, enabled=enabled_by_name.get(key, True)
             )
 
     # 附带同名下最新草稿/被打回版本信息（用于「编辑草稿 / 提交审核」）
@@ -207,22 +233,21 @@ async def host_sync(db: DbSession, user: CurrentUser, include_components: bool =
     保留本接口与 PATCH /my/capabilities 供未来宿主清单兼容，不改字段。
     """
     # 默认能力仅开户时开通一次（见 auth），列表不再自动补加，确保「移出」生效
-    rows = (
+    links = (
         await db.scalars(
-            select(UserCapability)
-            .options(
-                joinedload(UserCapability.capability).joinedload(Capability.author),
-                joinedload(UserCapability.capability).selectinload(Capability.artifacts),
-            )
-            .where(UserCapability.user_id == user.id)
+            select(UserCapability).where(UserCapability.user_id == user.id)
         )
     ).all()
+    enabled_by_name = {
+        row.capability_name: bool(getattr(row, "enabled", True)) for row in links
+    }
+    caps_by_name = await _caps_for_names(db, list(enabled_by_name))
 
     items: list[dict] = []
-    for row in rows:
-        if getattr(row, "enabled", True) is False:
+    for name, enabled in enabled_by_name.items():
+        if enabled is False:
             continue
-        cap = row.capability
+        cap = caps_by_name.get(name)
         if cap is None:
             continue
         if cap.status not in ("published", "deprecated"):
@@ -286,19 +311,20 @@ async def add_capability(data: MyCapabilityAdd, db: DbSession, user: CurrentUser
     # 连带能力（plugin 组件 / agent 依赖）逐个过滤：不可见或无访问权限则跳过
     ids, skipped = await accessible_connected_ids(db, user, cap)
 
-    added = 0
-    for cid in ids:
-        exists = await db.scalar(
-            select(UserCapability.id).where(
-                and_(
-                    UserCapability.user_id == user.id,
-                    UserCapability.capability_id == cid,
-                )
+    existing_names = set(
+        await db.scalars(
+            select(UserCapability.capability_name).where(
+                UserCapability.user_id == user.id
             )
         )
-        if exists:
+    )
+    added = 0
+    for cid in ids:
+        child = await db.get(Capability, cid)
+        if child is None or child.name in existing_names:
             continue
-        db.add(UserCapability(user_id=user.id, capability_id=cid))
+        db.add(UserCapability(user_id=user.id, capability_name=child.name))
+        existing_names.add(child.name)
         added += 1
     await db.commit()
     skipped_unit = "依赖" if cap.type == "agent" else "组件"
@@ -323,12 +349,17 @@ async def patch_capability(
     """
     cap = await db.get(Capability, capability_id)
     ids = await _related_capability_ids(db, capability_id)
+    names: list[str] = []
+    for cid in ids:
+        child = await db.get(Capability, cid)
+        if child is not None and child.name not in names:
+            names.append(child.name)
     links = (
         await db.scalars(
             select(UserCapability).where(
                 and_(
                     UserCapability.user_id == user.id,
-                    UserCapability.capability_id.in_(ids),
+                    UserCapability.capability_name.in_(names),
                 )
             )
         )
@@ -340,9 +371,10 @@ async def patch_capability(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             f"「{cap.name if cap else capability_id}」为必装能力（install_policy=required），不能停用",
         )
+    caps_by_name = await _caps_for_names(db, names)
     updated = 0
     for link in links:
-        child = await db.get(Capability, link.capability_id)
+        child = caps_by_name.get(link.capability_name)
         if data.enabled is False and is_required_policy(child):
             continue
         link.enabled = data.enabled
@@ -357,12 +389,17 @@ async def remove_capability(capability_id: str, db: DbSession, user: CurrentUser
     """移除我的能力(同名版本兜底, 修复版本漂移导致的无法移出)。"""
     cap = await db.get(Capability, capability_id)
     ids = await _related_capability_ids(db, capability_id)
+    names: list[str] = []
+    for cid in ids:
+        child = await db.get(Capability, cid)
+        if child is not None and child.name not in names:
+            names.append(child.name)
     links = (
         await db.scalars(
             select(UserCapability).where(
                 and_(
                     UserCapability.user_id == user.id,
-                    UserCapability.capability_id.in_(ids),
+                    UserCapability.capability_name.in_(names),
                 )
             )
         )
@@ -374,9 +411,10 @@ async def remove_capability(capability_id: str, db: DbSession, user: CurrentUser
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             f"「{cap.name}」为必装能力（install_policy=required），不能从我的能力中移除",
         )
+    caps_by_name = await _caps_for_names(db, names)
     removed = 0
     for link in links:
-        child = await db.get(Capability, link.capability_id)
+        child = caps_by_name.get(link.capability_name)
         if is_required_policy(child):
             continue
         await db.delete(link)
