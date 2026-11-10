@@ -432,14 +432,16 @@ class UsageEventOut(BaseModel):
 class UserSecretUpsert(BaseModel):
     key_name: str = Field(min_length=1, max_length=128)
     value: str = Field(min_length=1, max_length=8192)
-    # 空=全局；填 capability_id 为该能力专用覆盖
-    scope: str = Field(default="", max_length=36)
+    # 空=全局；填 capability.name（也兼容旧 capability id，由后端归一）
+    scope: str = Field(default="", max_length=255)
     label: str = Field(default="", max_length=128)
 
 
 class UserSecretBulkUpsert(BaseModel):
     secrets: dict[str, str] = Field(default_factory=dict, description="key_name → 明文值")
-    scope: str = Field(default="", max_length=36, description="空=全局；或 capability_id")
+    scope: str = Field(
+        default="", max_length=255, description="空=全局；或 capability.name（兼容 id）"
+    )
 
 
 class UserSecretOut(BaseModel):
