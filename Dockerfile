@@ -12,7 +12,7 @@ ARG DWS_VERSION=1.0.62
 RUN npm i -g dingtalk-workspace-cli@${DWS_VERSION} \
     && mkdir -p /dws \
     && tar -xzf /usr/local/lib/node_modules/dingtalk-workspace-cli/assets/dws-linux-amd64.tar.gz -C /dws \
-    && /dws/dws --version
+    && chmod +x /dws/dws
 
 # 后端运行阶段（后端自动挂载 /app/frontend/dist 提供前端页面）
 FROM public-docker-virtual.xzrobot.com/python:3.12-slim
