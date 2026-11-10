@@ -53,6 +53,29 @@ INPUT_SCHEMA = {
 }
 
 
+async def ensure_dingtalk_cli_auth_ui(db: AsyncSession) -> int:
+    """给现有 dingtalk-cli skill 补认证 UI 声明。
+
+    用户实际点击的是这个 skill，不是内部的 dingtalk-dws 执行能力；
+    认证 UI 挂在 skill 上，执行仍由 executor 完成。
+    """
+    rows = (
+        await db.scalars(
+            select(Capability).where(
+                Capability.name == "dingtalk-cli",
+                Capability.type == "skill",
+                Capability.status == "published",
+            )
+        )
+    ).all()
+    changed = 0
+    for cap in rows:
+        if not cap.config_ui:
+            cap.config_ui = CONFIG_UI
+            changed += 1
+    return changed
+
+
 async def ensure_dws_capability(db: AsyncSession) -> Capability:
     """幂等创建内置 DWS 工具能力；已存在则原样返回。"""
     existing = await db.scalar(

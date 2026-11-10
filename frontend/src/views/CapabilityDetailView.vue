@@ -943,6 +943,22 @@ const joined = computed(() => Boolean(cap.value && myIds.value.has(cap.value.id)
 const authConfig = computed(() => cap.value?.config_ui || {})
 const hasAuthConfig = computed(() => Boolean(authConfig.value.auth))
 const authDialogVisible = ref(false)
+const authAccount = ref(null)
+
+async function loadAuthAccount() {
+  if (!hasAuthConfig.value || !authState.token || !cap.value?.name) return
+  try {
+    authAccount.value = await api.get(`/capabilities/${encodeURIComponent(cap.value.name)}/auth/account`)
+  } catch {
+    authAccount.value = null
+  }
+}
+
+watch(
+  () => [cap.value?.id, authState.token, hasAuthConfig.value],
+  () => { void loadAuthAccount() },
+  { immediate: true }
+)
 const subscribed = computed(() => Boolean(cap.value && subscribedNames.value.has(cap.value.name)))
 const canRuntime = computed(() => isOwner.value || isAdmin.value || joined.value)
 const canTrialMcp = computed(() => {
@@ -1301,12 +1317,8 @@ async function toggleMy() {
     const extra = r?.message && r.message.includes('未加入') ? `；${r.message}` : ''
     toast.success(joinedHint.value + extra)
     if (hasAuthConfig.value && authConfig.value.auto_prompt_on_join) {
-      try {
-        const account = await api.get(`/capabilities/${encodeURIComponent(cap.value.name)}/auth/account`)
-        if (!account?.authorized) authDialogVisible.value = true
-      } catch {
-        authDialogVisible.value = true
-      }
+      await loadAuthAccount()
+      if (!authAccount.value?.authorized) authDialogVisible.value = true
     }
   } catch (e) {
     toast.error(e.message)
@@ -3099,6 +3111,22 @@ onMounted(() => {
               class="btn btn-block btn-primary"
             >{{ nextStep.label }}</router-link>
           </div>
+          <div v-if="hasAuthConfig" class="install-auth">
+            <router-link
+              v-if="!authState.token"
+              class="btn btn-block install-ghost"
+              :to="{ path: '/login', query: { redirect: route.fullPath } }"
+            >登录后授权</router-link>
+            <button
+              v-else-if="authAccount && !authAccount.authorized"
+              class="btn btn-block btn-primary"
+              type="button"
+              @click="authDialogVisible = true"
+            >扫码授权</button>
+            <p v-else-if="authAccount?.authorized" class="install-lead install-auth-ok">
+              已授权{{ authAccount.dingtalk_user_name ? '：' + authAccount.dingtalk_user_name : '' }}
+            </p>
+          </div>
           <p v-if="nextStep?.kind === 'join' && !canSubscribe" class="install-lead aside-deny">{{ subscribeBlockedReason }}</p>
           <p v-if="copyNotice || myNotice" class="install-lead">{{ copyNotice || myNotice }}</p>
           <div v-if="hasExtraWays" class="install-extra">
@@ -3859,4 +3887,6 @@ h3 { margin: 0 0 12px; }
   border: none; background: transparent; font-size: 22px; line-height: 1;
   color: var(--muted); cursor: pointer;
 }
+.install-auth { margin-top: 8px; }
+.install-auth-ok { color: var(--ok, #15803d); font-size: 12px; }
 </style>
