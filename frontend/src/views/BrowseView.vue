@@ -660,20 +660,6 @@ watch(
       </template>
     </div>
 
-    <div v-if="activeBrowseTab === 'more'" class="panel toolbar mb-16">
-      <span class="muted" style="font-size: 13px; margin-right: 8px">类型</span>
-      <button
-        v-for="k in MORE_BROWSE_KINDS"
-        :key="k"
-        type="button"
-        class="btn btn-sm"
-        :class="{ 'btn-primary': filters.type === k }"
-        @click="router.push({ path: '/', query: { type: k } })"
-      >
-        {{ TYPE_LABELS[k] }}
-      </button>
-    </div>
-
     <template v-if="showCatalog">
       <div class="panel toolbar">
         <input
