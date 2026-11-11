@@ -79,6 +79,8 @@ watch(
 const kindsInShelf = computed(() => {
   if (intentKey.value === 'workflow') return ['workflow']
   if (intentKey.value === 'recipe') return ['agent']
+  if (intentKey.value === 'skill') return ['skill']
+  if (intentKey.value === 'mcp') return ['mcp']
   if (intentKey.value === 'tool') return ['tool']
   const visible = VISIBLE_CREATE_KINDS[form.shelf]
   if (visible) return visible.filter((k) => k !== 'workflow')
@@ -122,6 +124,9 @@ watch(
       if (props.initialShelf === 'install') {
         // 安装包入口保留但不作为默认意图：落到专家
         selectIntent('recipe')
+      } else if (props.initialShelf === 'brick') {
+        // 旧「组件」入口拆开：默认落到技能
+        selectIntent('skill')
       } else {
         selectIntent(props.initialShelf)
       }

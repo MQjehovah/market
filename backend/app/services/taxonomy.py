@@ -10,7 +10,7 @@ from typing import Any
 SHELVES: dict[str, dict[str, Any]] = {
     "brick": {
         "key": "brick",
-        "label": "组件",
+        "label": "基础能力",
         "description": "技能 / 连接器 / 工具能力（rule/command/hook 保留能力、逛店默认不展示）。",
         "kinds": ["skill", "mcp", "tool", "rule", "command", "hook"],
     },

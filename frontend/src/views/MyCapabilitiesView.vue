@@ -392,7 +392,7 @@ onMounted(() => {
       <div v-else-if="caps.length === 0 && mainTab !== 'collab'" class="empty">
         还没有发布过能力。
         <ol style="text-align: left; display: inline-block; margin: 12px 0; padding-left: 20px">
-          <li>点「发布能力」，选专家、组件或编排</li>
+          <li>点「发布能力」，选专家、技能、连接器、工具或编排</li>
           <li>写好内容并保存</li>
           <li>提交审核，通过后会出现在发现页</li>
         </ol>

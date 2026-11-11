@@ -33,7 +33,7 @@ async def test_taxonomy_endpoint(client):
     assert len(body["ref_ways"]) == 3
     assert body["kinds"]["tool"]["local_install"] == "no"
     assert body["kinds"]["workflow"]["local_install"] == "no"
-    assert body["shelves"]["brick"]["label"] == "组件"
+    assert body["shelves"]["brick"]["label"] == "基础能力"
     assert body["shelves"]["recipe"]["label"] == "专家"
     assert body["shelves"]["install"]["label"] == "能力包"
 

@@ -39,8 +39,8 @@ export const TYPE_LABELS = {
 export const SHELVES = {
   brick: {
     key: 'brick',
-    label: '组件',
-    short: '组件',
+    label: '基础能力',
+    short: '基础',
     description: '技能 / 连接器 / 工具能力。发布与高级筛选用；逛店请用「技能」「连接器」「工具」或「编排」。',
     kinds: ['skill', 'mcp', 'tool', 'rule', 'command', 'hook']
   },
@@ -499,7 +499,7 @@ export const TYPE_COLORS = {
   hook: '#4f46e5'
 }
 
-/** 发布意图：专家、组件、编排分开入口，避免编排藏在专家货架里 */
+/** 发布意图：专家、技能、连接器、工具、编排分开入口 */
 export const PUBLISH_INTENTS = [
   {
     key: 'recipe',
@@ -509,11 +509,18 @@ export const PUBLISH_INTENTS = [
     defaultType: 'agent'
   },
   {
-    key: 'brick',
+    key: 'skill',
     shelf: 'brick',
-    label: '发组件',
-    blurb: '技能或连接器。写好后给专家引用。',
+    label: '发技能',
+    blurb: '一套可复用的方法与步骤，给专家引用，不直接执行。',
     defaultType: 'skill'
+  },
+  {
+    key: 'mcp',
+    shelf: 'brick',
+    label: '发连接器',
+    blurb: '接入数据库、工单、日历等外部系统，暴露可调用工具。',
+    defaultType: 'mcp'
   },
   {
     key: 'tool',
@@ -553,7 +560,7 @@ export function draftSaveNotice(status, version) {
     : `已保存为新版本草稿 v${version}，可提交审核`
 }
 
-/** 发组件时可见的 kind（rule/command/hook 保留但不展示） */
+/** 旧「组件」入口回退时可见的 kind（rule/command/hook 保留但不展示） */
 export const VISIBLE_CREATE_KINDS = {
   recipe: ['agent', 'workflow'],
   brick: ['skill', 'mcp'],
