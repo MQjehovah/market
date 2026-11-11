@@ -24,7 +24,7 @@
 | **能力包** `install` | 能力包 | `plugin` | 一键分发 skill/mcp/rule/command/hook（可选专家） | 拆子能力；兼容 Cursor Plugin |
 
 逛店顶栏：**推荐 | 技能 | 能力包 | 专家 | 更多**。  
-推荐默认浏览：`skill + plugin + agent`。连接器 / 规则 / 命令 / Hooks / 能力编排 / 编排函数进「更多」。`plugin-component` 默认隐藏。
+推荐默认浏览：`skill + plugin + agent`。工具能力与连接器平级；规则 / 命令 / Hooks / 能力编排进「更多」。`plugin-component` 默认隐藏。
 
 元数据：`GET /api/meta/taxonomy`。空模板：`GET /api/meta/package-templates/{kind}`。
 
@@ -95,7 +95,7 @@ cd frontend && npm install && npm run dev
 5. 管理员在治理后台通过  
 6. 发现页 **加入**（仅授权；加入≠安装）→ 复制 `cap install name@version --type plugin` 装到零号员工  
 
-进阶：技能 / 连接器 / 编排函数 / 专家创建后会进入**在线编辑**（保存即生成能力包），再提交审核；也可先上架组件再发专家并在依赖里引用（依赖须已上架）。能力包仍以上传 zip 为主。
+进阶：技能 / 连接器 / 工具能力 / 专家创建后会进入**在线编辑**（保存即生成能力包），再提交审核；也可先上架组件再发专家并在依赖里引用（依赖须已上架）。能力包仍以上传 zip 为主。
 
 MCP 注意：市场包必须是 `mcp.json` + `connection.json` + `tools.json` + `security.json`；不能直接上传 agent 仓里的 `mcp-server.json`。  
 连接器若声明 `env`（如 `ERP_*` / `DB_*`），请在工作台 **业务密钥**（`/my/secrets`）托管；能力详情只显示是否已齐。本地轨仍可用 `cap install … --type mcp` 或本机 `mcp_servers.json`。

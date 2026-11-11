@@ -561,7 +561,7 @@ _TAG_NOISE = {
     "plugin-component",
     "agent", "agents", "skill", "skills", "mcp", "plugin", "plugins",
     "tool", "tools", "workflow", "hook", "hooks", "command", "rule",
-    "技能", "专家", "连接器", "能力编排", "编排函数", "能力包", "规则", "命令",
+    "技能", "专家", "连接器", "能力编排", "编排函数", "工具能力", "远程工具", "能力包", "规则", "命令",
     "迁移", "内置", "内置工具", "persona", "安装包", "示例",
 }
 

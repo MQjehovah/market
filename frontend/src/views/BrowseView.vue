@@ -83,7 +83,8 @@ const browseTabs = [
   { key: 'agent', label: '专家', hint: '场景级问答专家；依赖随专家生效' },
   { key: 'skill', label: '技能', hint: '问答 SOP；装进专家后提问即可按该流程回答' },
   { key: 'mcp', label: '连接器', hint: '给专家接外部系统' },
-  { key: 'more', label: '编排', hint: '能力编排与编排函数' }
+  { key: 'tool', label: '工具', hint: '平台远程工具能力；和工作流平级' },
+  { key: 'more', label: '编排', hint: '把已上架能力串成自动化流程' }
 ]
 
 /** 推荐页：无货架、无类型、无搜索、无其它筛选 */
@@ -142,11 +143,18 @@ const pageContext = computed(() => {
   if (filters.tab === 'agent' || filters.type === 'agent') {
     return { eyebrow: '目录', title: '专家', desc: '场景级问答专家；依赖的技能/连接器会随专家一起生效。' }
   }
+  if (filters.tab === 'tool' || filters.type === 'tool') {
+    return {
+      eyebrow: '目录',
+      title: '工具能力',
+      desc: '平台提供的远程工具调用能力；和工作流平级，可被 Agent、MCP 或外部系统单独调用。'
+    }
+  }
   if (filters.tab === 'more' || MORE_BROWSE_KINDS.includes(filters.type)) {
     return {
       eyebrow: '目录',
-      title: '编排',
-      desc: '能力编排与编排函数。'
+      title: '能力编排',
+      desc: '把已上架能力串成自动化流程；工作流可以引用工具能力作为节点。'
     }
   }
   if (filters.shelf && SHELVES[filters.shelf]) {
@@ -180,6 +188,7 @@ const catalogTitle = computed(() => {
 })
 
 const typeOptions = computed(() => {
+  if (filters.tab === 'tool') return ['tool']
   if (filters.tab === 'more') return [...MORE_BROWSE_KINDS]
   if (filters.shelf && filters.shelf !== 'all' && SHELVES[filters.shelf]) {
     return SHELVES[filters.shelf].kinds
@@ -202,6 +211,7 @@ const activeBrowseTab = computed(() => {
   if (filters.type === 'skill') return 'skill'
   if (filters.type === 'agent') return 'agent'
   if (filters.type === 'mcp') return 'mcp'
+  if (filters.type === 'tool') return 'tool'
   if (MORE_BROWSE_KINDS.includes(filters.type)) return 'more'
   if (filters.shelf === 'all' && !filters.q) return 'all'
   return ''
@@ -366,6 +376,7 @@ function selectBrowseTab(key) {
   if (key === 'all') query.shelf = 'all'
   else if (key === 'skill') query.type = 'skill'
   else if (key === 'mcp') query.type = 'mcp'
+  else if (key === 'tool') query.type = 'tool'
   else if (key === 'agent') query.type = 'agent'
   else if (key === 'more') {
     query.type =
@@ -451,6 +462,7 @@ function syncFromRoute() {
   if (filters.type === 'skill') filters.tab = 'skill'
   else if (filters.type === 'agent') filters.tab = 'agent'
   else if (filters.type === 'mcp') filters.tab = 'mcp'
+  else if (filters.type === 'tool') filters.tab = 'tool'
   else if (MORE_BROWSE_KINDS.includes(filters.type)) filters.tab = 'more'
   else if (filters.shelf === 'install') filters.tab = 'agent' // 旧链接落到专家
   else filters.tab = ''

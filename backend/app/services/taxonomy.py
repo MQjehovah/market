@@ -11,7 +11,7 @@ SHELVES: dict[str, dict[str, Any]] = {
     "brick": {
         "key": "brick",
         "label": "组件",
-        "description": "技能 / 连接器 / 编排函数（rule/command/hook 保留能力、逛店默认不展示）。",
+        "description": "技能 / 连接器 / 工具能力（rule/command/hook 保留能力、逛店默认不展示）。",
         "kinds": ["skill", "mcp", "tool", "rule", "command", "hook"],
     },
     "recipe": {
@@ -36,7 +36,7 @@ KIND_SHELF: dict[str, str] = {
 
 # 浏览默认：专家 + 依赖（技能 / 连接器）；能力包与 rule/command/hook 保留能力但不逛店展示
 DEFAULT_BROWSE_KINDS = ("agent", "skill", "mcp")
-MORE_BROWSE_KINDS = ("workflow", "tool")
+MORE_BROWSE_KINDS = ("workflow",)
 HIDDEN_BROWSE_KINDS = ("plugin", "rule", "command", "hook")
 KIND_META: dict[str, dict[str, str]] = {
     "skill": {
@@ -55,9 +55,9 @@ KIND_META: dict[str, dict[str, str]] = {
     },
     "tool": {
         "shelf": "brick",
-        "what": "云端沙箱函数；≠ MCP tools，≠ 宿主 src/tools",
+        "what": "工具能力：平台云端沙箱函数，和 MCP 暴露的工具一样是可调用能力",
         "install": "无本地安装；仅 POST /api/runtime/tools/{name}/invoke",
-        "runs_in": "runtime 沙箱 / workflow 节点",
+        "runs_in": "runtime 沙箱 / MCP 客户端",
         "local_install": "no",
     },
     "rule": {

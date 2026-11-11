@@ -79,6 +79,7 @@ watch(
 const kindsInShelf = computed(() => {
   if (intentKey.value === 'workflow') return ['workflow']
   if (intentKey.value === 'recipe') return ['agent']
+  if (intentKey.value === 'tool') return ['tool']
   const visible = VISIBLE_CREATE_KINDS[form.shelf]
   if (visible) return visible.filter((k) => k !== 'workflow')
   return (SHELVES[form.shelf]?.kinds || []).filter((k) => !HIDDEN_BROWSE_KINDS.includes(k))

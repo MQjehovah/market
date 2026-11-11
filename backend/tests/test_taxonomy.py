@@ -14,7 +14,7 @@ async def test_taxonomy_endpoint(client):
     assert "shelves" in body
     assert set(body["shelves"].keys()) == {"brick", "recipe", "install"}
     assert body["default_browse_kinds"] == ["agent", "skill", "mcp"]
-    assert body["more_browse_kinds"] == ["workflow", "tool"]
+    assert body["more_browse_kinds"] == ["workflow"]
     assert body["hidden_browse_kinds"] == ["plugin", "rule", "command", "hook"]
     assert "orchestration" in body
     assert body["orchestration"]["capability_dag"]["lands_in_agent_config"] is False

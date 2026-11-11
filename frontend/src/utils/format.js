@@ -2,7 +2,7 @@
 export const BROWSE_TAG_NOISE = new Set([
   'skill', 'skills', 'agent', 'agents', 'mcp', 'plugin', 'plugins',
   'tool', 'tools', 'workflow', 'hook', 'hooks', 'command', 'rule',
-  '技能', '专家', '连接器', '能力编排', '编排函数', '能力包', '规则', '命令',
+  '技能', '专家', '连接器', '能力编排', '编排函数', '工具能力', '远程工具', '能力包', '规则', '命令',
   '迁移', '内置', '内置工具', 'persona', '安装包', '示例', 'plugin-component'
 ])
 
@@ -25,7 +25,7 @@ export function plainExcerpt(value) {
 /** 能力类型显示名（type 字段 = kind） */
 export const TYPE_LABELS = {
   agent: '专家',
-  tool: '编排函数',
+  tool: '工具能力',
   skill: '技能',
   mcp: '连接器',
   workflow: '能力编排',
@@ -41,7 +41,7 @@ export const SHELVES = {
     key: 'brick',
     label: '组件',
     short: '组件',
-    description: '技能 / 连接器 / 编排函数。发布与高级筛选用；逛店请用「技能」「连接器」或「编排」。',
+    description: '技能 / 连接器 / 工具能力。发布与高级筛选用；逛店请用「技能」「连接器」「工具」或「编排」。',
     kinds: ['skill', 'mcp', 'tool', 'rule', 'command', 'hook']
   },
   recipe: {
@@ -63,8 +63,8 @@ export const SHELVES = {
 /** 推荐默认：专家 + 依赖（技能 / 连接器） */
 export const DEFAULT_BROWSE_KINDS = ['agent', 'skill', 'mcp']
 
-/** 「更多」：进阶编排类；能力包 / rule / command / hook 保留能力但不逛店展示 */
-export const MORE_BROWSE_KINDS = ['workflow', 'tool']
+/** 「更多」：能力编排；工具能力有独立一级入口 */
+export const MORE_BROWSE_KINDS = ['workflow']
 export const HIDDEN_BROWSE_KINDS = ['plugin', 'rule', 'command', 'hook']
 export const KIND_SHELF = Object.fromEntries(
   Object.values(SHELVES).flatMap((s) => s.kinds.map((k) => [k, s.key]))
@@ -85,9 +85,9 @@ export const KIND_HINTS = {
   },
   tool: {
     shelf: 'brick',
-    what: '编排函数：自动化流程里的一步，由「能力编排」调用。',
-    where: '在能力编排中作为节点使用；不单独安装到专家。',
-    whoRuns: '能力编排（云端执行）'
+    what: '工具能力：平台在云端提供的一次工具调用，和 MCP 暴露的工具一样有参数和结果。',
+    where: '加入后可通过市场运行时或 MCP 调用，也可被能力编排引用为节点。',
+    whoRuns: '市场云端沙箱'
   },
   rule: {
     shelf: 'brick',
@@ -147,7 +147,7 @@ export const LOCAL_INSTALL_KINDS = ['agent', 'skill', 'mcp', 'plugin', 'rule', '
 export const REMOTE_WHERE_HINTS = {
   skill: '加入后即可在专家的回答中生效，无需本地安装。',
   mcp: '加入后由平台统一连接调用，无需本地安装。',
-  tool: '加入后由能力编排调用，无需本地安装。',
+  tool: '加入后可通过运行时接口或 MCP 调用，无需本地安装。',
   rule: '加入后在平台或宿主中按需生效。',
   command: '加入后在支持的对话中按需使用。',
   hook: '加入后由宿主在对应事件触发。',
@@ -219,8 +219,8 @@ export const EXAMPLE_PROMPTS = {
     '先列出会用到的工具，再试着调用一个只读接口'
   ],
   tool: [
-    '把它加进一条自动化流程并运行，然后告诉我结果',
-    '说明这一步具体会做什么'
+    '通过平台远程调用这个工具，并告诉我结果',
+    '说明它接收什么参数、返回什么'
   ],
   rule: [
     '这条规则会在什么情况下生效？',
@@ -259,7 +259,7 @@ export const ORCH_LABELS = {
   capability: {
     name: '能力编排',
     carrier: 'workflow.json nodes/edges',
-    nodes: '已上架能力 tool|agent|skill|mcp',
+    nodes: '已上架能力（专家 / 技能 / 连接器 / 工具）',
     engine: '市场云端 workflows'
   }
 }
@@ -395,7 +395,7 @@ export const TYPE_CATEGORIES = {
 
 export const PACKAGE_HINTS = {
   agent: 'agent.json + PROMPT.md（可含 TEAM.md 团队流水线、skills/、mcp/；内嵌与市场同名 skill/mcp 自动关联）',
-  tool: 'tool.json + schema.json + implementation/tool.py（供能力编排节点；非宿主 src/tools）',
+  tool: 'tool.json + schema.json + implementation/tool.py（独立工具能力；和工作流平级）',
   skill: 'skill.json + SKILL.md',
   mcp: 'mcp.json + connection.json + tools.json + security.json（可含 implementation/*.py）',
   rule: 'rule.json + RULE.mdc（frontmatter：alwaysApply / globs）',
@@ -512,8 +512,15 @@ export const PUBLISH_INTENTS = [
     key: 'brick',
     shelf: 'brick',
     label: '发组件',
-    blurb: '技能、连接器或编排函数。写好后给专家引用。',
+    blurb: '技能或连接器。写好后给专家引用。',
     defaultType: 'skill'
+  },
+  {
+    key: 'tool',
+    shelf: 'brick',
+    label: '发工具',
+    blurb: '平台远程工具能力，和工作流平级；可被 Agent、MCP 或外部系统单独调用。',
+    defaultType: 'tool'
   },
   {
     key: 'workflow',
@@ -549,7 +556,7 @@ export function draftSaveNotice(status, version) {
 /** 发组件时可见的 kind（rule/command/hook 保留但不展示） */
 export const VISIBLE_CREATE_KINDS = {
   recipe: ['agent', 'workflow'],
-  brick: ['skill', 'mcp', 'tool'],
+  brick: ['skill', 'mcp'],
   install: ['plugin']
 }
 
