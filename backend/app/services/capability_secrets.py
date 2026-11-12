@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 from fastapi import HTTPException, status
 from sqlalchemy import delete, select
@@ -174,11 +175,132 @@ USER_CREDS_MISSING_CODE = "user_credentials_missing"
 USER_CREDS_MISSING_HEADER = "X-Market-Error-Code"
 
 
+_FIELD_LABELS = {
+    "USERNAME": "账号",
+    "USER": "账号",
+    "ACCOUNT": "账号",
+    "LOGIN": "账号",
+    "PASSWORD": "密码",
+    "PASSWD": "密码",
+    "PWD": "密码",
+    "PASS": "密码",
+    "TOKEN": "Token",
+    "API_KEY": "API Key",
+    "APIKEY": "API Key",
+    "ACCESS_KEY": "Access Key",
+    "APP_KEY": "App Key",
+    "APP_SECRET": "App Secret",
+    "CLIENT_SECRET": "Client Secret",
+    "SECRET": "密钥",
+    "PRIVATE_KEY": "私钥",
+    "AGENT_ID": "Agent ID",
+    "ROBOT_CODE": "机器人 Code",
+    "BASE_URL": "服务地址",
+    "ENDPOINT": "接口地址",
+    "URL": "服务地址",
+    "HOST": "主机",
+    "PORT": "端口",
+    "DATABASE": "数据库",
+    "DB_NAME": "数据库",
+    "NAME": "名称",
+    "TASK_FILE": "任务文件",
+    "REGION": "区域",
+}
+
+_USER_KEY_RE = re.compile(r"(^|_)(USERNAME|USER|ACCOUNT|LOGIN|ACCOUNT_NAME)$", re.I)
+_PASS_KEY_RE = re.compile(r"(^|_)(PASSWORD|PASSWD|PWD|PASS)$", re.I)
+_TOKEN_KEY_RE = re.compile(
+    r"(^|_)(TOKEN|API_KEY|APIKEY|ACCESS_KEY|APP_KEY|APP_SECRET|CLIENT_SECRET|SECRET|PRIVATE_KEY)$",
+    re.I,
+)
+
+
+def _schema_env_keys(cap) -> list[str]:
+    """只从 input_schema 读取环境变量名，避免与 declared_env_keys 递归。"""
+    schema = getattr(cap, "input_schema", None) or {}
+    keys: list[str] = []
+    if isinstance(schema, dict):
+        required = schema.get("required_env")
+        if isinstance(required, list):
+            keys.extend(str(k) for k in required if str(k).strip())
+        hint = schema.get("env")
+        if isinstance(hint, dict):
+            keys.extend(str(k) for k in hint if str(k).strip())
+    return sorted(dict.fromkeys(keys))
+
+
+def _friendly_field_label(key: str) -> str:
+    raw = str(key or "")
+    upper = raw.upper()
+    for suffix, label in _FIELD_LABELS.items():
+        if upper == suffix or upper.endswith("_" + suffix):
+            return label
+    return raw
+
+
+def derive_auth_methods(cap) -> list[dict]:
+    """按环境变量名推导账号密码 / Token 认证方式。
+
+    只在能力没有显式 config_ui.auth_methods 时启用；扫码授权类能力直接跳过。
+    其他非凭据字段（地址、端口、任务文件等）作为公共字段放进每种方式，避免
+    再以散落的 env 列表展示。
+    """
+    ui = getattr(cap, "config_ui", None) or {}
+    if isinstance(ui, dict) and (
+        ui.get("auth") or ui.get("provider") or ui.get("hide_env_fields")
+    ):
+        return []
+    keys = _schema_env_keys(cap)
+    if not keys:
+        return []
+
+    user_keys = [k for k in keys if _USER_KEY_RE.search(k)]
+    pass_keys = [k for k in keys if _PASS_KEY_RE.search(k)]
+    token_keys = [k for k in keys if _TOKEN_KEY_RE.search(k)]
+
+    groups: list[tuple[str, str, list[str]]] = []
+    if user_keys and pass_keys:
+        groups.append(("password", "账号密码", user_keys + pass_keys))
+    if token_keys:
+        app_cred = any(
+            k.upper().endswith("APP_KEY") or k.upper().endswith("APP_SECRET")
+            for k in token_keys
+        )
+        groups.append(("token", "应用凭据" if app_cred else "API Token", token_keys))
+    if not groups:
+        return []
+
+    method_keys = {k for _, _, group in groups for k in group}
+    common_keys = [k for k in keys if k not in method_keys]
+    methods: list[dict] = []
+    for method_id, label, group_keys in groups:
+        fields = [
+            {"env": key, "label": _friendly_field_label(key)}
+            for key in group_keys + common_keys
+        ]
+        methods.append({"id": method_id, "label": label, "fields": fields})
+    return methods
+
+
 def auth_methods(cap) -> list[dict]:
-    """能力声明的认证方式（config_ui.auth_methods）；没有则返回 []。"""
+    """能力声明的认证方式；没有显式声明时按 env 键推导账号密码 / Token。"""
     ui = getattr(cap, "config_ui", None) or {}
     methods = ui.get("auth_methods") if isinstance(ui, dict) else None
-    return [m for m in methods if isinstance(m, dict)] if isinstance(methods, list) else []
+    if isinstance(methods, list):
+        explicit = [m for m in methods if isinstance(m, dict)]
+        if explicit:
+            return explicit
+    return derive_auth_methods(cap)
+
+
+def effective_config_ui(cap) -> dict:
+    """返回给前端的 config_ui：补齐推导出的 auth_methods。"""
+    ui = dict(getattr(cap, "config_ui", None) or {})
+    if not ui.get("auth_methods"):
+        methods = derive_auth_methods(cap)
+        if methods:
+            ui["auth_methods"] = methods
+    return ui
 
 
 def _method_env_keys(method: dict) -> list[str]:

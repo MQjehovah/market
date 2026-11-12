@@ -647,19 +647,27 @@ const mcpEnvRows = computed(() => {
       : null) ||
     (mcpSchema.value?.env && typeof mcpSchema.value.env === 'object' ? mcpSchema.value.env : null) ||
     {}
+  const required = new Set(
+    Array.isArray(mcpSchema.value?.required_env)
+      ? mcpSchema.value.required_env.map((k) => String(k))
+      : []
+  )
   const keys = Object.keys(env).length
     ? Object.keys(env)
-    : mcpSchema.value?.required_env || []
+    : [...required]
+  const methodKeys = new Set()
   for (const method of cap.value?.config_ui?.auth_methods || []) {
     for (const field of method?.fields || []) {
       const key = typeof field === 'string' ? field : field?.env || field?.key
-      if (key && !keys.includes(key)) keys.push(key)
+      if (!key) continue
+      methodKeys.add(key)
+      if (!keys.includes(key)) keys.push(key)
     }
   }
   return keys.map((k) => ({
     key: k,
     hint: publicEnvHint(k, env[k]),
-    required: true
+    required: required.has(k) || methodKeys.has(k)
   }))
 })
 
@@ -864,6 +872,26 @@ const bindingLabel = computed(
 )
 const showPersonalConfig = computed(() => currentBinding.value !== 'service')
 const showPlatformConfig = computed(() => currentBinding.value !== 'user')
+const personalConfigTitle = computed(() =>
+  currentBinding.value === 'user'
+    ? '个人凭据（必须配置）'
+    : '个人凭据（优先使用）'
+)
+const personalConfigHint = computed(() =>
+  currentBinding.value === 'user'
+    ? '该能力只按你的身份执行，必须填写；平台凭据不能代替。'
+    : '个人凭据优先；未填写且你是管理员时，才使用下方平台兜底凭据。'
+)
+const platformConfigTitle = computed(() =>
+  currentBinding.value === 'user&service'
+    ? '平台兜底凭据（仅管理员 / 系统任务）'
+    : '平台共享凭据（所有授权用户共用）'
+)
+const platformConfigHint = computed(() =>
+  currentBinding.value === 'user&service'
+    ? '普通用户缺个人凭据会被拒绝；只有管理员或系统任务在兜底时使用这里。'
+    : '所有被授权调用该能力的用户共用这一份平台凭据，不读取个人凭据。'
+)
 
 /** 该档位是否使用个人值（切换前校验：能力须声明配置项） */
 function needsPersonalConfig(binding) {
@@ -2538,9 +2566,9 @@ onMounted(() => {
               </div>
 
               <div v-if="isMcp && (isOwner || isAdmin) && showPlatformConfig && !authConfig.hide_env_fields" class="env-fill-box">
-                <h4 class="env-fill-title">平台密钥（云端注入 · 全用户共用）</h4>
+                <h4 class="env-fill-title">{{ platformConfigTitle }}</h4>
                 <p class="muted" style="font-size: 13px; margin: 0 0 10px">
-                  用于市场网关 / 在线试用 / 零号员工平台轨；由作者或管理员维护，配置后全用户生效，更新后需重建连接。
+                  {{ platformConfigHint }}
                 </p>
                 <div v-if="!platformLoaded" class="muted" style="font-size: 13px">加载平台密钥…</div>
                 <div v-else-if="!platformSecretRows.length" class="muted" style="font-size: 13px">
@@ -2557,10 +2585,9 @@ onMounted(() => {
                     <div v-for="row in activePlatformRows" :key="'ps-' + row.key" class="env-row">
                       <div class="env-row-head">
                         <span>{{ methodLabel(row.key) }}</span>
-                        <code v-if="isOwner || isAdmin">{{ row.key }}</code>
                         <span v-if="row.row" class="badge badge-success">已配置</span>
                         <span v-else class="badge badge-danger">未配置</span>
-                        <span class="muted" style="font-size: 12px">{{ row.secret ? '凭据' : '可选' }}</span>
+                        <span class="muted" style="font-size: 12px">{{ row.required ? '必填' : '可选' }}</span>
                       </div>
                       <div class="env-row-input">
                         <input
@@ -2592,11 +2619,9 @@ onMounted(() => {
 
               </details>
               <div v-if="mcpEnvRows.length && showPersonalConfig && !authConfig.hide_env_fields" class="env-fill-box">
-                <h4 class="env-fill-title">个人凭据（本地安装 / 个人身份用）</h4>
+                <h4 class="env-fill-title">{{ personalConfigTitle }}</h4>
                 <p class="muted" style="font-size: 13px; margin: 0 0 10px">
-                  <template v-if="platformSecretsReady === true">云端已可用。下面只影响你自己的本地安装，不填也能试用。</template>
-                  <template v-else-if="isOwner || isAdmin">只影响本机安装。试用走上方平台密钥，未填的可选项不影响云端。</template>
-                  <template v-else>只影响你自己的本地安装。云端由作者配置的平台密钥提供，可选项未填不影响云端使用。</template>
+                  {{ personalConfigHint }}
                 </p>
                 <router-link
                   v-if="!authState.token"
@@ -2614,11 +2639,10 @@ onMounted(() => {
                     <div v-for="row in activeEnvRows" :key="row.key" class="env-row">
                       <div class="env-row-head">
                         <span>{{ methodLabel(row.key) }}</span>
-                        <code v-if="isOwner || isAdmin">{{ row.key }}</code>
                         <span v-if="row.capRow" class="badge badge-success">本机已填</span>
                         <span v-else-if="row.globalRow" class="badge badge-warning">全局值生效</span>
                         <span v-else-if="row.secret" class="badge">未填</span>
-                        <span v-else class="muted" style="font-size: 12px">可选</span>
+                        <span class="muted" style="font-size: 12px">{{ row.required ? '必填' : '可选' }}</span>
                       </div>
                       <div class="env-row-input">
                         <input

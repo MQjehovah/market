@@ -233,6 +233,8 @@ def to_capability_out(
     author_name: str | None = None,
 ) -> CapabilityOut:
     """安全序列化：仅读取已加载的关联，避免异步懒加载。"""
+    from app.services.capability_secrets import effective_config_ui
+
     data: dict[str, object] = {
         "id": cap.id,
         "name": cap.name,
@@ -253,7 +255,7 @@ def to_capability_out(
         "install_policy": getattr(cap, "install_policy", None) or "optional",
         "distribution": getattr(cap, "distribution", None) or "both",
         "binding": getattr(cap, "binding", None) or "service",
-        "config_ui": getattr(cap, "config_ui", None) or {},
+        "config_ui": effective_config_ui(cap),
         "executor": getattr(cap, "executor", None) or "",
         "risk_default": getattr(cap, "risk_default", None) or "read",
         "data_domain": getattr(cap, "data_domain", None) or "",
